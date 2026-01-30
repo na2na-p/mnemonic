@@ -28,7 +28,7 @@ class TestCacheCleanCommand:
 
     def test_cache_clean_basic_execution(self) -> None:
         """cache clean の基本実行が正常終了する"""
-        result = runner.invoke(app, ["cache", "clean"])
+        result = runner.invoke(app, ["cache", "clean"], input="y\n")
         assert result.exit_code == 0
 
     @pytest.mark.parametrize(
@@ -45,7 +45,7 @@ class TestCacheCleanCommand:
 
     def test_cache_clean_template_only_option(self) -> None:
         """cache clean --template-only オプションが正常動作する"""
-        result = runner.invoke(app, ["cache", "clean", "--template-only"])
+        result = runner.invoke(app, ["cache", "clean", "--template-only"], input="y\n")
         assert result.exit_code == 0
 
     @pytest.mark.parametrize(
@@ -72,6 +72,12 @@ class TestCacheCleanCommand:
         assert result.exit_code == 0
         assert "--force" in result.stdout or "-f" in result.stdout
         assert "--template-only" in result.stdout
+
+    def test_cache_clean_cancelled_when_declined(self) -> None:
+        """cache clean で確認を拒否した場合はキャンセルされる"""
+        result = runner.invoke(app, ["cache", "clean"], input="n\n")
+        assert result.exit_code == 0
+        assert "キャンセル" in result.stdout
 
 class TestCacheInfoCommand:
     """cache info コマンドのテスト"""

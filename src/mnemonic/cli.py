@@ -4,9 +4,11 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from mnemonic import __version__
+from mnemonic.cache import clear_cache, get_cache_info
 from mnemonic.doctor import check_all_dependencies
 
 app = typer.Typer(help="吉里吉里ゲームをAndroid APKに変換するCLIツール")
@@ -76,12 +78,62 @@ def cache_clean(
     ] = False,
 ) -> None:
     """キャッシュを削除する"""
+    console = Console()
+
+    target = "テンプレートキャッシュ" if template_only else "すべてのキャッシュ"
+
+    if not force:
+        confirmed = typer.confirm(f"{target}を削除しますか?")
+        if not confirmed:
+            console.print("[yellow]キャンセルしました[/yellow]")
+            raise typer.Exit(0)
+
+    clear_cache(template_only=template_only)
+    console.print(f"[green]{target}を削除しました[/green]")
     raise typer.Exit(0)
 
 @cache_app.command("info")
 def cache_info() -> None:
     """キャッシュ情報を表示する"""
+    console = Console()
+    info = get_cache_info()
+
+    table = Table(title="キャッシュ情報", show_header=False)
+    table.add_column("項目", style="cyan")
+    table.add_column("値", style="white")
+
+    table.add_row("ディレクトリ", str(info.directory))
+    table.add_row("サイズ", _format_size(info.size_bytes))
+
+    if info.template_version:
+        table.add_row("テンプレートバージョン", info.template_version)
+        if info.template_expires_in_days is not None:
+            if info.template_expires_in_days > 0:
+                table.add_row("有効期限", f"{info.template_expires_in_days}日後")
+            else:
+                table.add_row("有効期限", "[red]期限切れ[/red]")
+    else:
+        table.add_row("テンプレート", "[dim]なし[/dim]")
+
+    console.print(Panel(table, border_style="blue"))
     raise typer.Exit(0)
+
+def _format_size(size_bytes: int) -> str:
+    """バイト数を人間が読みやすい形式に変換する"""
+    if size_bytes == 0:
+        return "0 B"
+
+    units = ["B", "KB", "MB", "GB"]
+    size = float(size_bytes)
+    unit_index = 0
+
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+
+    if unit_index == 0:
+        return f"{int(size)} B"
+    return f"{size:.1f} {units[unit_index]}"
 
 def version_callback(value: bool) -> None:
     """バージョン表示コールバック"""
