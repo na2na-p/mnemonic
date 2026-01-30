@@ -47,6 +47,10 @@ class TLGImageDecoder:
     TLG5およびTLG6形式に対応。
     """
 
+    # TLGマジックバイト
+    TLG5_MAGIC = b"TLG5.0\x00raw\x1a"
+    TLG6_MAGIC = b"TLG6.0\x00raw\x1a"
+
     def is_tlg_file(self, file_path: Path) -> bool:
         """指定されたファイルがTLG形式かどうかを判定する
 
@@ -58,7 +62,15 @@ class TLGImageDecoder:
         Returns:
             TLG形式の場合True、そうでない場合False
         """
-        raise NotImplementedError
+        if not file_path.exists():
+            return False
+
+        try:
+            with open(file_path, "rb") as f:
+                header = f.read(len(self.TLG5_MAGIC))
+                return header == self.TLG5_MAGIC or header == self.TLG6_MAGIC
+        except OSError:
+            return False
 
     def get_info(self, file_path: Path) -> TLGInfo:
         """TLG画像のメタ情報を取得する
