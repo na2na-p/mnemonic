@@ -1,14 +1,14 @@
-"""XP3アーカイブ操作モジュールの単体テスト
+"""XP3アーカイブ操作のテスト
 
-TDD Step 2: XP3Archive, XP3EncryptionChecker のテストを作成する。
-実装前のため、NotImplementedError で失敗することが期待される。
+TDDのStep 2として、XP3アーカイブ展開機能の単体テストを記述する。
+実装はまだ行われていないため、テストは NotImplementedError で失敗することが期待される。
 """
 
 from pathlib import Path
 
 import pytest
 
-from mnemonic.parser.xp3 import (
+from mnemonic.parser import (
     EncryptionInfo,
     EncryptionType,
     XP3Archive,
@@ -22,46 +22,94 @@ class TestEncryptionType:
     @pytest.mark.parametrize(
         "encryption_type, expected_value",
         [
-            pytest.param(EncryptionType.NONE, "none", id="正常系: NONE"),
-            pytest.param(EncryptionType.SIMPLE_XOR, "simple_xor", id="正常系: SIMPLE_XOR"),
-            pytest.param(EncryptionType.CUSTOM, "custom", id="正常系: CUSTOM"),
-            pytest.param(EncryptionType.UNKNOWN, "unknown", id="正常系: UNKNOWN"),
+            pytest.param(
+                EncryptionType.NONE,
+                "none",
+                id="正常系: NONE型の値",
+            ),
+            pytest.param(
+                EncryptionType.SIMPLE_XOR,
+                "simple_xor",
+                id="正常系: SIMPLE_XOR型の値",
+            ),
+            pytest.param(
+                EncryptionType.CUSTOM,
+                "custom",
+                id="正常系: CUSTOM型の値",
+            ),
+            pytest.param(
+                EncryptionType.UNKNOWN,
+                "unknown",
+                id="正常系: UNKNOWN型の値",
+            ),
         ],
     )
     def test_encryption_type_values(
         self, encryption_type: EncryptionType, expected_value: str
     ) -> None:
-        """暗号化タイプの値が正しいことを確認"""
+        """EncryptionTypeの各値が正しい文字列値を持つ"""
         assert encryption_type.value == expected_value
 
 class TestEncryptionInfo:
     """EncryptionInfoデータクラスのテスト"""
 
-    def test_create_non_encrypted_info(self) -> None:
-        """正常系: 非暗号化情報を作成できる"""
+    @pytest.mark.parametrize(
+        "is_encrypted, encryption_type, details",
+        [
+            pytest.param(
+                False,
+                EncryptionType.NONE,
+                None,
+                id="正常系: 非暗号化・詳細なし",
+            ),
+            pytest.param(
+                True,
+                EncryptionType.SIMPLE_XOR,
+                "XORキー: 0xFF",
+                id="正常系: XOR暗号化・詳細あり",
+            ),
+            pytest.param(
+                True,
+                EncryptionType.CUSTOM,
+                "カスタム暗号化検出",
+                id="正常系: カスタム暗号化・詳細あり",
+            ),
+            pytest.param(
+                True,
+                EncryptionType.UNKNOWN,
+                None,
+                id="正常系: 未知の暗号化・詳細なし",
+            ),
+        ],
+    )
+    def test_encryption_info_creation(
+        self,
+        is_encrypted: bool,
+        encryption_type: EncryptionType,
+        details: str | None,
+    ) -> None:
+        """EncryptionInfoが正しく生成される"""
+        info = EncryptionInfo(
+            is_encrypted=is_encrypted,
+            encryption_type=encryption_type,
+            details=details,
+        )
+
+        assert info.is_encrypted == is_encrypted
+        assert info.encryption_type == encryption_type
+        assert info.details == details
+
+    def test_encryption_info_default_details(self) -> None:
+        """detailsのデフォルト値はNone"""
         info = EncryptionInfo(
             is_encrypted=False,
             encryption_type=EncryptionType.NONE,
         )
 
-        assert info.is_encrypted is False
-        assert info.encryption_type == EncryptionType.NONE
         assert info.details is None
 
-    def test_create_encrypted_info_with_details(self) -> None:
-        """正常系: 詳細付きの暗号化情報を作成できる"""
-        info = EncryptionInfo(
-            is_encrypted=True,
-            encryption_type=EncryptionType.SIMPLE_XOR,
-            details="XORキー: 0x12345678",
-        )
-
-        assert info.is_encrypted is True
-        assert info.encryption_type == EncryptionType.SIMPLE_XOR
-        assert info.details == "XORキー: 0x12345678"
-
     def test_encryption_info_is_immutable(self) -> None:
-        """正常系: EncryptionInfoは不変である"""
+        """EncryptionInfoはイミュータブル"""
         info = EncryptionInfo(
             is_encrypted=False,
             encryption_type=EncryptionType.NONE,
@@ -73,203 +121,290 @@ class TestEncryptionInfo:
 class TestXP3EncryptionError:
     """XP3EncryptionError例外のテスト"""
 
-    def test_error_message_without_details(self) -> None:
-        """正常系: 詳細なしの暗号化エラーメッセージを生成"""
-        info = EncryptionInfo(
+    def test_xp3_encryption_error_creation(self) -> None:
+        """XP3EncryptionErrorが正しく生成される"""
+        encryption_info = EncryptionInfo(
             is_encrypted=True,
             encryption_type=EncryptionType.SIMPLE_XOR,
+            details=None,
         )
 
-        error = XP3EncryptionError(info)
+        error = XP3EncryptionError(encryption_info)
 
+        assert error.encryption_info == encryption_info
         assert "暗号化されています" in str(error)
         assert "simple_xor" in str(error)
-        assert error.encryption_info == info
 
-    def test_error_message_with_details(self) -> None:
-        """正常系: 詳細付きの暗号化エラーメッセージを生成"""
-        info = EncryptionInfo(
+    def test_xp3_encryption_error_with_details(self) -> None:
+        """詳細情報を含むXP3EncryptionErrorが正しく生成される"""
+        encryption_info = EncryptionInfo(
             is_encrypted=True,
             encryption_type=EncryptionType.CUSTOM,
-            details="独自暗号化アルゴリズム",
+            details="特殊な暗号化方式",
         )
 
-        error = XP3EncryptionError(info)
+        error = XP3EncryptionError(encryption_info)
 
-        assert "独自暗号化アルゴリズム" in str(error)
-        assert "custom" in str(error)
+        assert "特殊な暗号化方式" in str(error)
 
 class TestXP3Archive:
-    """XP3Archiveクラスのテスト"""
+    """XP3アーカイブ操作クラスのテスト"""
 
-    @pytest.fixture
-    def valid_xp3_path(self, tmp_path: Path) -> Path:
-        """有効なXP3ファイルパスを返すフィクスチャ"""
-        xp3_file = tmp_path / "test.xp3"
-        xp3_file.write_bytes(b"XP3\x0d\x0a\x1a\x0a\x00\x00\x00")  # XP3マジックナンバー
-        return xp3_file
+    def test_xp3archive_init_raises_not_implemented(self, tmp_path: Path) -> None:
+        """XP3Archiveの初期化は未実装でNotImplementedErrorを発生"""
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
 
-    @pytest.fixture
-    def invalid_xp3_path(self, tmp_path: Path) -> Path:
-        """不正なXP3ファイルパスを返すフィクスチャ"""
-        invalid_file = tmp_path / "invalid.xp3"
-        invalid_file.write_bytes(b"NOT_XP3_FILE")
-        return invalid_file
-
-    @pytest.fixture
-    def nonexistent_path(self, tmp_path: Path) -> Path:
-        """存在しないファイルパスを返すフィクスチャ"""
-        return tmp_path / "nonexistent.xp3"
-
-    def test_open_valid_xp3_file(self, valid_xp3_path: Path) -> None:
-        """正常系: 有効なXP3ファイルを開ける"""
-        # TDD Step 2: 実装前のためNotImplementedErrorが発生する
         with pytest.raises(NotImplementedError):
-            XP3Archive(valid_xp3_path)
+            XP3Archive(archive_path)
 
-    def test_open_nonexistent_file_raises_error(self, nonexistent_path: Path) -> None:
-        """異常系: 存在しないファイルパスでエラー"""
-        # 実装時は FileNotFoundError が発生することを期待
-        with pytest.raises((NotImplementedError, FileNotFoundError)):
-            XP3Archive(nonexistent_path)
+    @pytest.mark.parametrize(
+        "archive_name, expected_files",
+        [
+            pytest.param(
+                "valid.xp3",
+                ["data/script.ks", "image.png"],
+                id="正常系: 有効なXP3ファイルのファイル一覧取得",
+            ),
+            pytest.param(
+                "empty.xp3",
+                [],
+                id="正常系: 空のXP3ファイルのファイル一覧取得",
+            ),
+            pytest.param(
+                "nested.xp3",
+                ["data/scripts/main.ks", "data/images/bg/title.png", "sound.ogg"],
+                id="正常系: ネストされたディレクトリ構造",
+            ),
+        ],
+    )
+    def test_list_files(self, archive_name: str, expected_files: list[str], tmp_path: Path) -> None:
+        """ファイル一覧取得テスト（実装後に動作する）
 
-    def test_open_invalid_xp3_file_raises_error(self, invalid_xp3_path: Path) -> None:
-        """異常系: 不正なXP3ファイルでエラー"""
-        # 実装時は ValueError または カスタムエラー が発生することを期待
-        with pytest.raises((NotImplementedError, ValueError)):
-            XP3Archive(invalid_xp3_path)
+        現時点ではNotImplementedErrorが発生する。
+        実装完了後、このテストは期待されるファイル一覧を返すことを検証する。
+        """
+        archive_path = tmp_path / archive_name
+        archive_path.touch()
 
-    def test_list_files_returns_file_list(self, valid_xp3_path: Path) -> None:
-        """正常系: ファイル一覧を取得できる"""
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(valid_xp3_path)
+            archive = XP3Archive(archive_path)
             archive.list_files()
 
-    def test_extract_all_creates_files(self, valid_xp3_path: Path, tmp_path: Path) -> None:
-        """正常系: すべてのファイルを展開できる"""
+    def test_extract_all(self, tmp_path: Path) -> None:
+        """すべてのファイル展開テスト
+
+        XP3アーカイブ内の全ファイルを指定ディレクトリに展開する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
         output_dir = tmp_path / "output"
 
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(valid_xp3_path)
+            archive = XP3Archive(archive_path)
             archive.extract_all(output_dir)
 
-    def test_extract_file_creates_single_file(self, valid_xp3_path: Path, tmp_path: Path) -> None:
-        """正常系: 個別ファイルを展開できる"""
-        output_path = tmp_path / "extracted_file.txt"
+    def test_extract_file(self, tmp_path: Path) -> None:
+        """個別ファイル展開テスト
+
+        XP3アーカイブ内の特定ファイルを指定パスに展開する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+        output_path = tmp_path / "extracted" / "script.ks"
 
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(valid_xp3_path)
+            archive = XP3Archive(archive_path)
             archive.extract_file("data/script.ks", output_path)
 
-    def test_is_encrypted_returns_bool(self, valid_xp3_path: Path) -> None:
-        """正常系: 暗号化判定がbool値を返す"""
+    def test_is_encrypted(self, tmp_path: Path) -> None:
+        """暗号化判定テスト
+
+        XP3アーカイブが暗号化されているかを判定する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(valid_xp3_path)
+            archive = XP3Archive(archive_path)
             archive.is_encrypted()
 
+class TestXP3ArchiveFileNotFound:
+    """XP3アーカイブ - ファイル不在時の異常系テスト"""
+
+    def test_nonexistent_file_raises_error(self) -> None:
+        """存在しないファイルパスでエラーが発生する
+
+        実装時、FileNotFoundErrorまたはカスタム例外が発生することを期待。
+        現時点では初期化自体がNotImplementedErrorで失敗する。
+        """
+        nonexistent_path = Path("/nonexistent/path/to/archive.xp3")
+
+        with pytest.raises(NotImplementedError):
+            XP3Archive(nonexistent_path)
+
+class TestXP3ArchiveInvalidFormat:
+    """XP3アーカイブ - 不正フォーマット時の異常系テスト"""
+
+    def test_invalid_xp3_raises_error(self, tmp_path: Path) -> None:
+        """不正なXP3ファイルでエラーが発生する
+
+        XP3シグネチャを持たないファイルを読み込んだ場合、
+        適切な例外が発生することを期待。
+        現時点では初期化自体がNotImplementedErrorで失敗する。
+        """
+        invalid_file = tmp_path / "invalid.xp3"
+        invalid_file.write_bytes(b"This is not a valid XP3 archive")
+
+        with pytest.raises(NotImplementedError):
+            XP3Archive(invalid_file)
+
+    def test_truncated_xp3_raises_error(self, tmp_path: Path) -> None:
+        """切り詰められたXP3ファイルでエラーが発生する
+
+        不完全なXP3ファイルを読み込んだ場合、
+        適切な例外が発生することを期待。
+        """
+        truncated_file = tmp_path / "truncated.xp3"
+        # XP3シグネチャ部分だけ書き込む（不完全なファイル）
+        truncated_file.write_bytes(b"XP3\r\n")
+
+        with pytest.raises(NotImplementedError):
+            XP3Archive(truncated_file)
+
 class TestXP3EncryptionChecker:
-    """XP3EncryptionCheckerクラスのテスト"""
+    """XP3暗号化チェッカーのテスト"""
 
-    @pytest.fixture
-    def valid_xp3_path(self, tmp_path: Path) -> Path:
-        """有効なXP3ファイルパスを返すフィクスチャ"""
-        xp3_file = tmp_path / "test.xp3"
-        xp3_file.write_bytes(b"XP3\x0d\x0a\x1a\x0a\x00\x00\x00")
-        return xp3_file
+    def test_checker_initialization(self, tmp_path: Path) -> None:
+        """XP3EncryptionCheckerが正しく初期化される"""
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
 
-    @pytest.fixture
-    def nonexistent_path(self, tmp_path: Path) -> Path:
-        """存在しないファイルパスを返すフィクスチャ"""
-        return tmp_path / "nonexistent.xp3"
+        checker = XP3EncryptionChecker(archive_path)
 
-    def test_check_returns_encryption_info(self, valid_xp3_path: Path) -> None:
-        """正常系: チェック結果がEncryptionInfoを返す"""
-        checker = XP3EncryptionChecker(valid_xp3_path)
+        # _archive_pathがprotectedメンバーとして保持される
+        assert checker._archive_path == archive_path
+
+    def test_check_returns_encryption_info(self, tmp_path: Path) -> None:
+        """checkメソッドがEncryptionInfoを返す
+
+        現時点では未実装のためNotImplementedErrorが発生する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+
+        checker = XP3EncryptionChecker(archive_path)
 
         with pytest.raises(NotImplementedError):
             checker.check()
 
-    def test_check_non_encrypted_xp3(self, valid_xp3_path: Path) -> None:
-        """正常系: 非暗号化XP3を正しく判定できる"""
-        checker = XP3EncryptionChecker(valid_xp3_path)
+    @pytest.mark.parametrize(
+        "file_content, expected_encrypted",
+        [
+            pytest.param(
+                b"unencrypted_xp3_content",
+                False,
+                id="正常系: 非暗号化XP3を正しく判定",
+            ),
+        ],
+    )
+    def test_check_non_encrypted_xp3(
+        self, file_content: bytes, expected_encrypted: bool, tmp_path: Path
+    ) -> None:
+        """非暗号化XP3を正しく判定できる
+
+        実装後、非暗号化XP3ファイルに対してis_encrypted=Falseを返すことを検証。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.write_bytes(file_content)
+
+        checker = XP3EncryptionChecker(archive_path)
 
         with pytest.raises(NotImplementedError):
-            result = checker.check()
-            # 実装後の期待値
-            assert result.is_encrypted is False
-            assert result.encryption_type == EncryptionType.NONE
+            checker.check()
+            # 実装後に検証: assert result.is_encrypted == expected_encrypted
 
-    def test_check_nonexistent_file_raises_error(self, nonexistent_path: Path) -> None:
-        """異常系: 存在しないファイルでエラー"""
+    def test_raise_if_encrypted_not_implemented(self, tmp_path: Path) -> None:
+        """raise_if_encryptedは未実装でNotImplementedErrorを発生"""
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+
+        checker = XP3EncryptionChecker(archive_path)
+
+        with pytest.raises(NotImplementedError):
+            checker.raise_if_encrypted()
+
+    def test_check_nonexistent_file(self) -> None:
+        """存在しないファイルのチェックで例外が発生する
+
+        実装時、FileNotFoundErrorが発生することを期待。
+        現時点ではNotImplementedErrorが発生する。
+        """
+        nonexistent_path = Path("/nonexistent/path/to/archive.xp3")
+
         checker = XP3EncryptionChecker(nonexistent_path)
 
-        with pytest.raises((NotImplementedError, FileNotFoundError)):
+        with pytest.raises(NotImplementedError):
             checker.check()
 
-    def test_raise_if_encrypted_does_not_raise_for_non_encrypted(
-        self, valid_xp3_path: Path
-    ) -> None:
-        """正常系: 非暗号化XP3では例外を発生させない"""
-        checker = XP3EncryptionChecker(valid_xp3_path)
+class TestXP3EncryptionCheckerRaiseIfEncrypted:
+    """XP3暗号化チェッカー - raise_if_encryptedのテスト"""
+
+    def test_raise_if_encrypted_does_not_raise_for_unencrypted(self, tmp_path: Path) -> None:
+        """非暗号化XP3では例外が発生しない
+
+        実装後、非暗号化XP3ファイルに対しては例外なく完了することを検証。
+        現時点ではNotImplementedErrorが発生する。
+        """
+        archive_path = tmp_path / "unencrypted.xp3"
+        archive_path.touch()
+
+        checker = XP3EncryptionChecker(archive_path)
 
         with pytest.raises(NotImplementedError):
             checker.raise_if_encrypted()
 
     def test_raise_if_encrypted_raises_for_encrypted(self, tmp_path: Path) -> None:
-        """異常系: 暗号化XP3で例外を発生させる"""
-        # 暗号化されたXP3のシミュレーション用
-        encrypted_xp3 = tmp_path / "encrypted.xp3"
-        encrypted_xp3.write_bytes(b"XP3\x0d\x0a\x1a\x0a\x00\x00\x00\xff\xff")
+        """暗号化XP3ではXP3EncryptionErrorが発生する
 
-        checker = XP3EncryptionChecker(encrypted_xp3)
+        実装後、暗号化XP3ファイルに対してXP3EncryptionErrorが発生することを検証。
+        現時点ではNotImplementedErrorが発生する。
+        """
+        archive_path = tmp_path / "encrypted.xp3"
+        archive_path.touch()
 
-        # 実装時は XP3EncryptionError が発生することを期待
-        with pytest.raises((NotImplementedError, XP3EncryptionError)):
+        checker = XP3EncryptionChecker(archive_path)
+
+        with pytest.raises(NotImplementedError):
             checker.raise_if_encrypted()
 
-class TestXP3ArchiveIntegration:
-    """XP3Archive統合テスト（モックなし）
+class TestXP3OutputDirectory:
+    """XP3アーカイブ展開 - 出力ディレクトリの挙動テスト"""
 
-    Note: これらのテストは実際のXP3ファイルが必要になる可能性があるため、
-    実装フェーズでフィクスチャを適切に調整する。
-    """
+    def test_extract_creates_output_directory(self, tmp_path: Path) -> None:
+        """存在しない出力ディレクトリが自動作成される
 
-    @pytest.mark.parametrize(
-        "file_count, expected_count",
-        [
-            pytest.param(0, 0, id="正常系: 空のアーカイブ"),
-            pytest.param(1, 1, id="正常系: 1ファイル"),
-            pytest.param(10, 10, id="正常系: 複数ファイル"),
-        ],
-    )
-    def test_list_files_returns_correct_count(
-        self, tmp_path: Path, file_count: int, expected_count: int
-    ) -> None:
-        """正常系: ファイル数が正しく返される"""
-        # テスト用XP3ファイル作成（実装時に適切なフィクスチャに置き換え）
-        xp3_file = tmp_path / "test.xp3"
-        xp3_file.write_bytes(b"XP3\x0d\x0a\x1a\x0a\x00\x00\x00")
+        実装後、extract_allが出力ディレクトリを自動作成することを検証。
+        現時点ではNotImplementedErrorが発生する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+        output_dir = tmp_path / "nonexistent" / "nested" / "output"
 
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(xp3_file)
-            files = archive.list_files()
-            assert len(files) == expected_count
+            archive = XP3Archive(archive_path)
+            archive.extract_all(output_dir)
 
-    @pytest.mark.parametrize(
-        "filename",
-        [
-            pytest.param("data/script.ks", id="正常系: スクリプトファイル"),
-            pytest.param("image/bg/title.png", id="正常系: 画像ファイル"),
-            pytest.param("sound/bgm/main.ogg", id="正常系: 音声ファイル"),
-        ],
-    )
-    def test_extract_file_by_name(self, tmp_path: Path, filename: str) -> None:
-        """正常系: ファイル名を指定して展開できる"""
-        xp3_file = tmp_path / "test.xp3"
-        xp3_file.write_bytes(b"XP3\x0d\x0a\x1a\x0a\x00\x00\x00")
-        output_path = tmp_path / "output" / Path(filename).name
+    def test_extract_file_creates_parent_directory(self, tmp_path: Path) -> None:
+        """個別ファイル展開時に親ディレクトリが自動作成される
+
+        実装後、extract_fileが出力先の親ディレクトリを自動作成することを検証。
+        現時点ではNotImplementedErrorが発生する。
+        """
+        archive_path = tmp_path / "test.xp3"
+        archive_path.touch()
+        output_path = tmp_path / "nonexistent" / "dir" / "script.ks"
 
         with pytest.raises(NotImplementedError):
-            archive = XP3Archive(xp3_file)
-            archive.extract_file(filename, output_path)
-            assert output_path.exists()
+            archive = XP3Archive(archive_path)
+            archive.extract_file("script.ks", output_path)
