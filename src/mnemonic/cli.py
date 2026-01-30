@@ -3,8 +3,11 @@
 from typing import Annotated
 
 import typer
+from rich.console import Console
+from rich.table import Table
 
 from mnemonic import __version__
+from mnemonic.doctor import check_all_dependencies
 
 app = typer.Typer(help="吉里吉里ゲームをAndroid APKに変換するCLIツール")
 
@@ -19,7 +22,40 @@ def build(
 @app.command()
 def doctor() -> None:
     """依存ツールをチェックする"""
-    raise typer.Exit(0)
+    console = Console()
+    results = check_all_dependencies()
+
+    table = Table(title="依存ツールチェック結果")
+    table.add_column("ステータス", justify="center")
+    table.add_column("ツール名", justify="left")
+    table.add_column("バージョン", justify="left")
+    table.add_column("必須", justify="center")
+    table.add_column("メッセージ", justify="left")
+
+    has_missing_required = False
+
+    for result in results:
+        if result.found:
+            status = "[green]✓[/green]"
+        else:
+            status = "[red]✗[/red]"
+            if result.required:
+                has_missing_required = True
+
+        required_str = "[yellow]必須[/yellow]" if result.required else "オプション"
+        version_str = result.version or "-"
+        message_str = result.message or ""
+
+        table.add_row(status, result.name, version_str, required_str, message_str)
+
+    console.print(table)
+
+    if has_missing_required:
+        console.print("\n[red]エラー: 必須ツールが不足しています[/red]")
+        raise typer.Exit(1)
+    else:
+        console.print("\n[green]すべての必須ツールが利用可能です[/green]")
+        raise typer.Exit(0)
 
 @app.command()
 def info(
