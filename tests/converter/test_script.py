@@ -335,13 +335,18 @@ var kag = new KAGWindow();
         source = tmp_path / "startup.tjs"
         dest = tmp_path / "output" / "startup.tjs"
 
-        content = "var x = 1;"
+        # プラグイン呼び出しを含めることで調整が発生しファイルが出力される
+        content = """Plugins.link("test.dll");
+var x = 1;
+"""
         source.write_text(content, encoding="utf-8")
 
-        adjuster.convert(source, dest)
+        result = adjuster.convert(source, dest)
 
+        assert result.status == ConversionStatus.SUCCESS
         converted = dest.read_text(encoding="utf-8")
         assert "@if (kirikiriz)" not in converted
+        assert "// Disabled for Android" in converted
 
     def test_returns_skipped_when_no_adjustments(
         self, adjuster: ScriptAdjuster, tmp_path: Path

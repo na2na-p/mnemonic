@@ -4,10 +4,11 @@ KiriKiriZ向けにゲームスクリプト(.ks, .tjs)を調整するためのコ
 プラグインDLL読み込みの無効化やエンコーディングディレクティブの追加を行う。
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from mnemonic.converter.base import BaseConverter, ConversionResult
+from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
 
 @dataclass(frozen=True)
 class AdjustmentRule:
@@ -83,7 +84,8 @@ class ScriptAdjuster(BaseConverter):
         Returns:
             .ksまたは.tjsファイルの場合True、そうでない場合False
         """
-        raise NotImplementedError
+        suffix = file_path.suffix.lower()
+        return suffix in self.supported_extensions
 
     def convert(self, source: Path, dest: Path) -> ConversionResult:
         """スクリプトファイルを調整する
@@ -98,7 +100,60 @@ class ScriptAdjuster(BaseConverter):
         Returns:
             変換結果を表すConversionResultオブジェクト
         """
-        raise NotImplementedError
+        if not source.exists():
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=f"変換元ファイルが見つかりません: {source}",
+            )
+
+        try:
+            content = source.read_text(encoding="utf-8")
+            bytes_before = len(content.encode("utf-8"))
+
+            adjusted_content, adjustment_count = self.adjust_content(content, source.name)
+
+            # startup.tjsの場合、エンコーディングディレクティブを追加
+            is_startup = source.name.lower() == "startup.tjs"
+            if is_startup and self._add_encoding_directive:
+                adjusted_content = self.add_startup_directive(adjusted_content)
+                adjustment_count += 1
+
+            # 調整がなければスキップ
+            if adjustment_count == 0:
+                return ConversionResult(
+                    source_path=source,
+                    dest_path=None,
+                    status=ConversionStatus.SKIPPED,
+                    message="調整が不要なファイルです",
+                    bytes_before=bytes_before,
+                    bytes_after=bytes_before,
+                )
+
+            # 出力先ディレクトリを作成
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            # 調整後の内容を書き込み
+            dest.write_text(adjusted_content, encoding="utf-8")
+            bytes_after = len(adjusted_content.encode("utf-8"))
+
+            return ConversionResult(
+                source_path=source,
+                dest_path=dest,
+                status=ConversionStatus.SUCCESS,
+                message=f"{adjustment_count}箇所を調整しました",
+                bytes_before=bytes_before,
+                bytes_after=bytes_after,
+            )
+
+        except Exception as e:
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=str(e),
+            )
 
     def adjust_content(self, content: str, filename: str = "") -> tuple[str, int]:
         """スクリプト内容を調整する
@@ -112,7 +167,16 @@ class ScriptAdjuster(BaseConverter):
         Returns:
             (調整後の内容, 調整回数)のタプル
         """
-        raise NotImplementedError
+        total_count = 0
+        result = content
+
+        for rule in self._rules:
+            pattern = re.compile(rule.pattern, re.MULTILINE)
+            new_result, count = pattern.subn(rule.replacement, result)
+            total_count += count
+            result = new_result
+
+        return result, total_count
 
     def add_startup_directive(self, content: str) -> str:
         """startup.tjsにエンコーディングディレクティブを追加する
@@ -125,4 +189,10 @@ class ScriptAdjuster(BaseConverter):
         Returns:
             ディレクティブを追加した内容
         """
-        raise NotImplementedError
+        directive = """@if (kirikiriz)
+{
+    System.setArgument("-readencoding", "UTF-8");
+}
+@endif
+"""
+        return directive + content
