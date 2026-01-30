@@ -7,6 +7,7 @@
 from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
 from mnemonic.converter.encoding import (
     SUPPORTED_ENCODINGS,
+    EncodingConverter,
     EncodingDetectionResult,
     EncodingDetector,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "BaseConverter",
     "ConversionResult",
     "ConversionStatus",
+    "EncodingConverter",
     "EncodingDetectionResult",
     "EncodingDetector",
     "SUPPORTED_ENCODINGS",
