@@ -24,6 +24,7 @@ class TemplateInfo:
 
     version: str
     download_url: str
+    file_size: int
     file_name: str
 
 class TemplateDownloader:
