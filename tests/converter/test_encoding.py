@@ -422,7 +422,11 @@ class TestEncodingConverterConvertBytes:
 
     def test_converts_shift_jis_bytes_to_utf8(self, converter: EncodingConverter) -> None:
         """Shift_JISバイトデータをUTF-8に変換できることを確認する"""
-        test_text = "これはテストです"
+        # chardetが正確に検出できるよう、十分な長さのテキストを使用
+        test_text = (
+            "これはShift_JISエンコーディングのテストファイルです。"
+            "日本語の文章を含みます。吾輩は猫である。名前はまだ無い。"
+        )
         sjis_bytes = test_text.encode("shift_jis")
 
         result_bytes, detected_encoding = converter.convert_bytes(sjis_bytes)
@@ -432,7 +436,11 @@ class TestEncodingConverterConvertBytes:
 
     def test_converts_euc_jp_bytes_to_utf8(self, converter: EncodingConverter) -> None:
         """EUC-JPバイトデータをUTF-8に変換できることを確認する"""
-        test_text = "EUC-JPテスト文字列"
+        # chardetが正確に検出できるよう、十分な長さのテキストを使用
+        test_text = (
+            "これはEUC-JPエンコーディングのテストファイルです。"
+            "日本語の文章を含みます。坊っちゃん。親譲りの無鉄砲で小供の時から損ばかりしている。"
+        )
         euc_bytes = test_text.encode("euc-jp")
 
         result_bytes, detected_encoding = converter.convert_bytes(euc_bytes)
@@ -469,17 +477,26 @@ class TestEncodingConverterJapanesePreservation:
         [
             pytest.param(
                 "shift_jis",
-                "吾輩は猫である。名前はまだ無い。",
+                (
+                    "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。"
+                    "何でも薄暗いじめじめした所でニャーニャー泣いていた事だけは記憶している。"
+                ),
                 id="正常系: Shift_JISの日本語が保全される",
             ),
             pytest.param(
                 "euc-jp",
-                "坊っちゃん。親譲りの無鉄砲で小供の時から損ばかりしている。",
+                (
+                    "坊っちゃん。親譲りの無鉄砲で小供の時から損ばかりしている。"
+                    "小学校に居る時分学校の二階から飛び降りて一週間ほど腰を抜かした事がある。"
+                ),
                 id="正常系: EUC-JPの日本語が保全される",
             ),
             pytest.param(
                 "shift_jis",
-                "漢字、ひらがな、カタカナ、ＡＢＣ、１２３",
+                (
+                    "漢字、ひらがな、カタカナ、ＡＢＣ、１２３。"
+                    "日本語のテキストファイルに含まれる様々な文字を保全することを確認します。"
+                ),
                 id="正常系: 複合文字が保全される",
             ),
         ],
