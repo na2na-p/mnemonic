@@ -49,6 +49,74 @@ class TemplateInfo:
     file_size: int
     file_name: str
 
+@dataclass(frozen=True)
+class ProjectConfig:
+    """Androidプロジェクトの設定を表す不変オブジェクト
+
+    Attributes:
+        package_name: Androidパッケージ名（例: com.krkr.gamename）
+        app_name: アプリの表示名
+        version_code: バージョンコード（整数）
+        version_name: バージョン名（例: 1.0.0）
+    """
+
+    package_name: str
+    app_name: str
+    version_code: int
+    version_name: str
+
+class ProjectGenerationError(Exception):
+    """プロジェクト生成に関する基本例外クラス"""
+
+    pass
+
+class InvalidTemplateError(ProjectGenerationError):
+    """テンプレートの整合性検証に失敗した場合の例外"""
+
+    pass
+
+class ProjectGenerator:
+    """テンプレートからAndroidプロジェクトを生成するクラス
+
+    krkrsdl2テンプレートを展開し、設定を適用して
+    Androidプロジェクトを生成する機能を提供します。
+    """
+
+    def __init__(self, template_path: Path) -> None:
+        """ProjectGeneratorを初期化する
+
+        Args:
+            template_path: テンプレートファイル（ZIP）のパス
+        """
+        self._template_path = template_path
+
+    def generate(self, output_dir: Path, config: ProjectConfig) -> Path:
+        """テンプレートからプロジェクトを生成する
+
+        Args:
+            output_dir: プロジェクトの出力先ディレクトリ
+            config: プロジェクト設定
+
+        Returns:
+            生成されたプロジェクトのルートパス
+
+        Raises:
+            ProjectGenerationError: プロジェクト生成に失敗した場合
+            InvalidTemplateError: テンプレートが無効な場合
+        """
+        raise NotImplementedError
+
+    def validate_template(self) -> bool:
+        """テンプレートの整合性を検証する
+
+        Returns:
+            テンプレートが有効な場合はTrue
+
+        Raises:
+            InvalidTemplateError: テンプレートが無効な場合
+        """
+        raise NotImplementedError
+
 class TemplateCache:
     """テンプレートキャッシュを管理するクラス
 

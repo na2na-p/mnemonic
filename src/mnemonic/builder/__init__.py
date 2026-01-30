@@ -1,7 +1,11 @@
 """Builder module for Mnemonic."""
 
 from mnemonic.builder.template import (
+    InvalidTemplateError,
     NetworkError,
+    ProjectConfig,
+    ProjectGenerationError,
+    ProjectGenerator,
     TemplateCache,
     TemplateCacheError,
     TemplateDownloader,
@@ -11,7 +15,11 @@ from mnemonic.builder.template import (
 )
 
 __all__ = [
+    "InvalidTemplateError",
     "NetworkError",
+    "ProjectConfig",
+    "ProjectGenerationError",
+    "ProjectGenerator",
     "TemplateCache",
     "TemplateCacheError",
     "TemplateDownloadError",
