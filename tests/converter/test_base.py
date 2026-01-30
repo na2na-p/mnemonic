@@ -138,3 +138,126 @@ class TestBaseConverter:
         assert isinstance(extensions, tuple)
         assert len(extensions) > 0
         assert all(ext.startswith(".") for ext in extensions)
+
+class TestConversionResultProperties:
+    """ConversionResultのユーティリティプロパティのテスト"""
+
+    def test_compression_ratio_normal(self, tmp_path: Path) -> None:
+        """正常系: 圧縮率の計算をテスト"""
+        source = tmp_path / "source.txt"
+        dest = tmp_path / "dest.txt"
+        result = ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=100,
+            bytes_after=80,
+        )
+        assert result.compression_ratio == 0.8
+
+    def test_compression_ratio_zero_bytes_before(self, tmp_path: Path) -> None:
+        """異常系: bytes_beforeが0の場合の圧縮率をテスト"""
+        source = tmp_path / "source.txt"
+        result = ConversionResult(
+            source_path=source,
+            dest_path=None,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=0,
+            bytes_after=50,
+        )
+        assert result.compression_ratio == 1.0
+
+    def test_bytes_saved(self, tmp_path: Path) -> None:
+        """正常系: 節約バイト数の計算をテスト"""
+        source = tmp_path / "source.txt"
+        dest = tmp_path / "dest.txt"
+        result = ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=100,
+            bytes_after=80,
+        )
+        assert result.bytes_saved == 20
+
+    def test_bytes_saved_negative(self, tmp_path: Path) -> None:
+        """正常系: サイズ増加時の節約バイト数をテスト"""
+        source = tmp_path / "source.txt"
+        dest = tmp_path / "dest.txt"
+        result = ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=80,
+            bytes_after=100,
+        )
+        assert result.bytes_saved == -20
+
+    @pytest.mark.parametrize(
+        "status,expected",
+        [
+            pytest.param(ConversionStatus.SUCCESS, True, id="正常系: SUCCESSの場合True"),
+            pytest.param(ConversionStatus.SKIPPED, False, id="正常系: SKIPPEDの場合False"),
+            pytest.param(ConversionStatus.FAILED, False, id="正常系: FAILEDの場合False"),
+        ],
+    )
+    def test_is_success(self, tmp_path: Path, status: ConversionStatus, expected: bool) -> None:
+        """is_successプロパティをテスト"""
+        source = tmp_path / "source.txt"
+        result = ConversionResult(
+            source_path=source,
+            dest_path=None,
+            status=status,
+        )
+        assert result.is_success is expected
+
+class TestBaseConverterUtilities:
+    """BaseConverterのユーティリティメソッドのテスト"""
+
+    def test_validate_source_not_found(self, tmp_path: Path) -> None:
+        """異常系: 存在しないファイルの検証をテスト"""
+        converter = MockConverter()
+        non_existent = tmp_path / "non_existent.txt"
+
+        with pytest.raises(FileNotFoundError) as exc_info:
+            converter._validate_source(non_existent)
+
+        assert "変換元ファイルが見つかりません" in str(exc_info.value)
+
+    def test_validate_source_is_directory(self, tmp_path: Path) -> None:
+        """異常系: ディレクトリの検証をテスト"""
+        converter = MockConverter()
+
+        with pytest.raises(ValueError) as exc_info:
+            converter._validate_source(tmp_path)
+
+        assert "変換元はファイルである必要があります" in str(exc_info.value)
+
+    def test_validate_source_valid_file(self, tmp_path: Path) -> None:
+        """正常系: 有効なファイルの検証をテスト"""
+        converter = MockConverter()
+        valid_file = tmp_path / "valid.txt"
+        valid_file.write_text("test content")
+
+        # 例外が発生しないことを確認
+        converter._validate_source(valid_file)
+
+    def test_get_file_size_existing_file(self, tmp_path: Path) -> None:
+        """正常系: 存在するファイルのサイズ取得をテスト"""
+        converter = MockConverter()
+        test_file = tmp_path / "test.txt"
+        test_content = "Hello, World!"
+        test_file.write_text(test_content)
+
+        size = converter._get_file_size(test_file)
+
+        assert size == len(test_content)
+
+    def test_get_file_size_non_existing_file(self, tmp_path: Path) -> None:
+        """正常系: 存在しないファイルのサイズ取得をテスト（0を返す）"""
+        converter = MockConverter()
+        non_existent = tmp_path / "non_existent.txt"
+
+        size = converter._get_file_size(non_existent)
+
+        assert size == 0

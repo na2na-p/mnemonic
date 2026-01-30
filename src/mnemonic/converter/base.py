@@ -41,6 +41,31 @@ class ConversionResult:
     bytes_before: int = 0
     bytes_after: int = 0
 
+    @property
+    def compression_ratio(self) -> float:
+        """圧縮率を計算する（bytes_after / bytes_before）
+
+        Returns:
+            圧縮率（0.0〜1.0+）。bytes_beforeが0の場合は1.0を返す
+        """
+        if self.bytes_before == 0:
+            return 1.0
+        return self.bytes_after / self.bytes_before
+
+    @property
+    def bytes_saved(self) -> int:
+        """節約されたバイト数を返す
+
+        Returns:
+            節約バイト数（負の場合はサイズ増加）
+        """
+        return self.bytes_before - self.bytes_after
+
+    @property
+    def is_success(self) -> bool:
+        """変換が成功したかどうかを返す"""
+        return self.status == ConversionStatus.SUCCESS
+
 class BaseConverter(ABC):
     """Converterの基底クラス
 
@@ -88,3 +113,31 @@ class BaseConverter(ABC):
             対応する拡張子のタプル
         """
         ...
+
+    def _validate_source(self, source: Path) -> None:
+        """変換元ファイルの検証を行う
+
+        Args:
+            source: 変換元ファイルのパス
+
+        Raises:
+            FileNotFoundError: ファイルが存在しない場合
+            ValueError: ファイルではなくディレクトリの場合
+        """
+        if not source.exists():
+            raise FileNotFoundError(f"変換元ファイルが見つかりません: {source}")
+        if source.is_dir():
+            raise ValueError(f"変換元はファイルである必要があります: {source}")
+
+    def _get_file_size(self, path: Path) -> int:
+        """ファイルサイズを取得する
+
+        Args:
+            path: ファイルパス
+
+        Returns:
+            ファイルサイズ（バイト）。ファイルが存在しない場合は0
+        """
+        if path.exists():
+            return path.stat().st_size
+        return 0
