@@ -7,10 +7,61 @@ Windows EXE/XP3からAndroid APKを生成するパイプラインを構成する
 
 from __future__ import annotations
 
+import re
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+import mnemonic.cache as cache_module
+from mnemonic.builder.gradle import GradleBuilder
+from mnemonic.builder.template import (
+    AssetPlacer,
+    ProjectConfig,
+    ProjectGenerator,
+    TemplateCache,
+    TemplateDownloader,
+)
+from mnemonic.converter.encoding import EncodingConverter
+from mnemonic.converter.image import ImageConverter
+from mnemonic.converter.manager import ConversionManager
+from mnemonic.converter.video import VideoConverter
+from mnemonic.parser.detector import GameDetector, GameStructure
+from mnemonic.parser.xp3 import XP3Archive, XP3EncryptionChecker
+from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, KeystoreConfig
+
+if TYPE_CHECKING:
+    from mnemonic.cache import CacheInfo
+
+
+class DefaultCacheManager:
+    """デフォルトのキャッシュマネージャー実装
+
+    CacheManager Protocolの具象実装を提供する。
+    """
+
+    def get_cache_dir(self) -> Path:
+        """OSごとのキャッシュディレクトリを取得する"""
+        return cache_module.get_cache_dir()
+
+    def get_template_cache_path(self, version: str) -> Path:
+        """テンプレートキャッシュパスを取得する"""
+        return cache_module.get_template_cache_path(version)
+
+    def is_cache_valid(self, path: Path, max_age_days: int) -> bool:
+        """キャッシュの有効性をチェックする"""
+        return cache_module.is_cache_valid(path, max_age_days)
+
+    def clear_cache(self, template_only: bool = False) -> None:
+        """キャッシュをクリアする"""
+        cache_module.clear_cache(template_only)
+
+    def get_cache_info(self) -> CacheInfo:
+        """キャッシュ情報を取得する"""
+        return cache_module.get_cache_info()
+
 
 class PipelinePhase(Enum):
     """パイプラインフェーズ
@@ -29,6 +80,7 @@ class PipelinePhase(Enum):
     CONVERT = "convert"
     BUILD = "build"
     SIGN = "sign"
+
 
 @dataclass(frozen=True)
 class PipelineProgress:
@@ -49,6 +101,7 @@ class PipelineProgress:
     total: int
     message: str = ""
 
+
 class ProgressCallback(Protocol):
     """進捗コールバックのプロトコル
 
@@ -63,6 +116,7 @@ class ProgressCallback(Protocol):
             progress: 現在の進捗情報
         """
         ...
+
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -105,6 +159,7 @@ class PipelineConfig:
     template_refresh_days: int = 7
     template_offline: bool = False
 
+
 @dataclass
 class PipelineResult:
     """パイプライン実行結果
@@ -125,6 +180,7 @@ class PipelineResult:
     error_message: str = ""
     phases_completed: list[PipelinePhase] = field(default_factory=list)
     statistics: dict[str, Any] = field(default_factory=dict)
+
 
 class BuildPipeline:
     """ビルドパイプラインオーケストレーター
@@ -150,6 +206,12 @@ class BuildPipeline:
             config: パイプライン設定
         """
         self._config = config
+        self._temp_dirs: list[Path] = []
+        self._extract_dir: Path | None = None
+        self._convert_dir: Path | None = None
+        self._project_dir: Path | None = None
+        self._unsigned_apk: Path | None = None
+        self._game_structure: GameStructure | None = None
 
     @property
     def config(self) -> PipelineConfig:
@@ -240,6 +302,8 @@ class BuildPipeline:
                 error_message=str(e),
                 phases_completed=phases_completed,
             )
+        finally:
+            self._cleanup_temp_dirs()
 
     def _execute_phase(self, phase: PipelinePhase) -> None:
         """個別フェーズを実行する
@@ -247,17 +311,226 @@ class BuildPipeline:
         Args:
             phase: 実行するフェーズ
 
-        Note:
-            各フェーズの実際の処理は今後のタスクで実装される。
-            現在は基本的なフレームワークのみ。
+        Raises:
+            ValueError: フェーズ実行中にエラーが発生した場合
         """
-        # 各フェーズの処理は今後のタスクで実装
-        # ANALYZE: Parser による解析
-        # EXTRACT: アセット抽出
-        # CONVERT: Converter による変換
-        # BUILD: Builder による APK ビルド
-        # SIGN: Signer による署名
-        pass
+        match phase:
+            case PipelinePhase.ANALYZE:
+                self._execute_analyze()
+            case PipelinePhase.EXTRACT:
+                self._execute_extract()
+            case PipelinePhase.CONVERT:
+                self._execute_convert()
+            case PipelinePhase.BUILD:
+                self._execute_build()
+            case PipelinePhase.SIGN:
+                self._execute_sign()
+
+    def _execute_analyze(self) -> None:
+        """ANALYZEフェーズ: ゲーム構造解析
+
+        入力ファイルの形式を確認し、必要に応じて暗号化チェックを行う。
+
+        Raises:
+            ValueError: サポートされていない入力形式、または暗号化されている場合
+        """
+        input_path = self._config.input_path
+        suffix = input_path.suffix.lower()
+
+        if suffix == ".exe":
+            # EXEファイルのサポートは将来の実装課題
+            # 現時点ではXP3ファイルの直接入力のみサポート
+            raise ValueError(
+                f"EXEファイルの直接入力は現在サポートされていません: {input_path}。"
+                "XP3ファイルを直接指定してください。"
+            )
+        elif suffix == ".xp3":
+            # XP3の場合: 暗号化チェック
+            checker = XP3EncryptionChecker(input_path)
+            checker.raise_if_encrypted()
+
+    def _execute_extract(self) -> None:
+        """EXTRACTフェーズ: アセット抽出
+
+        XP3アーカイブを展開し、ゲーム構造を解析する。
+
+        Raises:
+            ValueError: 抽出に失敗した場合
+        """
+        input_path = self._config.input_path
+
+        # 一時ディレクトリ作成
+        self._extract_dir = Path(tempfile.mkdtemp(prefix="mnemonic_extract_"))
+        self._temp_dirs.append(self._extract_dir)
+
+        # XP3を展開
+        archive = XP3Archive(input_path)
+        archive.extract_all(self._extract_dir)
+
+        # ゲーム構造解析
+        detector = GameDetector(self._extract_dir)
+        self._game_structure = detector.detect()
+
+    def _execute_convert(self) -> None:
+        """CONVERTフェーズ: アセット変換
+
+        抽出されたアセットをAndroid互換形式に変換する。
+
+        Raises:
+            ValueError: 抽出フェーズが完了していない場合
+        """
+        if self._extract_dir is None:
+            raise ValueError("抽出フェーズが完了していません")
+
+        self._convert_dir = Path(tempfile.mkdtemp(prefix="mnemonic_convert_"))
+        self._temp_dirs.append(self._convert_dir)
+
+        # コンバーターを設定
+        converters: list[Any] = [
+            EncodingConverter(),
+            ImageConverter(),
+        ]
+
+        if not self._config.skip_video:
+            converters.append(VideoConverter(timeout=self._config.ffmpeg_timeout))
+
+        manager = ConversionManager(converters=converters)
+        manager.convert_directory(self._extract_dir, self._convert_dir)
+
+    def _execute_build(self) -> None:
+        """BUILDフェーズ: APKビルド
+
+        Androidプロジェクトを生成し、Gradleでビルドする。
+
+        Raises:
+            ValueError: 変換フェーズが完了していない、またはビルド失敗の場合
+        """
+        import asyncio
+
+        if self._convert_dir is None:
+            raise ValueError("変換フェーズが完了していません")
+
+        self._project_dir = Path(tempfile.mkdtemp(prefix="mnemonic_project_"))
+        self._temp_dirs.append(self._project_dir)
+
+        # テンプレート取得
+        cache_manager = DefaultCacheManager()
+        template_cache = TemplateCache(
+            cache_manager=cache_manager,
+            refresh_days=self._config.template_refresh_days,
+        )
+
+        template_path = template_cache.get_cached_template(self._config.template_version)
+
+        if template_path is None and not self._config.template_offline:
+            downloader = TemplateDownloader()
+            loop = asyncio.new_event_loop()
+            try:
+                template_path = loop.run_until_complete(
+                    downloader.download(self._config.template_version)
+                )
+            finally:
+                loop.close()
+
+            if template_path:
+                version = self._config.template_version or "latest"
+                template_cache.save_template(template_path, version)
+                template_path = template_cache.get_cached_template(self._config.template_version)
+
+        if template_path is None:
+            raise ValueError("テンプレートが利用できません。オンラインモードで再実行してください。")
+
+        # パッケージ名とアプリ名の決定
+        input_name = self._config.input_path.stem
+        package_name = self._config.package_name or f"com.krkr.{self._sanitize_name(input_name)}"
+        app_name = self._config.app_name or input_name
+
+        # プロジェクト生成
+        project_config = ProjectConfig(
+            package_name=package_name,
+            app_name=app_name,
+            version_code=1,
+            version_name="1.0.0",
+        )
+
+        generator = ProjectGenerator(template_path)
+        generator.generate(self._project_dir, project_config)
+
+        # アセット配置
+        placer = AssetPlacer(self._project_dir)
+        assets_dir = self._project_dir / "app" / "src" / "main" / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        placer.place_assets(self._convert_dir)
+
+        # Gradleビルド
+        builder = GradleBuilder(self._project_dir, timeout=self._config.gradle_timeout)
+        result = builder.build("release")
+
+        if not result.success or result.apk_path is None:
+            raise ValueError(f"Gradleビルドに失敗しました: {result.output_log}")
+
+        self._unsigned_apk = result.apk_path
+
+    def _execute_sign(self) -> None:
+        """SIGNフェーズ: APK署名
+
+        ビルドされたAPKにzipalignを適用し、オプションで署名を行う。
+
+        Raises:
+            ValueError: ビルドフェーズが完了していない場合
+        """
+        if self._unsigned_apk is None:
+            raise ValueError("ビルドフェーズが完了していません")
+
+        output_path = self._config.output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Zipalign
+        zipaligner = DefaultZipalignRunner()
+        aligned_apk = output_path.with_suffix(".aligned.apk")
+        zipaligner.align(self._unsigned_apk, aligned_apk)
+
+        if self._config.keystore_path:
+            # 署名付きAPK
+            from mnemonic.signer.apk import DefaultPasswordProvider
+
+            password_provider = DefaultPasswordProvider()
+            password = password_provider.get_password_from_env() or password_provider.get_password()
+
+            keystore_config = KeystoreConfig(
+                keystore_path=self._config.keystore_path,
+                key_alias="key",
+                keystore_password=password,
+            )
+
+            signer = DefaultApkSignerRunner()
+            shutil.copy2(aligned_apk, output_path)
+            signer.sign(output_path, keystore_config)
+            aligned_apk.unlink()
+        else:
+            # 署名なし（デバッグ用）
+            shutil.move(str(aligned_apk), str(output_path))
+
+    def _sanitize_name(self, name: str) -> str:
+        """パッケージ名に使用できる形式に変換
+
+        Args:
+            name: 変換対象の名前
+
+        Returns:
+            パッケージ名として使用可能な文字列
+        """
+        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+        if sanitized and sanitized[0].isdigit():
+            sanitized = "_" + sanitized
+        return sanitized.lower()
+
+    def _cleanup_temp_dirs(self) -> None:
+        """一時ディレクトリをクリーンアップする"""
+        for temp_dir in self._temp_dirs:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        self._temp_dirs.clear()
 
     def validate(self) -> list[str]:
         """設定を検証し、エラーメッセージのリストを返す

@@ -1,13 +1,16 @@
 """CLIエントリポイントのテスト"""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
 from mnemonic.cli import app
+from mnemonic.pipeline import PipelineResult
 
 runner = CliRunner()
+
 
 class TestMainCommand:
     """メインコマンドのテスト"""
@@ -23,6 +26,7 @@ class TestMainCommand:
         result = runner.invoke(app, args)
         assert result.exit_code == 0
         assert expected_in_output in result.stdout
+
 
 class TestBuildCommand:
     """buildコマンドのテスト"""
@@ -48,23 +52,42 @@ class TestBuildCommand:
         assert result.exit_code == 1
 
     def test_build_success(self, tmp_path: Path) -> None:
-        """有効な入力ファイルでビルド成功"""
+        """有効な入力ファイルでビルド成功（モック使用）"""
         input_file = tmp_path / "game.exe"
         input_file.write_bytes(b"\x00" * 100)
         output_file = tmp_path / "output.apk"
 
-        result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file)])
-        assert result.exit_code == 0
-        assert "ビルド完了" in result.stdout
+        mock_result = PipelineResult(
+            success=True,
+            output_path=output_file,
+        )
+        with patch("mnemonic.cli.BuildPipeline") as mock_pipeline_cls:
+            mock_pipeline = mock_pipeline_cls.return_value
+            mock_pipeline.validate.return_value = []
+            mock_pipeline.run.return_value = mock_result
+
+            result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file)])
+            assert result.exit_code == 0
+            assert "ビルド完了" in result.stdout
 
     def test_build_with_verbose(self, tmp_path: Path) -> None:
-        """--verboseオプションでビルド実行"""
+        """--verboseオプションでビルド実行（モック使用）"""
         input_file = tmp_path / "game.exe"
         input_file.write_bytes(b"\x00" * 100)
         output_file = tmp_path / "output.apk"
 
-        result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file), "-v"])
-        assert result.exit_code == 0
+        mock_result = PipelineResult(
+            success=True,
+            output_path=output_file,
+        )
+        with patch("mnemonic.cli.BuildPipeline") as mock_pipeline_cls:
+            mock_pipeline = mock_pipeline_cls.return_value
+            mock_pipeline.validate.return_value = []
+            mock_pipeline.run.return_value = mock_result
+
+            result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file), "-v"])
+            assert result.exit_code == 0
+
 
 class TestDoctorCommand:
     """doctorコマンドのテスト"""
@@ -85,6 +108,7 @@ class TestDoctorCommand:
         result = runner.invoke(app, ["doctor"])
         assert "Python" in result.stdout
 
+
 class TestInfoCommand:
     """infoコマンドのテスト"""
 
@@ -92,6 +116,7 @@ class TestInfoCommand:
         """infoコマンドのヘルプが表示される"""
         result = runner.invoke(app, ["info", "--help"])
         assert result.exit_code == 0
+
 
 class TestCacheCommand:
     """cacheコマンドのテスト"""
