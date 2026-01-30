@@ -1,7 +1,7 @@
 """APK署名関連の機能
 
 このモジュールはAPKファイルの署名に関連する機能を提供します。
-zipalignによるアラインメント最適化のインターフェースを定義します。
+zipalignによるアラインメント最適化とapksignerによる署名のインターフェースを定義します。
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -183,3 +184,83 @@ class DefaultZipalignRunner:
             return result.returncode == 0
         except subprocess.SubprocessError as e:
             raise ZipalignError(f"zipalign verification failed: {e}") from e
+
+class ApkSignerError(Exception):
+    """apksigner実行に関する基本例外クラス
+
+    apksignerコマンドの実行時に発生するエラーを表します。
+    署名処理の失敗、検証エラー、コマンド不在などを含みます。
+    """
+
+    pass
+
+@dataclass(frozen=True)
+class KeystoreConfig:
+    """キーストア設定を表す不変データクラス
+
+    APK署名に必要なキーストアの設定情報を保持します。
+    すべてのフィールドは不変であり、設定後の変更はできません。
+
+    Attributes:
+        keystore_path: キーストアファイルのパス
+        key_alias: キーのエイリアス名
+        keystore_password: キーストアのパスワード
+        key_password: キーのパスワード（省略時はkeystore_passwordを使用）
+    """
+
+    keystore_path: Path
+    key_alias: str
+    keystore_password: str
+    key_password: str | None = None
+
+class ApkSignerRunner(Protocol):
+    """apksignerコマンドを実行するためのインターフェース
+
+    APKファイルの署名と検証を行うapksignerコマンドの
+    実行機能を抽象化したProtocolです。
+    """
+
+    def sign(self, apk_path: Path, keystore_config: KeystoreConfig) -> Path:
+        """APKファイルに署名を適用する
+
+        指定されたAPKファイルに対してapksignerを実行し、
+        キーストア設定を使用して署名を適用します。
+
+        Args:
+            apk_path: 署名対象のAPKファイルのパス
+            keystore_config: キーストア設定
+
+        Returns:
+            署名されたAPKファイルのパス
+
+        Raises:
+            ApkSignerError: 署名処理に失敗した場合
+        """
+        ...
+
+    def verify(self, apk_path: Path) -> bool:
+        """APKファイルの署名を検証する
+
+        指定されたAPKファイルの署名が有効かどうかを検証します。
+
+        Args:
+            apk_path: 検証対象のAPKファイルのパス
+
+        Returns:
+            署名が有効な場合はTrue、無効な場合はFalse
+
+        Raises:
+            ApkSignerError: 検証処理に失敗した場合
+        """
+        ...
+
+    def find_apksigner(self) -> Path | None:
+        """apksignerコマンドのパスを検索する
+
+        Android SDKからapksignerコマンドを検索します。
+        ANDROID_HOME環境変数やシステムPATHを参照して検索を行います。
+
+        Returns:
+            apksignerコマンドのパス。見つからない場合はNone。
+        """
+        ...
