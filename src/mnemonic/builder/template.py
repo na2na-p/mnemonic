@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -54,6 +57,7 @@ class TemplateCache:
     """
 
     DEFAULT_REFRESH_DAYS = 7  # デフォルトのキャッシュ有効期間（日）
+    METADATA_FILENAME = "metadata.json"
 
     def __init__(
         self,
@@ -69,6 +73,52 @@ class TemplateCache:
         self._cache_manager = cache_manager
         self._refresh_days = refresh_days
 
+    def _get_metadata_path(self, version: str) -> Path:
+        """メタデータファイルのパスを取得する"""
+        cache_path = self._cache_manager.get_template_cache_path(version)
+        return cache_path / self.METADATA_FILENAME
+
+    def _read_metadata(self, version: str) -> dict[str, Any] | None:
+        """メタデータファイルを読み込む"""
+        metadata_path = self._get_metadata_path(version)
+        if not metadata_path.exists():
+            return None
+        try:
+            with open(metadata_path, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _write_metadata(self, version: str, metadata: dict[str, Any]) -> None:
+        """メタデータファイルを書き込む"""
+        metadata_path = self._get_metadata_path(version)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+
+    def _find_template_file(self, cache_path: Path) -> Path | None:
+        """キャッシュディレクトリからテンプレートファイルを検索する"""
+        if not cache_path.exists():
+            return None
+        for file in cache_path.iterdir():
+            if file.is_file() and file.suffix == ".zip":
+                return file
+        return None
+
+    def _get_all_cached_versions(self) -> list[str]:
+        """キャッシュされているすべてのバージョンを取得する"""
+        cache_dir = self._cache_manager.get_cache_dir() / "templates"
+        if not cache_dir.exists():
+            return []
+
+        versions = []
+        for version_dir in cache_dir.iterdir():
+            if version_dir.is_dir():
+                metadata = self._read_metadata(version_dir.name)
+                if metadata:
+                    versions.append(version_dir.name)
+        return versions
+
     def get_cached_template(self, version: str | None = None) -> Path | None:
         """キャッシュ済みテンプレートを取得する
 
@@ -83,7 +133,20 @@ class TemplateCache:
         Raises:
             TemplateCacheError: キャッシュ操作中にエラーが発生した場合
         """
-        raise NotImplementedError
+        try:
+            target_version = version
+            if target_version is None:
+                target_version = self.get_cached_version()
+                if target_version is None:
+                    return None
+
+            if not self.is_cache_valid(target_version):
+                return None
+
+            cache_path = self._cache_manager.get_template_cache_path(target_version)
+            return self._find_template_file(cache_path)
+        except OSError as e:
+            raise TemplateCacheError(f"Failed to get cached template: {e}") from e
 
     def is_cache_valid(self, version: str | None = None) -> bool:
         """キャッシュが有効かどうかを確認する
@@ -96,7 +159,26 @@ class TemplateCache:
             キャッシュが存在し、有効期限内であればTrue。
             それ以外はFalse。
         """
-        raise NotImplementedError
+        target_version = version
+        if target_version is None:
+            target_version = self.get_cached_version()
+            if target_version is None:
+                return False
+
+        metadata = self._read_metadata(target_version)
+        if metadata is None:
+            return False
+
+        expires_at_str = metadata.get("expires_at")
+        if not expires_at_str:
+            return False
+
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            now = datetime.now(UTC)
+            return now < expires_at
+        except (ValueError, TypeError):
+            return False
 
     def get_cached_version(self) -> str | None:
         """キャッシュされているバージョンを取得する
@@ -105,7 +187,30 @@ class TemplateCache:
             キャッシュされているテンプレートのバージョン。
             キャッシュが存在しない場合はNone。
         """
-        raise NotImplementedError
+        versions = self._get_all_cached_versions()
+        if not versions:
+            return None
+
+        # 最新のダウンロード日時を持つバージョンを返す
+        latest_version = None
+        latest_time: datetime | None = None
+
+        for version in versions:
+            metadata = self._read_metadata(version)
+            if metadata:
+                downloaded_at_str = metadata.get("downloaded_at")
+                if downloaded_at_str:
+                    try:
+                        downloaded_at = datetime.fromisoformat(
+                            downloaded_at_str.replace("Z", "+00:00")
+                        )
+                        if latest_time is None or downloaded_at > latest_time:
+                            latest_time = downloaded_at
+                            latest_version = version
+                    except (ValueError, TypeError):
+                        continue
+
+        return latest_version
 
     def save_template(self, template_path: Path, version: str) -> Path:
         """テンプレートをキャッシュに保存する
@@ -121,7 +226,29 @@ class TemplateCache:
             TemplateCacheError: 保存中にエラーが発生した場合
             FileNotFoundError: 指定されたテンプレートファイルが存在しない場合
         """
-        raise NotImplementedError
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+
+        try:
+            cache_path = self._cache_manager.get_template_cache_path(version)
+            cache_path.mkdir(parents=True, exist_ok=True)
+
+            destination = cache_path / template_path.name
+            shutil.copy2(template_path, destination)
+
+            now = datetime.now(UTC)
+            expires_at = now + timedelta(days=self._refresh_days)
+
+            metadata = {
+                "version": version,
+                "downloaded_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            self._write_metadata(version, metadata)
+
+            return destination
+        except OSError as e:
+            raise TemplateCacheError(f"Failed to save template: {e}") from e
 
     def clear_cache(self) -> None:
         """テンプレートキャッシュをクリアする
@@ -129,7 +256,10 @@ class TemplateCache:
         Raises:
             TemplateCacheError: クリア操作中にエラーが発生した場合
         """
-        raise NotImplementedError
+        try:
+            self._cache_manager.clear_cache(template_only=True)
+        except OSError as e:
+            raise TemplateCacheError(f"Failed to clear cache: {e}") from e
 
 # GitHub APIとダウンロードURL構築に使用する定数
 GITHUB_API_BASE = "https://api.github.com/repos/krkrz/krkrsdl2"
