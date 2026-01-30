@@ -3,6 +3,7 @@
 TLG画像形式のデコードおよび変換機能を提供する。
 吉里吉里2エンジンで使用されるTLG5/TLG6形式の画像を
 標準的な画像形式（PNG等）に変換する。
+また、BMP/JPG/PNG形式からWebP形式への変換機能も提供する。
 """
 
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from enum import Enum
 from pathlib import Path
 
 from PIL import Image
+
+from mnemonic.converter.base import BaseConverter, ConversionResult
 
 class TLGVersion(Enum):
     """TLG画像のバージョン
@@ -21,6 +24,17 @@ class TLGVersion(Enum):
     TLG5 = "TLG5"
     TLG6 = "TLG6"
     UNKNOWN = "UNKNOWN"
+
+class QualityPreset(Enum):
+    """WebP変換時の品質プリセット
+
+    画像変換時のWebP品質値を定義する列挙型。
+    HIGH/MEDIUM/LOWの3段階の品質レベルを提供する。
+    """
+
+    HIGH = 95
+    MEDIUM = 85
+    LOW = 70
 
 @dataclass(frozen=True)
 class TLGInfo:
@@ -112,5 +126,96 @@ class TLGImageDecoder:
         Raises:
             ValueError: TLG形式でないファイルの場合
             FileNotFoundError: ファイルが存在しない場合
+        """
+        raise NotImplementedError
+
+class ImageConverter(BaseConverter):
+    """画像変換クラス
+
+    BMP/JPG/PNG/TLG形式の画像をWebP形式に変換する。
+    品質設定やアルファチャンネルの取り扱いをカスタマイズ可能。
+
+    Attributes:
+        quality: WebP出力時の品質値（0-100）
+        lossless_alpha: アルファチャンネルをロスレスで保存するか
+    """
+
+    def __init__(
+        self,
+        quality: QualityPreset | int = QualityPreset.HIGH,
+        lossless_alpha: bool = True,
+    ) -> None:
+        """ImageConverterを初期化する
+
+        Args:
+            quality: WebP品質（プリセットまたは0-100の整数）
+            lossless_alpha: アルファチャンネルをロスレスで保存するか
+        """
+        if isinstance(quality, QualityPreset):
+            self._quality = quality.value
+        else:
+            self._quality = quality
+        self._lossless_alpha = lossless_alpha
+        self._tlg_decoder = TLGImageDecoder()
+
+    @property
+    def quality(self) -> int:
+        """WebP品質値を返す"""
+        return self._quality
+
+    @property
+    def lossless_alpha(self) -> bool:
+        """ロスレスアルファ設定を返す"""
+        return self._lossless_alpha
+
+    @property
+    def supported_extensions(self) -> tuple[str, ...]:
+        """対応する拡張子のタプルを返す
+
+        Returns:
+            対応する拡張子のタプル（.tlg, .bmp, .jpg, .jpeg, .png）
+        """
+        return (".tlg", ".bmp", ".jpg", ".jpeg", ".png")
+
+    def can_convert(self, file_path: Path) -> bool:
+        """このConverterで変換可能なファイルかを判定する
+
+        ファイル拡張子に基づいて判定を行う。
+
+        Args:
+            file_path: 判定対象のファイルパス
+
+        Returns:
+            変換可能な場合True、そうでない場合False
+        """
+        raise NotImplementedError
+
+    def convert(self, source: Path, dest: Path) -> ConversionResult:
+        """画像ファイルをWebP形式に変換する
+
+        BMP/JPG/PNG/TLG形式の画像をWebP形式に変換し、
+        指定されたパスに出力する。
+
+        Args:
+            source: 変換元ファイルのパス
+            dest: 変換先ファイルのパス
+
+        Returns:
+            変換結果を表すConversionResultオブジェクト
+        """
+        raise NotImplementedError
+
+    def convert_from_image(self, image: Image.Image, dest: Path) -> ConversionResult:
+        """PIL.ImageオブジェクトをWebP形式で保存する
+
+        既にメモリ上にある画像オブジェクトを直接WebP形式で保存する。
+        TLGデコード後の画像変換等に使用。
+
+        Args:
+            image: 変換元のPIL.Imageオブジェクト
+            dest: 変換先ファイルのパス
+
+        Returns:
+            変換結果を表すConversionResultオブジェクト
         """
         raise NotImplementedError
