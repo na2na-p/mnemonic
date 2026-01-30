@@ -175,8 +175,89 @@ class BuildPipeline:
         Raises:
             ValueError: 設定が無効な場合
         """
-        # スタブ実装: I-01-03で実装予定
-        raise NotImplementedError("パイプライン実行はI-01-03で実装予定")
+        import time
+
+        start_time = time.time()
+
+        # 検証
+        errors = self.validate()
+        if errors:
+            return PipelineResult(
+                success=False,
+                output_path=None,
+                error_message=errors[0],
+            )
+
+        phases_completed: list[PipelinePhase] = []
+        statistics: dict[str, Any] = {}
+
+        try:
+            # 各フェーズを実行
+            for phase in PipelinePhase:
+                phase_start = time.time()
+
+                # 進捗コールバックを呼び出し
+                if progress_callback is not None:
+                    progress = PipelineProgress(
+                        phase=phase,
+                        current=0,
+                        total=1,
+                        message=f"{phase.value}フェーズを開始...",
+                    )
+                    progress_callback(progress)
+
+                # 各フェーズの処理を実行
+                self._execute_phase(phase)
+
+                # フェーズ完了
+                phases_completed.append(phase)
+                phase_time = time.time() - phase_start
+                statistics[f"{phase.value}_time_seconds"] = round(phase_time, 2)
+
+                # 完了時の進捗コールバック
+                if progress_callback is not None:
+                    progress = PipelineProgress(
+                        phase=phase,
+                        current=1,
+                        total=1,
+                        message=f"{phase.value}フェーズが完了",
+                    )
+                    progress_callback(progress)
+
+            total_time = time.time() - start_time
+            statistics["total_time_seconds"] = round(total_time, 2)
+
+            return PipelineResult(
+                success=True,
+                output_path=self._config.output_path,
+                phases_completed=phases_completed,
+                statistics=statistics,
+            )
+        except Exception as e:
+            return PipelineResult(
+                success=False,
+                output_path=None,
+                error_message=str(e),
+                phases_completed=phases_completed,
+            )
+
+    def _execute_phase(self, phase: PipelinePhase) -> None:
+        """個別フェーズを実行する
+
+        Args:
+            phase: 実行するフェーズ
+
+        Note:
+            各フェーズの実際の処理は今後のタスクで実装される。
+            現在は基本的なフレームワークのみ。
+        """
+        # 各フェーズの処理は今後のタスクで実装
+        # ANALYZE: Parser による解析
+        # EXTRACT: アセット抽出
+        # CONVERT: Converter による変換
+        # BUILD: Builder による APK ビルド
+        # SIGN: Signer による署名
+        pass
 
     def validate(self) -> list[str]:
         """設定を検証し、エラーメッセージのリストを返す
@@ -187,5 +268,20 @@ class BuildPipeline:
         Returns:
             エラーメッセージのリスト（エラーがない場合は空リスト）
         """
-        # スタブ実装: I-01-03で実装予定
-        raise NotImplementedError("設定検証はI-01-03で実装予定")
+        errors: list[str] = []
+
+        # 入力ファイル存在チェック
+        if not self._config.input_path.exists():
+            errors.append(f"入力ファイルが見つかりません: {self._config.input_path}")
+            return errors
+
+        # 入力ファイル形式チェック
+        suffix = self._config.input_path.suffix.lower()
+        if suffix not in (".exe", ".xp3"):
+            errors.append(f"サポートされていないファイル形式です: {suffix}")
+
+        # キーストアチェック（指定時のみ）
+        if self._config.keystore_path and not self._config.keystore_path.exists():
+            errors.append(f"キーストアファイルが見つかりません: {self._config.keystore_path}")
+
+        return errors

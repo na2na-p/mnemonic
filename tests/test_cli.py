@@ -1,5 +1,7 @@
 """CLIエントリポイントのテスト"""
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -30,6 +32,39 @@ class TestBuildCommand:
         result = runner.invoke(app, ["build", "--help"])
         assert result.exit_code == 0
         assert "ビルド" in result.stdout or "build" in result.stdout.lower()
+
+    def test_build_missing_input(self, tmp_path: Path) -> None:
+        """存在しない入力ファイルでエラー終了"""
+        nonexistent = tmp_path / "nonexistent.exe"
+        result = runner.invoke(app, ["build", str(nonexistent)])
+        assert result.exit_code == 1
+        assert "Error" in result.stdout or "エラー" in result.stdout
+
+    def test_build_invalid_input_type(self, tmp_path: Path) -> None:
+        """無効なファイル形式でエラー終了"""
+        invalid_file = tmp_path / "invalid.txt"
+        invalid_file.write_text("invalid content")
+        result = runner.invoke(app, ["build", str(invalid_file)])
+        assert result.exit_code == 1
+
+    def test_build_success(self, tmp_path: Path) -> None:
+        """有効な入力ファイルでビルド成功"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+        output_file = tmp_path / "output.apk"
+
+        result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file)])
+        assert result.exit_code == 0
+        assert "ビルド完了" in result.stdout
+
+    def test_build_with_verbose(self, tmp_path: Path) -> None:
+        """--verboseオプションでビルド実行"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+        output_file = tmp_path / "output.apk"
+
+        result = runner.invoke(app, ["build", str(input_file), "-o", str(output_file), "-v"])
+        assert result.exit_code == 0
 
 class TestDoctorCommand:
     """doctorコマンドのテスト"""

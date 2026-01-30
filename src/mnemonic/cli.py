@@ -12,6 +12,7 @@ from mnemonic import __version__
 from mnemonic.cache import clear_cache, get_cache_info
 from mnemonic.doctor import check_all_dependencies
 from mnemonic.info import analyze_game
+from mnemonic.pipeline import BuildPipeline, PipelineConfig, PipelineProgress
 
 app = typer.Typer(help="吉里吉里ゲームをAndroid APKに変換するCLIツール")
 console = Console()
@@ -29,11 +30,71 @@ def _format_size(size_bytes: int) -> str:
 
 @app.command()
 def build(
-    input_path: Annotated[str, typer.Argument(help="入力ファイル（exe/xp3）")],
-    output: Annotated[str | None, typer.Option("-o", "--output", help="出力APKパス")] = None,
+    input_path: Annotated[Path, typer.Argument(help="入力ファイルパス（exe/xp3）")],
+    output: Annotated[Path | None, typer.Option("-o", "--output", help="出力APKパス")] = None,
+    package_name: Annotated[str, typer.Option(help="Androidパッケージ名")] = "",
+    app_name: Annotated[str, typer.Option(help="アプリ表示名")] = "",
+    keystore: Annotated[Path | None, typer.Option(help="署名用キーストア")] = None,
+    skip_video: Annotated[bool, typer.Option(help="動画変換をスキップ")] = False,
+    verbose: Annotated[int, typer.Option("-v", "--verbose", count=True, help="詳細ログ出力")] = 0,
+    quality: Annotated[str, typer.Option(help="画像品質プリセット")] = "high",
+    clean: Annotated[bool, typer.Option(help="キャッシュをクリア")] = False,
+    log_file: Annotated[Path | None, typer.Option(help="ログファイル出力先")] = None,
+    ffmpeg_timeout: Annotated[int, typer.Option(help="FFmpegタイムアウト（秒）")] = 300,
+    gradle_timeout: Annotated[int, typer.Option(help="Gradleタイムアウト（秒）")] = 1800,
+    template_version: Annotated[str | None, typer.Option(help="テンプレートバージョン固定")] = None,
+    template_refresh_days: Annotated[
+        int, typer.Option(help="テンプレートキャッシュ期限（日）")
+    ] = 7,
+    template_offline: Annotated[bool, typer.Option(help="オフラインモード")] = False,
 ) -> None:
-    """ゲームをAPKにビルドする"""
-    raise typer.Exit(0)
+    """ゲームをAndroid APKにビルドする"""
+    if output is None:
+        output = Path(input_path).with_suffix(".apk")
+
+    config = PipelineConfig(
+        input_path=Path(input_path),
+        output_path=output,
+        package_name=package_name,
+        app_name=app_name,
+        keystore_path=keystore,
+        skip_video=skip_video,
+        quality=quality,
+        clean_cache=clean,
+        verbose_level=verbose,
+        log_file=log_file,
+        ffmpeg_timeout=ffmpeg_timeout,
+        gradle_timeout=gradle_timeout,
+        template_version=template_version,
+        template_refresh_days=template_refresh_days,
+        template_offline=template_offline,
+    )
+
+    pipeline = BuildPipeline(config)
+
+    # 検証
+    errors = pipeline.validate()
+    if errors:
+        for error in errors:
+            console.print(f"[red]Error: {error}[/red]")
+        raise typer.Exit(1)
+
+    # 進捗コールバック
+    def progress_callback(progress: PipelineProgress) -> None:
+        if verbose > 0:
+            console.print(
+                f"[blue]{progress.phase.value}[/blue]: {progress.message} "
+                f"({progress.current}/{progress.total})"
+            )
+
+    result = pipeline.run(progress_callback=progress_callback if verbose > 0 else None)
+
+    if result.success:
+        console.print(f"[green]ビルド完了: {result.output_path}[/green]")
+        raise typer.Exit(0)
+    else:
+        console.print(f"[red]ビルド失敗: {result.error_message}[/red]")
+        raise typer.Exit(1)
 
 @app.command()
 def doctor() -> None:

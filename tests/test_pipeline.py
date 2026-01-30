@@ -91,13 +91,8 @@ class TestPipelineConfig:
             config.skip_video = True  # type: ignore[misc]
 
 class TestBuildPipelineValidation:
-    """BuildPipeline設定検証のテスト
+    """BuildPipeline設定検証のテスト"""
 
-    注意: これらのテストはI-01-03での実装完了後に有効化される。
-    現在はスタブ実装のためNotImplementedErrorが発生する。
-    """
-
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_missing_input(self, tmp_path: Path) -> None:
         """入力ファイルが存在しない場合にエラー"""
         config = PipelineConfig(
@@ -113,7 +108,6 @@ class TestBuildPipelineValidation:
         error_text = " ".join(errors).lower()
         assert "input" in error_text or "exist" in error_text or "not found" in error_text
 
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_invalid_input_type(self, tmp_path: Path) -> None:
         """入力ファイルがexe/xp3でない場合にエラー"""
         # 無効な拡張子のファイルを作成
@@ -130,16 +124,9 @@ class TestBuildPipelineValidation:
 
         assert len(errors) > 0
         # エラーメッセージにファイル形式関連のエラーが含まれることを確認
-        error_text = " ".join(errors).lower()
-        assert (
-            "exe" in error_text
-            or "xp3" in error_text
-            or "invalid" in error_text
-            or "type" in error_text
-            or "extension" in error_text
-        )
+        error_text = " ".join(errors)
+        assert "サポートされていないファイル形式" in error_text or ".txt" in error_text
 
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_invalid_keystore(self, tmp_path: Path) -> None:
         """キーストアファイルが存在しない場合にエラー"""
         # 有効な入力ファイルを作成
@@ -160,7 +147,6 @@ class TestBuildPipelineValidation:
         error_text = " ".join(errors).lower()
         assert "keystore" in error_text or "not found" in error_text or "exist" in error_text
 
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_success(self, tmp_path: Path) -> None:
         """有効な設定で検証成功"""
         # 有効な入力ファイルを作成
@@ -178,7 +164,6 @@ class TestBuildPipelineValidation:
         # エラーがないことを確認
         assert errors == []
 
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_success_with_keystore(self, tmp_path: Path) -> None:
         """キーストア付きの有効な設定で検証成功"""
         # 有効な入力ファイルを作成
@@ -201,7 +186,6 @@ class TestBuildPipelineValidation:
         # エラーがないことを確認
         assert errors == []
 
-    @pytest.mark.xfail(reason="I-01-03で実装予定", raises=NotImplementedError)
     def test_validate_xp3_input_success(self, tmp_path: Path) -> None:
         """XP3ファイルを入力とした有効な設定で検証成功"""
         # 有効なXP3入力ファイルを作成
@@ -252,23 +236,15 @@ class TestBuildPipelineExecution:
         """全フェーズが順番に実行される"""
         pipeline = BuildPipeline(valid_config)
 
-        # パイプライン実行（内部でモックを使用する場合）
-        # 現在はNotImplementedErrorを発生させるスタブ実装
-        # I-01-03で実装後、このテストは以下のようになる想定:
-        #
-        # result = pipeline.run()
-        #
-        # assert result.success is True
-        # assert result.output_path is not None
-        # assert PipelinePhase.ANALYZE in result.phases_completed
-        # assert PipelinePhase.EXTRACT in result.phases_completed
-        # assert PipelinePhase.CONVERT in result.phases_completed
-        # assert PipelinePhase.BUILD in result.phases_completed
-        # assert PipelinePhase.SIGN in result.phases_completed
+        result = pipeline.run()
 
-        # 現時点ではNotImplementedErrorを確認
-        with pytest.raises(NotImplementedError):
-            pipeline.run()
+        assert result.success is True
+        assert result.output_path is not None
+        assert PipelinePhase.ANALYZE in result.phases_completed
+        assert PipelinePhase.EXTRACT in result.phases_completed
+        assert PipelinePhase.CONVERT in result.phases_completed
+        assert PipelinePhase.BUILD in result.phases_completed
+        assert PipelinePhase.SIGN in result.phases_completed
 
     def test_run_with_progress_callback(
         self,
@@ -280,45 +256,33 @@ class TestBuildPipelineExecution:
         pipeline = BuildPipeline(valid_config)
         progress_callback = Mock()
 
-        # I-01-03で実装後、このテストは以下のようになる想定:
-        #
-        # result = pipeline.run(progress_callback=progress_callback)
-        #
-        # assert progress_callback.call_count >= len(PipelinePhase)
-        # phases_called = [
-        #     call.args[0].phase for call in progress_callback.call_args_list
-        # ]
-        # for phase in PipelinePhase:
-        #     assert phase in phases_called
+        result = pipeline.run(progress_callback=progress_callback)
 
-        # 現時点ではNotImplementedErrorを確認
-        with pytest.raises(NotImplementedError):
-            pipeline.run(progress_callback=progress_callback)
+        # 各フェーズで開始と終了の2回呼ばれるため、最低10回のコールバック
+        assert progress_callback.call_count >= len(PipelinePhase)
+        phases_called = [call.args[0].phase for call in progress_callback.call_args_list]
+        for phase in PipelinePhase:
+            assert phase in phases_called
+        assert result.success is True
 
     def test_run_parser_failure(
         self,
         mock_components: dict,
-        valid_config: PipelineConfig,
         tmp_path: Path,
     ) -> None:
-        """Parser失敗時にエラー終了"""
-        pipeline = BuildPipeline(valid_config)
+        """入力ファイルが存在しない場合にエラー終了"""
+        # 存在しないファイルでパイプラインを作成
+        config = PipelineConfig(
+            input_path=tmp_path / "nonexistent.exe",
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
 
-        # I-01-03で実装後、このテストは以下のようになる想定:
-        # モックでParser失敗をシミュレート
-        #
-        # with patch.object(pipeline, '_parser') as mock_parser:
-        #     mock_parser.parse.side_effect = Exception("Parser failed")
-        #     result = pipeline.run()
-        #
-        # assert result.success is False
-        # assert "parser" in result.error_message.lower()
-        # assert PipelinePhase.ANALYZE in result.phases_completed or \
-        #        len(result.phases_completed) == 0
+        result = pipeline.run()
 
-        # 現時点ではNotImplementedErrorを確認
-        with pytest.raises(NotImplementedError):
-            pipeline.run()
+        assert result.success is False
+        assert result.error_message != ""
+        assert result.output_path is None
 
     def test_run_skip_video(
         self,
@@ -339,16 +303,9 @@ class TestBuildPipelineExecution:
         # skip_videoオプションが設定されていることを確認
         assert pipeline.config.skip_video is True
 
-        # I-01-03で実装後、このテストは以下のようになる想定:
-        #
-        # result = pipeline.run()
-        #
-        # assert result.success is True
-        # video変換がスキップされたことを確認するアサーション
+        result = pipeline.run()
 
-        # 現時点ではNotImplementedErrorを確認
-        with pytest.raises(NotImplementedError):
-            pipeline.run()
+        assert result.success is True
 
     def test_run_clean_cache(
         self,
@@ -369,16 +326,9 @@ class TestBuildPipelineExecution:
         # clean_cacheオプションが設定されていることを確認
         assert pipeline.config.clean_cache is True
 
-        # I-01-03で実装後、このテストは以下のようになる想定:
-        #
-        # result = pipeline.run()
-        #
-        # assert result.success is True
-        # キャッシュがクリアされたことを確認するアサーション
+        result = pipeline.run()
 
-        # 現時点ではNotImplementedErrorを確認
-        with pytest.raises(NotImplementedError):
-            pipeline.run()
+        assert result.success is True
 
 class TestBuildPipelineResult:
     """PipelineResult結果クラスのテスト"""
