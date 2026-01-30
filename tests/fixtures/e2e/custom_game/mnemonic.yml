@@ -1,0 +1,6 @@
+package_name: com.test.custom
+app_name: Custom Game
+image:
+  quality: low
+encoding:
+  source: shift_jis
