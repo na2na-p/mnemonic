@@ -1,6 +1,10 @@
 """Builder module for Mnemonic."""
 
 from mnemonic.builder.template import (
+    AssetConfig,
+    AssetPlacementError,
+    AssetPlacementResult,
+    AssetPlacer,
     InvalidTemplateError,
     NetworkError,
     ProjectConfig,
@@ -15,6 +19,10 @@ from mnemonic.builder.template import (
 )
 
 __all__ = [
+    "AssetConfig",
+    "AssetPlacementError",
+    "AssetPlacementResult",
+    "AssetPlacer",
     "InvalidTemplateError",
     "NetworkError",
     "ProjectConfig",
