@@ -2,7 +2,8 @@
 
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from threading import Lock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -289,24 +290,28 @@ class TestConversionManagerConvertFiles:
             dest = tmp_path / f"dest_{i}.txt"
             files.append((source, dest))
 
-        execution_times: list[float] = []
+        execution_start_times: list[float] = []
+        lock = Lock()
 
         class TimingConverter(MockConverter):
             def convert(self, source: Path, dest: Path) -> ConversionResult:
-                execution_times.append(time.time())
-                time.sleep(0.1)
+                with lock:
+                    execution_start_times.append(time.time())
+                time.sleep(0.05)
                 return super().convert(source, dest)
 
         converter = TimingConverter(extensions=(".txt",))
         manager = ConversionManager(converters=[converter], max_workers=4)
 
-        start_time = time.time()
         summary = manager.convert_files(files)
-        elapsed_time = time.time() - start_time
 
         assert summary.success == 4
-        # 4ファイル並列実行なら0.4秒より短いはず（直列なら0.4秒以上）
-        assert elapsed_time < 0.3
+        # 並列実行なら、開始時刻がほぼ同時（0.1秒以内）になるはず
+        if len(execution_start_times) >= 2:
+            time_spread = max(execution_start_times) - min(execution_start_times)
+            # 直列実行なら各タスク0.05秒かかるので、4タスクで少なくとも0.15秒以上の開きがある
+            # 並列実行なら開始時刻がほぼ同時（0.1秒以内）
+            assert time_spread < 0.15
 
     def test_convert_files_with_unsupported_file(self, tmp_path: Path) -> None:
         """正常系: サポートされていないファイルはスキップされる"""
@@ -555,26 +560,24 @@ class TestCalculateWorkers:
 
     def test_auto_memory_detection(self) -> None:
         """正常系: メモリ自動検出のテスト"""
-        mock_virtual_memory = Mock()
-        mock_virtual_memory.available = 4 * 1024 * 1024 * 1024  # 4GB
-
+        # 4GB = 4096MB
         with (
-            patch("psutil.virtual_memory", return_value=mock_virtual_memory),
+            patch("mnemonic.converter.manager._get_available_memory_mb", return_value=4096),
             patch("os.cpu_count", return_value=8),
         ):
             workers = ConversionManager.calculate_workers()
-            # 4GB = 4096MB -> 4096 // 500 = 8, min(8, 8) = 8
+            # 4096 // 500 = 8, min(8, 8) = 8
             assert workers == 8
 
     def test_fallback_without_psutil(self) -> None:
         """正常系: psutilが利用できない場合のフォールバック"""
         with (
-            patch.dict("sys.modules", {"psutil": None}),
+            patch("mnemonic.converter.manager._get_available_memory_mb", return_value=None),
             patch("os.cpu_count", return_value=4),
         ):
             # psutilがない場合はCPUコア数のみで計算
             workers = ConversionManager.calculate_workers()
-            assert workers >= 1
+            assert workers == 4
 
 class TestConversionManagerSummary:
     """ConversionManagerのサマリー生成テスト"""
