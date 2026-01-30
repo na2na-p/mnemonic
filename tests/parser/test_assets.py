@@ -1,7 +1,6 @@
 """アセットファイル一覧機能のテスト
 
-TDDワークフローのStep 2として、実装前にテストを作成する。
-テストは実装前なので NotImplementedError で失敗することを期待。
+TDDワークフローのStep 3として、実装後のテストを検証する。
 """
 
 from pathlib import Path
@@ -226,9 +225,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        # 実装前なのでNotImplementedErrorが発生することを期待
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_type(AssetType.SCRIPT)
+        result = manifest.filter_by_type(AssetType.SCRIPT)
+
+        assert len(result) == 2
+        assert all(f.asset_type == AssetType.SCRIPT for f in result)
 
     def test_filter_by_type_image(self, sample_files: list[AssetFile]) -> None:
         """filter_by_type()で画像ファイルがフィルタされる"""
@@ -237,8 +237,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_type(AssetType.IMAGE)
+        result = manifest.filter_by_type(AssetType.IMAGE)
+
+        assert len(result) == 2
+        assert all(f.asset_type == AssetType.IMAGE for f in result)
 
     def test_filter_by_type_audio(self, sample_files: list[AssetFile]) -> None:
         """filter_by_type()で音声ファイルがフィルタされる"""
@@ -247,8 +249,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_type(AssetType.AUDIO)
+        result = manifest.filter_by_type(AssetType.AUDIO)
+
+        assert len(result) == 2
+        assert all(f.asset_type == AssetType.AUDIO for f in result)
 
     def test_filter_by_type_video(self, sample_files: list[AssetFile]) -> None:
         """filter_by_type()で動画ファイルがフィルタされる"""
@@ -257,8 +261,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_type(AssetType.VIDEO)
+        result = manifest.filter_by_type(AssetType.VIDEO)
+
+        assert len(result) == 1
+        assert all(f.asset_type == AssetType.VIDEO for f in result)
 
     def test_filter_by_type_other(self, sample_files: list[AssetFile]) -> None:
         """filter_by_type()でその他ファイルがフィルタされる"""
@@ -267,8 +273,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_type(AssetType.OTHER)
+        result = manifest.filter_by_type(AssetType.OTHER)
+
+        assert len(result) == 1
+        assert all(f.asset_type == AssetType.OTHER for f in result)
 
     def test_filter_by_action_encode_utf8(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でENCODE_UTF8アクションがフィルタされる"""
@@ -277,8 +285,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_action(ConversionAction.ENCODE_UTF8)
+        result = manifest.filter_by_action(ConversionAction.ENCODE_UTF8)
+
+        assert len(result) == 2
+        assert all(f.action == ConversionAction.ENCODE_UTF8 for f in result)
 
     def test_filter_by_action_convert_webp(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でCONVERT_WEBPアクションがフィルタされる"""
@@ -287,8 +297,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_action(ConversionAction.CONVERT_WEBP)
+        result = manifest.filter_by_action(ConversionAction.CONVERT_WEBP)
+
+        assert len(result) == 2
+        assert all(f.action == ConversionAction.CONVERT_WEBP for f in result)
 
     def test_filter_by_action_convert_ogg(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でCONVERT_OGGアクションがフィルタされる"""
@@ -297,8 +309,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_action(ConversionAction.CONVERT_OGG)
+        result = manifest.filter_by_action(ConversionAction.CONVERT_OGG)
+
+        assert len(result) == 1
+        assert all(f.action == ConversionAction.CONVERT_OGG for f in result)
 
     def test_filter_by_action_convert_mp4(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でCONVERT_MP4アクションがフィルタされる"""
@@ -307,8 +321,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_action(ConversionAction.CONVERT_MP4)
+        result = manifest.filter_by_action(ConversionAction.CONVERT_MP4)
+
+        assert len(result) == 1
+        assert all(f.action == ConversionAction.CONVERT_MP4 for f in result)
 
     def test_filter_by_action_copy(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でCOPYアクションがフィルタされる"""
@@ -317,8 +333,10 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.filter_by_action(ConversionAction.COPY)
+        result = manifest.filter_by_action(ConversionAction.COPY)
+
+        assert len(result) == 2
+        assert all(f.action == ConversionAction.COPY for f in result)
 
     def test_get_summary(self, sample_files: list[AssetFile]) -> None:
         """get_summary()で種別ごとのファイル数が取得される"""
@@ -327,29 +345,30 @@ class TestAssetManifest:
             files=sample_files,
         )
 
-        with pytest.raises(NotImplementedError):
-            manifest.get_summary()
+        summary = manifest.get_summary()
+
+        assert summary[AssetType.SCRIPT] == 2
+        assert summary[AssetType.IMAGE] == 2
+        assert summary[AssetType.AUDIO] == 2
+        assert summary[AssetType.VIDEO] == 1
+        assert summary[AssetType.OTHER] == 1
 
 class TestAssetScanner:
     """AssetScanner クラスのテスト"""
 
-    def test_scanner_init_raises_not_implemented(self, tmp_path: Path) -> None:
-        """AssetScannerの初期化が未実装エラーを発生させる"""
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+    def test_scanner_init(self, tmp_path: Path) -> None:
+        """AssetScannerが正しく初期化される"""
+        scanner = AssetScanner(game_dir=tmp_path)
+        assert scanner is not None
 
-    def test_scanner_init_with_config_raises_not_implemented(self, tmp_path: Path) -> None:
-        """AssetScannerの設定付き初期化が未実装エラーを発生させる"""
+    def test_scanner_init_with_config(self, tmp_path: Path) -> None:
+        """AssetScannerが設定付きで正しく初期化される"""
         config = {"exclude": ["*.bak"]}
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path, config=config)
+        scanner = AssetScanner(game_dir=tmp_path, config=config)
+        assert scanner is not None
 
 class TestAssetScannerFileClassification:
-    """AssetScannerのファイル分類テスト
-
-    実装後に有効化するためのテストケース。
-    現時点ではNotImplementedErrorで失敗する。
-    """
+    """AssetScannerのファイル分類テスト"""
 
     @pytest.fixture
     def game_dir(self, tmp_path: Path) -> Path:
@@ -400,13 +419,14 @@ class TestAssetScannerFileClassification:
         expected_type: AssetType,
     ) -> None:
         """スクリプトファイルが正しく分類される"""
-        # テスト用ファイル作成
         test_file = tmp_path / f"test{extension}"
         test_file.write_text("test content", encoding="utf-8")
 
-        # スキャナ初期化時にNotImplementedErrorが発生
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].asset_type == expected_type
 
     @pytest.mark.parametrize(
         "extension,expected_type",
@@ -427,8 +447,11 @@ class TestAssetScannerFileClassification:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].asset_type == expected_type
 
     @pytest.mark.parametrize(
         "extension,expected_type",
@@ -447,8 +470,11 @@ class TestAssetScannerFileClassification:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].asset_type == expected_type
 
     @pytest.mark.parametrize(
         "extension,expected_type",
@@ -467,8 +493,11 @@ class TestAssetScannerFileClassification:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].asset_type == expected_type
 
     @pytest.mark.parametrize(
         "extension",
@@ -487,8 +516,27 @@ class TestAssetScannerFileClassification:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].asset_type == AssetType.OTHER
+
+    def test_full_game_directory_scan(self, game_dir: Path) -> None:
+        """完全なゲームディレクトリのスキャンが正しく動作する"""
+        scanner = AssetScanner(game_dir=game_dir)
+        manifest = scanner.scan()
+
+        # 合計12ファイル
+        assert len(manifest.files) == 12
+
+        # 種別ごとのファイル数確認
+        summary = manifest.get_summary()
+        assert summary[AssetType.SCRIPT] == 2
+        assert summary[AssetType.IMAGE] == 4
+        assert summary[AssetType.AUDIO] == 2
+        assert summary[AssetType.VIDEO] == 2
+        assert summary[AssetType.OTHER] == 2
 
 class TestAssetScannerConversionAction:
     """AssetScannerの変換アクション設定テスト"""
@@ -518,8 +566,11 @@ class TestAssetScannerConversionAction:
         test_file = tmp_path / f"test{extension}"
         test_file.write_text("test", encoding="utf-8")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == expected_action
 
     @pytest.mark.parametrize(
         "extension,expected_action",
@@ -551,24 +602,33 @@ class TestAssetScannerConversionAction:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == expected_action
 
     def test_wav_conversion_action(self, tmp_path: Path) -> None:
         """WAVファイルにCONVERT_OGGが設定される"""
         test_file = tmp_path / "test.wav"
         test_file.write_bytes(b"RIFF")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.CONVERT_OGG
 
     def test_ogg_copy_action(self, tmp_path: Path) -> None:
         """OGGファイルにCOPYが設定される（変換不要）"""
         test_file = tmp_path / "test.ogg"
         test_file.write_bytes(b"OggS")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.COPY
 
     @pytest.mark.parametrize(
         "extension,expected_action",
@@ -595,8 +655,11 @@ class TestAssetScannerConversionAction:
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == expected_action
 
 class TestAssetScannerErrorHandling:
     """AssetScannerの異常系テスト"""
@@ -605,30 +668,31 @@ class TestAssetScannerErrorHandling:
         """存在しないディレクトリでエラーが発生する"""
         nonexistent = Path("/nonexistent/game/directory")
 
-        # 現時点ではNotImplementedError
-        # 実装後はFileNotFoundErrorなど適切な例外が発生することを期待
-        with pytest.raises((NotImplementedError, FileNotFoundError)):
+        with pytest.raises(FileNotFoundError):
             AssetScanner(game_dir=nonexistent)
 
     def test_empty_directory_returns_empty_manifest(self, tmp_path: Path) -> None:
         """空のディレクトリで空のマニフェストが返される"""
-        # 空のディレクトリを作成（tmp_pathは既に空）
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path)
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 0
+        assert manifest.game_dir == tmp_path
 
 class TestAssetScannerWithConfig:
     """AssetScannerの設定ベーステスト"""
 
     def test_exclude_pattern(self, tmp_path: Path) -> None:
         """exclude設定でファイルがスキップされる"""
-        # テストファイル作成
         (tmp_path / "test.ks").write_text("test", encoding="utf-8")
         (tmp_path / "backup.bak").write_text("backup", encoding="utf-8")
 
         config = {"exclude": ["*.bak"]}
+        scanner = AssetScanner(game_dir=tmp_path, config=config)
+        manifest = scanner.scan()
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path, config=config)
+        assert len(manifest.files) == 1
+        assert manifest.files[0].path == Path("test.ks")
 
     def test_conversion_rules_override(self, tmp_path: Path) -> None:
         """conversion_rules設定で変換ルールが上書きされる"""
@@ -636,12 +700,25 @@ class TestAssetScannerWithConfig:
         voice_dir.mkdir()
         (voice_dir / "v001.ogg").write_bytes(b"OggS")
 
-        # voice/*.ogg をスキップする設定
         config = {
             "conversion_rules": [
                 {"pattern": "voice/*.ogg", "converter": "skip"},
             ]
         }
 
-        with pytest.raises(NotImplementedError):
-            AssetScanner(game_dir=tmp_path, config=config)
+        scanner = AssetScanner(game_dir=tmp_path, config=config)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.SKIP
+
+    def test_hidden_files_excluded(self, tmp_path: Path) -> None:
+        """隠しファイルが自動的に除外される"""
+        (tmp_path / "visible.ks").write_text("test", encoding="utf-8")
+        (tmp_path / ".hidden.ks").write_text("hidden", encoding="utf-8")
+
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].path == Path("visible.ks")
