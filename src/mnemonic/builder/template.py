@@ -5,12 +5,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+if TYPE_CHECKING:
+    from mnemonic.cache import CacheManager
+
 class TemplateDownloadError(Exception):
     """テンプレートダウンロードに関する基本例外クラス"""
+
+    pass
+
+class TemplateCacheError(Exception):
+    """テンプレートキャッシュに関する基本例外クラス"""
 
     pass
 
@@ -37,6 +45,91 @@ class TemplateInfo:
     download_url: str
     file_size: int
     file_name: str
+
+class TemplateCache:
+    """テンプレートキャッシュを管理するクラス
+
+    CacheManagerを使用してkrkrsdl2テンプレートのキャッシュを管理します。
+    キャッシュの有効期限管理、バージョン管理、保存・取得機能を提供します。
+    """
+
+    DEFAULT_REFRESH_DAYS = 7  # デフォルトのキャッシュ有効期間（日）
+
+    def __init__(
+        self,
+        cache_manager: CacheManager,
+        refresh_days: int = 7,
+    ) -> None:
+        """TemplateCacheを初期化する
+
+        Args:
+            cache_manager: キャッシュ管理インターフェース
+            refresh_days: キャッシュの有効期間（日）。デフォルトは7日。
+        """
+        self._cache_manager = cache_manager
+        self._refresh_days = refresh_days
+
+    def get_cached_template(self, version: str | None = None) -> Path | None:
+        """キャッシュ済みテンプレートを取得する
+
+        Args:
+            version: 取得するテンプレートのバージョン。
+                     Noneの場合は最新のキャッシュされたバージョンを取得。
+
+        Returns:
+            キャッシュされたテンプレートのパス。
+            キャッシュが存在しない、または無効な場合はNone。
+
+        Raises:
+            TemplateCacheError: キャッシュ操作中にエラーが発生した場合
+        """
+        raise NotImplementedError
+
+    def is_cache_valid(self, version: str | None = None) -> bool:
+        """キャッシュが有効かどうかを確認する
+
+        Args:
+            version: 確認するテンプレートのバージョン。
+                     Noneの場合は最新のキャッシュされたバージョンを確認。
+
+        Returns:
+            キャッシュが存在し、有効期限内であればTrue。
+            それ以外はFalse。
+        """
+        raise NotImplementedError
+
+    def get_cached_version(self) -> str | None:
+        """キャッシュされているバージョンを取得する
+
+        Returns:
+            キャッシュされているテンプレートのバージョン。
+            キャッシュが存在しない場合はNone。
+        """
+        raise NotImplementedError
+
+    def save_template(self, template_path: Path, version: str) -> Path:
+        """テンプレートをキャッシュに保存する
+
+        Args:
+            template_path: 保存するテンプレートファイルのパス
+            version: テンプレートのバージョン
+
+        Returns:
+            キャッシュに保存されたテンプレートのパス
+
+        Raises:
+            TemplateCacheError: 保存中にエラーが発生した場合
+            FileNotFoundError: 指定されたテンプレートファイルが存在しない場合
+        """
+        raise NotImplementedError
+
+    def clear_cache(self) -> None:
+        """テンプレートキャッシュをクリアする
+
+        Raises:
+            TemplateCacheError: クリア操作中にエラーが発生した場合
+        """
+        raise NotImplementedError
 
 # GitHub APIとダウンロードURL構築に使用する定数
 GITHUB_API_BASE = "https://api.github.com/repos/krkrz/krkrsdl2"
