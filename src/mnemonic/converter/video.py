@@ -4,10 +4,13 @@ Windows向けゲームの動画アセット(.mpg, .mpeg, .wmv, .avi)を
 Android互換のMP4形式に変換するための機能を提供する。
 """
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .base import BaseConverter, ConversionResult
+import ffmpeg
+
+from .base import BaseConverter, ConversionResult, ConversionStatus
 
 @dataclass(frozen=True)
 class VideoInfo:
@@ -78,7 +81,7 @@ class VideoConverter(BaseConverter):
         Returns:
             変換可能な場合True、そうでない場合False
         """
-        raise NotImplementedError
+        return file_path.suffix.lower() in self.supported_extensions
 
     def convert(self, source: Path, dest: Path) -> ConversionResult:
         """動画ファイルをMP4形式に変換する
@@ -90,7 +93,45 @@ class VideoConverter(BaseConverter):
         Returns:
             変換結果を表すConversionResultオブジェクト
         """
-        raise NotImplementedError
+        if not source.exists():
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=f"変換元ファイルが見つかりません: {source}",
+            )
+
+        bytes_before = self._get_file_size(source)
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            stream = ffmpeg.input(str(source))
+            stream = ffmpeg.output(
+                stream,
+                str(dest),
+                vcodec=self._video_codec,
+                acodec=self._audio_codec,
+                profile=self._video_profile,
+            )
+            stream.run(overwrite_output=True, quiet=True)
+
+            bytes_after = self._get_file_size(dest)
+
+            return ConversionResult(
+                source_path=source,
+                dest_path=dest,
+                status=ConversionStatus.SUCCESS,
+                bytes_before=bytes_before,
+                bytes_after=bytes_after,
+            )
+        except Exception as e:
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=f"動画変換に失敗しました: {e}",
+            )
 
     def get_video_info(self, file_path: Path) -> VideoInfo:
         """動画ファイルの情報を取得する
@@ -105,7 +146,38 @@ class VideoConverter(BaseConverter):
             FileNotFoundError: ファイルが存在しない場合
             ValueError: 動画情報を取得できない場合
         """
-        raise NotImplementedError
+        if not file_path.exists():
+            raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
+
+        try:
+            probe = ffmpeg.probe(str(file_path))
+        except Exception as e:
+            raise ValueError(f"動画情報を取得できません: {file_path}: {e}") from e
+
+        video_stream = None
+        audio_stream = None
+
+        for stream in probe.get("streams", []):
+            if stream.get("codec_type") == "video" and video_stream is None:
+                video_stream = stream
+            elif stream.get("codec_type") == "audio" and audio_stream is None:
+                audio_stream = stream
+
+        if video_stream is None:
+            msg = f"動画情報を取得できません: 動画ストリームが見つかりません: {file_path}"
+            raise ValueError(msg)
+
+        format_info = probe.get("format", {})
+
+        return VideoInfo(
+            width=video_stream.get("width", 0),
+            height=video_stream.get("height", 0),
+            duration_seconds=float(format_info.get("duration", 0)),
+            has_audio=audio_stream is not None,
+            video_codec=video_stream.get("codec_name", "unknown"),
+            audio_codec=audio_stream.get("codec_name") if audio_stream else None,
+            bitrate=int(format_info.get("bit_rate", 0)),
+        )
 
     def is_ffmpeg_available(self) -> bool:
         """FFmpegが利用可能かを確認する
@@ -113,4 +185,12 @@ class VideoConverter(BaseConverter):
         Returns:
             FFmpegが利用可能な場合True、そうでない場合False
         """
-        raise NotImplementedError
+        try:
+            subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                check=True,
+            )
+            return True
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return False
