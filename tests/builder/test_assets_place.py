@@ -138,6 +138,16 @@ class TestAssetPlacerInit:
 
         assert placer._project_path == project_path
 
+    def test_init_with_exclude_patterns(self, tmp_path: Path) -> None:
+        """正常系: 除外パターンを指定して初期化"""
+        project_path = tmp_path / "android_project"
+        project_path.mkdir()
+
+        exclude_patterns = ["*.bak", "thumbs.db"]
+        placer = AssetPlacer(project_path=project_path, exclude_patterns=exclude_patterns)
+
+        assert placer._exclude_patterns == exclude_patterns
+
 class TestAssetPlacerPlaceAssets:
     """AssetPlacer.place_assets のテスト"""
 
@@ -191,8 +201,18 @@ class TestAssetPlacerPlaceAssets:
         """正常系: 全てのアセットが app/src/main/assets/ に配置される"""
         placer = AssetPlacer(project_path=android_project)
 
-        with pytest.raises(NotImplementedError):
-            placer.place_assets(source_dir=source_assets)
+        result = placer.place_assets(source_dir=source_assets)
+
+        assets_dir = android_project / "app" / "src" / "main" / "assets"
+
+        # 全てのファイルがコピーされていることを確認
+        assert (assets_dir / "data.xp3").exists()
+        assert (assets_dir / "bgm.ogg").exists()
+        assert (assets_dir / "startup.tjs").exists()
+        assert (assets_dir / "images" / "title.png").exists()
+
+        # 結果が正しいことを確認
+        assert result.total_files == 4
 
     def test_place_assets_preserves_directory_structure(
         self,
@@ -202,8 +222,13 @@ class TestAssetPlacerPlaceAssets:
         """正常系: ディレクトリ構造が保持される"""
         placer = AssetPlacer(project_path=android_project)
 
-        with pytest.raises(NotImplementedError):
-            placer.place_assets(source_dir=source_assets)
+        placer.place_assets(source_dir=source_assets)
+
+        assets_dir = android_project / "app" / "src" / "main" / "assets"
+
+        # サブディレクトリが作成されていることを確認
+        assert (assets_dir / "images").is_dir()
+        assert (assets_dir / "images" / "title.png").exists()
 
     def test_place_assets_returns_correct_result(
         self,
@@ -213,8 +238,25 @@ class TestAssetPlacerPlaceAssets:
         """正常系: 配置結果（ファイル数、サイズ）が正しく返される"""
         placer = AssetPlacer(project_path=android_project)
 
-        with pytest.raises(NotImplementedError):
-            placer.place_assets(source_dir=source_assets)
+        result = placer.place_assets(source_dir=source_assets)
+
+        # ファイル数が正しいことを確認
+        assert result.total_files == 4
+
+        # サイズが正しいことを確認
+        expected_size = (
+            len(b"xp3 archive content")
+            + len(b"ogg audio content")
+            + len("// startup script")
+            + len(b"png image content")
+        )
+        assert result.total_size == expected_size
+
+        # 配置されたファイルリストを確認
+        placed_file_names = [str(f) for f in result.placed_files]
+        assert "data.xp3" in placed_file_names
+        assert "bgm.ogg" in placed_file_names
+        assert "startup.tjs" in placed_file_names
 
     @pytest.mark.parametrize(
         "exclude_patterns,expected_excluded",
@@ -255,8 +297,19 @@ class TestAssetPlacerPlaceAssets:
 
         placer = AssetPlacer(project_path=android_project)
 
-        with pytest.raises(NotImplementedError):
-            placer.place_assets(source_dir=source_dir)
+        result = placer.place_assets(source_dir=source_dir, exclude_patterns=exclude_patterns)
+
+        assets_dir = android_project / "app" / "src" / "main" / "assets"
+
+        # 除外されていないファイルは配置されている
+        assert (assets_dir / "data.xp3").exists()
+
+        # 除外対象ファイルは配置されていない
+        for excluded_file in expected_excluded:
+            assert not (assets_dir / excluded_file).exists()
+
+        # 結果のファイル数は除外されたファイルを含まない
+        assert result.total_files == 1
 
 class TestAssetPlacerConfigureBuildGradle:
     """AssetPlacer.configure_build_gradle のテスト"""
@@ -312,8 +365,16 @@ class TestAssetPlacerConfigureBuildGradle:
             exclude_patterns=[],
         )
 
-        with pytest.raises(NotImplementedError):
-            placer.configure_build_gradle(asset_config=config)
+        placer.configure_build_gradle(asset_config=config)
+
+        build_gradle = groovy_gradle_project / "app" / "build.gradle"
+        content = build_gradle.read_text(encoding="utf-8")
+
+        # aaptOptionsブロックが追加されていることを確認
+        assert "aaptOptions" in content
+        assert "noCompress" in content
+        assert "'.ogg'" in content
+        assert "'.mp3'" in content
 
     def test_configure_build_gradle_sets_no_compress_kotlin(
         self,
@@ -326,8 +387,17 @@ class TestAssetPlacerConfigureBuildGradle:
             exclude_patterns=[],
         )
 
-        with pytest.raises(NotImplementedError):
-            placer.configure_build_gradle(asset_config=config)
+        placer.configure_build_gradle(asset_config=config)
+
+        build_gradle = kotlin_gradle_project / "app" / "build.gradle.kts"
+        content = build_gradle.read_text(encoding="utf-8")
+
+        # aaptOptionsブロックが追加されていることを確認
+        assert "aaptOptions" in content
+        assert "noCompress" in content
+        assert "listOf" in content
+        assert '".ogg"' in content
+        assert '".mp3"' in content
 
     def test_configure_build_gradle_preserves_existing_settings(
         self,
@@ -362,8 +432,20 @@ class TestAssetPlacerConfigureBuildGradle:
             exclude_patterns=[],
         )
 
-        with pytest.raises(NotImplementedError):
-            placer.configure_build_gradle(asset_config=config)
+        placer.configure_build_gradle(asset_config=config)
+
+        content = build_gradle.read_text(encoding="utf-8")
+
+        # 既存の設定が保持されていることを確認
+        assert 'namespace "com.example.game"' in content
+        assert "minSdk 21" in content
+        assert "targetSdk 34" in content
+        assert "buildTypes" in content
+        assert "minifyEnabled true" in content
+
+        # 新しい設定が追加されていることを確認
+        assert "aaptOptions" in content
+        assert "noCompress" in content
 
     @pytest.mark.parametrize(
         "no_compress_extensions",
@@ -394,8 +476,14 @@ class TestAssetPlacerConfigureBuildGradle:
             exclude_patterns=[],
         )
 
-        with pytest.raises(NotImplementedError):
-            placer.configure_build_gradle(asset_config=config)
+        placer.configure_build_gradle(asset_config=config)
+
+        build_gradle = groovy_gradle_project / "app" / "build.gradle"
+        content = build_gradle.read_text(encoding="utf-8")
+
+        # 全ての拡張子が含まれていることを確認
+        for ext in no_compress_extensions:
+            assert f"'{ext}'" in content
 
 class TestAssetPlacerValidatePlacement:
     """AssetPlacer.validate_placement のテスト"""
@@ -422,8 +510,9 @@ class TestAssetPlacerValidatePlacement:
         """正常系: 必要なファイルが全て配置されている場合にTrue"""
         placer = AssetPlacer(project_path=project_with_assets)
 
-        with pytest.raises(NotImplementedError):
-            placer.validate_placement()
+        result = placer.validate_placement()
+
+        assert result is True
 
     def test_validate_placement_returns_false_when_missing_files(
         self,
@@ -439,8 +528,23 @@ class TestAssetPlacerValidatePlacement:
 
         placer = AssetPlacer(project_path=project_path)
 
-        with pytest.raises(NotImplementedError):
-            placer.validate_placement()
+        result = placer.validate_placement()
+
+        assert result is False
+
+    def test_validate_placement_returns_false_when_assets_dir_missing(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """正常系: assetsディレクトリが存在しない場合にFalse"""
+        project_path = tmp_path / "no_assets_dir_project"
+        project_path.mkdir()
+
+        placer = AssetPlacer(project_path=project_path)
+
+        result = placer.validate_placement()
+
+        assert result is False
 
 class TestAssetPlacerErrorCases:
     """AssetPlacer エラーケースのテスト"""
@@ -458,10 +562,10 @@ class TestAssetPlacerErrorCases:
 
         placer = AssetPlacer(project_path=project_path)
 
-        # 現在は NotImplementedError が発生
-        # 実装後は AssetPlacementError が発生する予定
-        with pytest.raises((NotImplementedError, AssetPlacementError)):
+        with pytest.raises(AssetPlacementError) as exc_info:
             placer.place_assets(source_dir=nonexistent_source)
+
+        assert "does not exist" in str(exc_info.value)
 
     def test_configure_build_gradle_raises_error_when_gradle_not_exists(
         self,
@@ -479,8 +583,10 @@ class TestAssetPlacerErrorCases:
             exclude_patterns=[],
         )
 
-        with pytest.raises((NotImplementedError, AssetPlacementError)):
+        with pytest.raises(AssetPlacementError) as exc_info:
             placer.configure_build_gradle(asset_config=config)
+
+        assert "not found" in str(exc_info.value)
 
     def test_place_assets_raises_error_when_project_path_invalid(
         self,
@@ -494,8 +600,30 @@ class TestAssetPlacerErrorCases:
 
         placer = AssetPlacer(project_path=invalid_project_path)
 
-        with pytest.raises((NotImplementedError, AssetPlacementError)):
+        with pytest.raises(AssetPlacementError) as exc_info:
             placer.place_assets(source_dir=source_dir)
+
+        assert "does not exist" in str(exc_info.value)
+
+    def test_place_assets_raises_error_when_assets_dir_not_exists(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """異常系: assetsディレクトリが存在しない場合"""
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        # app/src/main/assetsを作成しない
+
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+        (source_dir / "data.xp3").write_bytes(b"data")
+
+        placer = AssetPlacer(project_path=project_path)
+
+        with pytest.raises(AssetPlacementError) as exc_info:
+            placer.place_assets(source_dir=source_dir)
+
+        assert "does not exist" in str(exc_info.value)
 
 class TestAssetPlacementExceptions:
     """AssetPlacement例外クラスのテスト"""
