@@ -82,6 +82,74 @@ class ProjectGenerator:
     Androidプロジェクトを生成する機能を提供します。
     """
 
+    # 必須ファイルのリスト
+    REQUIRED_FILES = [
+        "app/build.gradle",
+        "app/src/main/AndroidManifest.xml",
+        "settings.gradle",
+        "build.gradle",
+    ]
+
+    # Java/Kotlinの予約語リスト
+    JAVA_RESERVED_WORDS = {
+        "abstract",
+        "assert",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extends",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "instanceof",
+        "int",
+        "interface",
+        "long",
+        "native",
+        "new",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "short",
+        "static",
+        "strictfp",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "transient",
+        "try",
+        "void",
+        "volatile",
+        "while",
+        "true",
+        "false",
+        "null",
+    }
+
+    # パッケージ名の各セグメントの検証パターン
+    PACKAGE_SEGMENT_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
     def __init__(self, template_path: Path) -> None:
         """ProjectGeneratorを初期化する
 
@@ -104,7 +172,31 @@ class ProjectGenerator:
             ProjectGenerationError: プロジェクト生成に失敗した場合
             InvalidTemplateError: テンプレートが無効な場合
         """
-        raise NotImplementedError
+        # テンプレートファイルの存在確認
+        if not self._template_path.exists():
+            raise ProjectGenerationError(f"Template file not found: {self._template_path}")
+
+        # 出力ディレクトリの存在確認
+        if not output_dir.exists():
+            raise ProjectGenerationError(f"Output directory does not exist: {output_dir}")
+
+        # パッケージ名の検証
+        self._validate_package_name(config.package_name)
+
+        # テンプレートの検証
+        if not self.validate_template():
+            raise InvalidTemplateError("Template validation failed")
+
+        # テンプレートの展開
+        self._extract_template(output_dir)
+
+        # AndroidManifest.xml の更新
+        self._update_android_manifest(output_dir, config)
+
+        # build.gradle または build.gradle.kts の更新
+        self._update_build_gradle(output_dir, config)
+
+        return output_dir
 
     def validate_template(self) -> bool:
         """テンプレートの整合性を検証する
@@ -115,7 +207,183 @@ class ProjectGenerator:
         Raises:
             InvalidTemplateError: テンプレートが無効な場合
         """
-        raise NotImplementedError
+        if not self._template_path.exists():
+            raise InvalidTemplateError(f"Template file not found: {self._template_path}")
+
+        try:
+            import zipfile
+
+            if not zipfile.is_zipfile(self._template_path):
+                raise InvalidTemplateError(
+                    f"Template is not a valid ZIP file: {self._template_path}"
+                )
+
+            with zipfile.ZipFile(self._template_path, "r") as zf:
+                file_list = zf.namelist()
+                missing_files = []
+
+                for required_file in self.REQUIRED_FILES:
+                    if required_file not in file_list:
+                        missing_files.append(required_file)
+
+                if missing_files:
+                    raise InvalidTemplateError(
+                        f"Missing required files in template: {', '.join(missing_files)}"
+                    )
+
+            return True
+        except zipfile.BadZipFile as e:
+            raise InvalidTemplateError(f"Invalid ZIP file: {e}") from e
+
+    def _validate_package_name(self, package_name: str) -> None:
+        """パッケージ名を検証する
+
+        Args:
+            package_name: 検証するパッケージ名
+
+        Raises:
+            ProjectGenerationError: パッケージ名が無効な場合
+        """
+        if not package_name:
+            raise ProjectGenerationError("Package name cannot be empty")
+
+        # ドットで分割してセグメントを検証
+        segments = package_name.split(".")
+
+        # 最低2つのセグメントが必要
+        if len(segments) < 2:
+            raise ProjectGenerationError(
+                f"Package name must have at least two segments: {package_name}"
+            )
+
+        for segment in segments:
+            # 空のセグメント（連続するドット）をチェック
+            if not segment:
+                raise ProjectGenerationError(f"Package name contains empty segment: {package_name}")
+
+            # セグメントパターンの検証
+            if not self.PACKAGE_SEGMENT_PATTERN.match(segment):
+                raise ProjectGenerationError(
+                    f"Invalid package name segment '{segment}' in: {package_name}"
+                )
+
+            # 予約語のチェック
+            if segment in self.JAVA_RESERVED_WORDS:
+                raise ProjectGenerationError(
+                    f"Package name contains reserved word '{segment}': {package_name}"
+                )
+
+    def _extract_template(self, output_dir: Path) -> None:
+        """テンプレートを展開する
+
+        Args:
+            output_dir: 展開先ディレクトリ
+
+        Raises:
+            ProjectGenerationError: 展開に失敗した場合
+        """
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(self._template_path, "r") as zf:
+                zf.extractall(output_dir)
+        except zipfile.BadZipFile as e:
+            raise ProjectGenerationError(f"Failed to extract template: {e}") from e
+        except OSError as e:
+            raise ProjectGenerationError(f"Failed to extract template: {e}") from e
+
+    def _update_android_manifest(self, output_dir: Path, config: ProjectConfig) -> None:
+        """AndroidManifest.xmlを更新する
+
+        Args:
+            output_dir: プロジェクトディレクトリ
+            config: プロジェクト設定
+
+        Raises:
+            ProjectGenerationError: 更新に失敗した場合
+        """
+        manifest_path = output_dir / "app" / "src" / "main" / "AndroidManifest.xml"
+
+        if not manifest_path.exists():
+            raise ProjectGenerationError(f"AndroidManifest.xml not found: {manifest_path}")
+
+        try:
+            content = manifest_path.read_text(encoding="utf-8")
+
+            # package属性の更新
+            content = re.sub(
+                r'package="[^"]*"',
+                f'package="{config.package_name}"',
+                content,
+            )
+
+            # android:label属性の更新
+            content = re.sub(
+                r'android:label="[^"]*"',
+                f'android:label="{config.app_name}"',
+                content,
+            )
+
+            manifest_path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            raise ProjectGenerationError(f"Failed to update AndroidManifest.xml: {e}") from e
+
+    def _update_build_gradle(self, output_dir: Path, config: ProjectConfig) -> None:
+        """build.gradleまたはbuild.gradle.ktsを更新する
+
+        Args:
+            output_dir: プロジェクトディレクトリ
+            config: プロジェクト設定
+
+        Raises:
+            ProjectGenerationError: 更新に失敗した場合
+        """
+        # Groovy DSL (build.gradle) を優先的に探す
+        gradle_path = output_dir / "app" / "build.gradle"
+
+        if not gradle_path.exists():
+            # Kotlin DSL (build.gradle.kts) を試す
+            gradle_path = output_dir / "app" / "build.gradle.kts"
+
+        if not gradle_path.exists():
+            raise ProjectGenerationError(
+                f"build.gradle or build.gradle.kts not found in: {output_dir / 'app'}"
+            )
+
+        try:
+            content = gradle_path.read_text(encoding="utf-8")
+
+            # namespace の更新
+            content = re.sub(
+                r'namespace\s+["\']([^"\']*)["\']',
+                f'namespace "{config.package_name}"',
+                content,
+            )
+
+            # applicationId の更新
+            content = re.sub(
+                r'applicationId\s+["\']([^"\']*)["\']',
+                f'applicationId "{config.package_name}"',
+                content,
+            )
+
+            # versionCode の更新
+            content = re.sub(
+                r"versionCode\s+\d+",
+                f"versionCode {config.version_code}",
+                content,
+            )
+
+            # versionName の更新
+            content = re.sub(
+                r'versionName\s+["\']([^"\']*)["\']',
+                f'versionName "{config.version_name}"',
+                content,
+            )
+
+            gradle_path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            raise ProjectGenerationError(f"Failed to update build.gradle: {e}") from e
 
 class TemplateCache:
     """テンプレートキャッシュを管理するクラス
