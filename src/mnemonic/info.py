@@ -11,7 +11,7 @@ class FileStats:
     """ファイル統計"""
 
     count: int
-    extensions: list[str]
+    extensions: tuple[str, ...]
     total_size_bytes: int
 
 @dataclass(frozen=True)
