@@ -865,3 +865,87 @@ class TemplateDownloader:
             raise FileIntegrityError(
                 f"File size mismatch: expected {expected_size} bytes, got {actual_size} bytes"
             )
+
+class AssetPlacementError(Exception):
+    """アセット配置に関する基本例外クラス"""
+
+    pass
+
+@dataclass(frozen=True)
+class AssetConfig:
+    """アセット配置の設定を表す不変オブジェクト
+
+    Attributes:
+        no_compress_extensions: 圧縮しない拡張子のリスト（例: [".ogg", ".mp3"]）
+        exclude_patterns: 除外パターンのリスト（例: ["*.bak", "thumbs.db"]）
+    """
+
+    no_compress_extensions: list[str]
+    exclude_patterns: list[str]
+
+@dataclass(frozen=True)
+class AssetPlacementResult:
+    """アセット配置結果を表す不変オブジェクト
+
+    Attributes:
+        total_files: 配置されたファイルの総数
+        total_size: 配置されたファイルの合計サイズ（バイト）
+        placed_files: 配置されたファイルのパスリスト
+    """
+
+    total_files: int
+    total_size: int
+    placed_files: list[Path]
+
+class AssetPlacer:
+    """変換済みアセットをAndroidプロジェクトに配置するクラス
+
+    このクラスは変換済みのゲームアセットをAndroidプロジェクトの
+    適切な場所に配置し、build.gradleの設定を更新する機能を提供します。
+    """
+
+    def __init__(self, project_path: Path) -> None:
+        """AssetPlacerを初期化する
+
+        Args:
+            project_path: Androidプロジェクトのルートパス
+        """
+        self._project_path = project_path
+
+    def place_assets(self, source_dir: Path) -> AssetPlacementResult:
+        """アセットをAndroidプロジェクトに配置する
+
+        Args:
+            source_dir: 配置するアセットが格納されたディレクトリ
+
+        Returns:
+            配置結果を表すAssetPlacementResult
+
+        Raises:
+            AssetPlacementError: アセット配置に失敗した場合
+        """
+        raise NotImplementedError
+
+    def configure_build_gradle(self, asset_config: AssetConfig) -> None:
+        """build.gradleにアセット設定を追加する
+
+        noCompress拡張子やexclude設定をbuild.gradleに反映します。
+
+        Args:
+            asset_config: アセット設定
+
+        Raises:
+            AssetPlacementError: build.gradleの設定に失敗した場合
+        """
+        raise NotImplementedError
+
+    def validate_placement(self) -> bool:
+        """アセット配置が正しく行われたかを検証する
+
+        Returns:
+            配置が正しい場合はTrue、問題がある場合はFalse
+
+        Raises:
+            AssetPlacementError: 検証中にエラーが発生した場合
+        """
+        raise NotImplementedError
