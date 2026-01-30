@@ -140,7 +140,13 @@ class TestEncodingDetectorDetectBytes:
 
     def test_detects_shift_jis_bytes(self, detector: EncodingDetector) -> None:
         """Shift_JISのバイトデータを正しく検出できることを確認する"""
-        sjis_bytes = "これはテストです".encode("shift_jis")
+        # chardetが正確に検出できるよう、十分な長さのテキストを使用
+        sjis_text = (
+            "これはShift_JISエンコーディングのテストファイルです。"
+            "日本語の文章を含みます。吾輩は猫である。名前はまだ無い。"
+            "どこで生れたかとんと見当がつかぬ。"
+        )
+        sjis_bytes = sjis_text.encode("shift_jis")
         result = detector.detect_bytes(sjis_bytes)
 
         assert result.encoding is not None
