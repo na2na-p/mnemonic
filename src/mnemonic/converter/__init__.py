@@ -18,19 +18,29 @@ from mnemonic.converter.image import (
     TLGInfo,
     TLGVersion,
 )
+from mnemonic.converter.manager import (
+    ConversionManager,
+    ConversionSummary,
+    ConversionTask,
+    RetryConfig,
+)
 from mnemonic.converter.script import AdjustmentRule, ScriptAdjuster
 from mnemonic.converter.video import VideoConverter, VideoInfo
 
 __all__ = [
     "AdjustmentRule",
     "BaseConverter",
+    "ConversionManager",
     "ConversionResult",
     "ConversionStatus",
+    "ConversionSummary",
+    "ConversionTask",
     "EncodingConverter",
     "EncodingDetectionResult",
     "EncodingDetector",
     "ImageConverter",
     "QualityPreset",
+    "RetryConfig",
     "ScriptAdjuster",
     "SUPPORTED_ENCODINGS",
     "TLGImageDecoder",
