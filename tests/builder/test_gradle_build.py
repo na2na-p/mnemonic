@@ -3,6 +3,7 @@
 このモジュールはGradleBuilderクラスのテストを提供します。
 """
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -91,104 +92,35 @@ class TestGradleBuilderCheckGradleWrapper:
         gradlew.touch()
 
         builder = GradleBuilder(project_path=tmp_path)
+        result = builder.check_gradle_wrapper()
 
-        with pytest.raises(NotImplementedError):
-            builder.check_gradle_wrapper()
+        assert result is True
 
     def test_check_gradle_wrapper_not_exists(self, tmp_path: Path) -> None:
         """正常系: gradlewが存在しない場合にFalseを返す"""
         builder = GradleBuilder(project_path=tmp_path)
+        result = builder.check_gradle_wrapper()
 
-        with pytest.raises(NotImplementedError):
-            builder.check_gradle_wrapper()
+        assert result is False
 
 class TestGradleBuilderBuild:
     """GradleBuilder.buildのテスト"""
-
-    def test_build_success(self, tmp_path: Path) -> None:
-        """正常系: ビルドが成功する場合"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path)
-
-        with pytest.raises(NotImplementedError):
-            builder.build()
-
-    def test_build_failure(self, tmp_path: Path) -> None:
-        """異常系: ビルドが失敗する場合"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path)
-
-        with pytest.raises(NotImplementedError):
-            builder.build()
-
-    def test_build_timeout(self, tmp_path: Path) -> None:
-        """異常系: ビルドがタイムアウトする場合"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path, timeout=1)
-
-        with pytest.raises(NotImplementedError):
-            builder.build()
 
     def test_build_without_gradlew(self, tmp_path: Path) -> None:
         """異常系: gradlewが存在しない場合にGradleNotFoundErrorが発生"""
         builder = GradleBuilder(project_path=tmp_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(GradleNotFoundError):
             builder.build()
-
-    @pytest.mark.parametrize(
-        "build_type,expected_task",
-        [
-            pytest.param("release", "assembleRelease", id="正常系: releaseビルド"),
-            pytest.param("debug", "assembleDebug", id="正常系: debugビルド"),
-        ],
-    )
-    def test_build_with_build_type(
-        self, tmp_path: Path, build_type: str, expected_task: str
-    ) -> None:
-        """正常系: ビルドタイプに応じたタスクが実行される"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path)
-
-        with pytest.raises(NotImplementedError):
-            builder.build(build_type=build_type)
 
 class TestGradleBuilderClean:
     """GradleBuilder.cleanのテスト"""
-
-    def test_clean_success(self, tmp_path: Path) -> None:
-        """正常系: クリーンが成功する場合"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path)
-
-        with pytest.raises(NotImplementedError):
-            builder.clean()
-
-    def test_clean_failure(self, tmp_path: Path) -> None:
-        """異常系: クリーンが失敗する場合"""
-        gradlew = tmp_path / "gradlew"
-        gradlew.touch()
-
-        builder = GradleBuilder(project_path=tmp_path)
-
-        with pytest.raises(NotImplementedError):
-            builder.clean()
 
     def test_clean_without_gradlew(self, tmp_path: Path) -> None:
         """異常系: gradlewが存在しない場合にGradleNotFoundErrorが発生"""
         builder = GradleBuilder(project_path=tmp_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(GradleNotFoundError):
             builder.clean()
 
 class TestGradleBuilderGetApkPath:
@@ -202,16 +134,16 @@ class TestGradleBuilderGetApkPath:
         apk_file.touch()
 
         builder = GradleBuilder(project_path=tmp_path)
+        result = builder.get_apk_path()
 
-        with pytest.raises(NotImplementedError):
-            builder.get_apk_path()
+        assert result == apk_file
 
     def test_get_apk_path_not_exists(self, tmp_path: Path) -> None:
         """正常系: APKが存在しない場合にNoneを返す"""
         builder = GradleBuilder(project_path=tmp_path)
+        result = builder.get_apk_path()
 
-        with pytest.raises(NotImplementedError):
-            builder.get_apk_path()
+        assert result is None
 
     @pytest.mark.parametrize(
         "build_type,expected_path",
@@ -237,9 +169,9 @@ class TestGradleBuilderGetApkPath:
         apk_path.touch()
 
         builder = GradleBuilder(project_path=tmp_path)
+        result = builder.get_apk_path(build_type=build_type)
 
-        with pytest.raises(NotImplementedError):
-            builder.get_apk_path(build_type=build_type)
+        assert result == apk_path
 
 class TestExceptionClasses:
     """例外クラスのテスト"""
@@ -267,8 +199,7 @@ class TestExceptionClasses:
 class TestGradleBuilderWithMockedSubprocess:
     """subprocess.runをモックしたGradleBuilderのテスト
 
-    これらのテストは実装後に実際のsubprocess.run呼び出しを検証します。
-    現在は未実装のためNotImplementedErrorが発生します。
+    これらのテストは実際のsubprocess.run呼び出しを検証します。
     """
 
     def test_build_calls_subprocess_with_correct_args(self, tmp_path: Path) -> None:
@@ -278,11 +209,18 @@ class TestGradleBuilderWithMockedSubprocess:
 
         builder = GradleBuilder(project_path=tmp_path)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="BUILD SUCCESSFUL")
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="BUILD SUCCESSFUL", stderr="")
 
-            with pytest.raises(NotImplementedError):
-                builder.build()
+            builder.build()
+
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert str(gradlew) in cmd
+            assert "assembleRelease" in cmd
+            assert "--no-daemon" in cmd
+            assert "--stacktrace" in cmd
 
     def test_build_returns_gradle_build_result(self, tmp_path: Path) -> None:
         """正常系: buildがGradleBuildResultを返す"""
@@ -291,11 +229,14 @@ class TestGradleBuilderWithMockedSubprocess:
 
         builder = GradleBuilder(project_path=tmp_path)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="BUILD SUCCESSFUL")
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="BUILD SUCCESSFUL", stderr="")
 
-            with pytest.raises(NotImplementedError):
-                builder.build()
+            result = builder.build()
+
+            assert isinstance(result, GradleBuildResult)
+            assert result.success is True
+            assert "BUILD SUCCESSFUL" in result.output_log
 
     def test_build_raises_gradle_build_error_on_failure(self, tmp_path: Path) -> None:
         """異常系: ビルド失敗時にGradleBuildErrorが発生"""
@@ -304,25 +245,23 @@ class TestGradleBuilderWithMockedSubprocess:
 
         builder = GradleBuilder(project_path=tmp_path)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="BUILD FAILED")
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="BUILD FAILED")
 
-            with pytest.raises(NotImplementedError):
+            with pytest.raises(GradleBuildError):
                 builder.build()
 
     def test_build_raises_gradle_timeout_error_on_timeout(self, tmp_path: Path) -> None:
         """異常系: タイムアウト時にGradleTimeoutErrorが発生"""
-        import subprocess
-
         gradlew = tmp_path / "gradlew"
         gradlew.touch()
 
         builder = GradleBuilder(project_path=tmp_path, timeout=1)
 
-        with patch("subprocess.run") as mock_run:
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="./gradlew", timeout=1)
 
-            with pytest.raises(NotImplementedError):
+            with pytest.raises(GradleTimeoutError):
                 builder.build()
 
     def test_clean_calls_subprocess_with_clean_task(self, tmp_path: Path) -> None:
@@ -332,11 +271,15 @@ class TestGradleBuilderWithMockedSubprocess:
 
         builder = GradleBuilder(project_path=tmp_path)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
-            with pytest.raises(NotImplementedError):
-                builder.clean()
+            builder.clean()
+
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert "clean" in cmd
 
     def test_clean_raises_gradle_build_error_on_failure(self, tmp_path: Path) -> None:
         """異常系: クリーン失敗時にGradleBuildErrorが発生"""
@@ -345,8 +288,33 @@ class TestGradleBuilderWithMockedSubprocess:
 
         builder = GradleBuilder(project_path=tmp_path)
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="CLEAN FAILED")
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="CLEAN FAILED")
 
-            with pytest.raises(NotImplementedError):
+            with pytest.raises(GradleBuildError):
                 builder.clean()
+
+    @pytest.mark.parametrize(
+        "build_type,expected_task",
+        [
+            pytest.param("release", "assembleRelease", id="正常系: releaseビルド"),
+            pytest.param("debug", "assembleDebug", id="正常系: debugビルド"),
+        ],
+    )
+    def test_build_with_build_type(
+        self, tmp_path: Path, build_type: str, expected_task: str
+    ) -> None:
+        """正常系: ビルドタイプに応じたタスクが実行される"""
+        gradlew = tmp_path / "gradlew"
+        gradlew.touch()
+
+        builder = GradleBuilder(project_path=tmp_path)
+
+        with patch("mnemonic.builder.gradle.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="BUILD SUCCESSFUL", stderr="")
+
+            builder.build(build_type=build_type)
+
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            assert expected_task in cmd

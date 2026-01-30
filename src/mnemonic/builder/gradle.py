@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import platform
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +61,54 @@ class GradleBuilder:
         self._project_path = project_path
         self._timeout = timeout
 
+    def _get_gradle_command(self) -> Path:
+        """プラットフォームに応じたGradle Wrapperコマンドを取得する
+
+        Returns:
+            Gradle Wrapperのパス
+
+        Raises:
+            GradleNotFoundError: Gradle wrapperが見つからない場合
+        """
+        if platform.system() == "Windows":
+            gradlew = self._project_path / "gradlew.bat"
+        else:
+            gradlew = self._project_path / "gradlew"
+
+        if not gradlew.exists():
+            raise GradleNotFoundError(f"Gradle wrapper not found at {gradlew}")
+        return gradlew
+
+    def _run_gradle(self, *args: str) -> subprocess.CompletedProcess[str]:
+        """Gradleコマンドを実行する
+
+        Args:
+            *args: Gradleに渡す引数
+
+        Returns:
+            subprocess.CompletedProcess
+
+        Raises:
+            GradleNotFoundError: Gradle wrapperが見つからない場合
+            GradleTimeoutError: タイムアウトした場合
+        """
+        gradlew = self._get_gradle_command()
+        cmd = [str(gradlew), *args, "--no-daemon", "--stacktrace"]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self._project_path,
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+            )
+            return result
+        except subprocess.TimeoutExpired as e:
+            raise GradleTimeoutError(
+                f"Gradle command timed out after {self._timeout} seconds"
+            ) from e
+
     def build(self, build_type: str = "release") -> GradleBuildResult:
         """Gradleビルドを実行する
 
@@ -72,7 +123,27 @@ class GradleBuilder:
             GradleTimeoutError: ビルドがタイムアウトした場合
             GradleNotFoundError: Gradle wrapperが見つからない場合
         """
-        raise NotImplementedError("GradleBuilder.build is not implemented yet")
+        task = f"assemble{build_type.capitalize()}"
+        start_time = time.time()
+
+        result = self._run_gradle(task)
+        build_time = time.time() - start_time
+
+        output_log = result.stdout + result.stderr
+
+        if result.returncode != 0:
+            raise GradleBuildError(
+                f"Gradle build failed with exit code {result.returncode}: {output_log}"
+            )
+
+        apk_path = self.get_apk_path(build_type)
+
+        return GradleBuildResult(
+            success=True,
+            apk_path=apk_path,
+            build_time=build_time,
+            output_log=output_log,
+        )
 
     def clean(self) -> None:
         """ビルドキャッシュをクリアする
@@ -83,7 +154,13 @@ class GradleBuilder:
             GradleBuildError: クリーン処理中にエラーが発生した場合
             GradleNotFoundError: Gradle wrapperが見つからない場合
         """
-        raise NotImplementedError("GradleBuilder.clean is not implemented yet")
+        result = self._run_gradle("clean")
+
+        if result.returncode != 0:
+            output_log = result.stdout + result.stderr
+            raise GradleBuildError(
+                f"Gradle clean failed with exit code {result.returncode}: {output_log}"
+            )
 
     def check_gradle_wrapper(self) -> bool:
         """Gradle wrapperの存在を確認する
@@ -94,7 +171,12 @@ class GradleBuilder:
         Returns:
             Gradle wrapperが存在する場合はTrue、存在しない場合はFalse
         """
-        raise NotImplementedError("GradleBuilder.check_gradle_wrapper is not implemented yet")
+        if platform.system() == "Windows":
+            gradlew = self._project_path / "gradlew.bat"
+        else:
+            gradlew = self._project_path / "gradlew"
+
+        return gradlew.exists()
 
     def get_apk_path(self, build_type: str = "release") -> Path | None:
         """生成されたAPKファイルのパスを取得する
@@ -105,4 +187,13 @@ class GradleBuilder:
         Returns:
             APKファイルのパス。ファイルが存在しない場合はNone。
         """
-        raise NotImplementedError("GradleBuilder.get_apk_path is not implemented yet")
+        if build_type == "release":
+            apk_name = "app-release-unsigned.apk"
+        else:
+            apk_name = f"app-{build_type}.apk"
+
+        apk_path = self._project_path / "app" / "build" / "outputs" / "apk" / build_type / apk_name
+
+        if apk_path.exists():
+            return apk_path
+        return None
