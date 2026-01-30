@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from mnemonic.converter.base import BaseConverter, ConversionResult
+from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
 
 class TLGVersion(Enum):
     """TLG画像のバージョン
@@ -188,7 +188,8 @@ class ImageConverter(BaseConverter):
         Returns:
             変換可能な場合True、そうでない場合False
         """
-        raise NotImplementedError
+        ext = file_path.suffix.lower()
+        return ext in self.supported_extensions
 
     def convert(self, source: Path, dest: Path) -> ConversionResult:
         """画像ファイルをWebP形式に変換する
@@ -203,7 +204,19 @@ class ImageConverter(BaseConverter):
         Returns:
             変換結果を表すConversionResultオブジェクト
         """
-        raise NotImplementedError
+        self._validate_source(source)
+        bytes_before = self._get_file_size(source)
+
+        ext = source.suffix.lower()
+        # TLGファイルはTLGImageDecoderでデコード（decode()はまだ未実装）
+        img = self._tlg_decoder.decode(source) if ext == ".tlg" else Image.open(source)
+
+        try:
+            result = self._save_as_webp(img, dest, source, bytes_before)
+        finally:
+            img.close()
+
+        return result
 
     def convert_from_image(self, image: Image.Image, dest: Path) -> ConversionResult:
         """PIL.ImageオブジェクトをWebP形式で保存する
@@ -218,4 +231,49 @@ class ImageConverter(BaseConverter):
         Returns:
             変換結果を表すConversionResultオブジェクト
         """
-        raise NotImplementedError
+        # PIL.Imageからの変換はsource_pathが無いのでdestをダミーとして使用
+        return self._save_as_webp(image, dest, dest, bytes_before=0)
+
+    def _save_as_webp(
+        self,
+        image: Image.Image,
+        dest: Path,
+        source: Path,
+        bytes_before: int,
+    ) -> ConversionResult:
+        """画像をWebP形式で保存する内部メソッド
+
+        Args:
+            image: 保存するPIL.Imageオブジェクト
+            dest: 保存先パス
+            source: 変換元パス（結果記録用）
+            bytes_before: 変換前のファイルサイズ
+
+        Returns:
+            変換結果
+        """
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        has_alpha = image.mode in ("RGBA", "LA", "PA")
+
+        if has_alpha and self._lossless_alpha:
+            # アルファチャンネル付きでロスレスアルファ
+            image.save(dest, "WEBP", quality=self._quality, lossless=True)
+        elif has_alpha:
+            # アルファチャンネル付きだがロスレスでない
+            image.save(dest, "WEBP", quality=self._quality)
+        else:
+            # アルファチャンネルなし→RGB変換
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.save(dest, "WEBP", quality=self._quality)
+
+        bytes_after = self._get_file_size(dest)
+
+        return ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
