@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import shutil
@@ -904,19 +905,71 @@ class AssetPlacer:
     適切な場所に配置し、build.gradleの設定を更新する機能を提供します。
     """
 
-    def __init__(self, project_path: Path) -> None:
+    # アセットディレクトリの相対パス
+    ASSETS_DIR_PATH = Path("app") / "src" / "main" / "assets"
+
+    def __init__(
+        self,
+        project_path: Path,
+        exclude_patterns: list[str] | None = None,
+    ) -> None:
         """AssetPlacerを初期化する
 
         Args:
             project_path: Androidプロジェクトのルートパス
+            exclude_patterns: 除外パターンのリスト（オプション）
         """
         self._project_path = project_path
+        self._exclude_patterns = exclude_patterns or []
 
-    def place_assets(self, source_dir: Path) -> AssetPlacementResult:
+    def _get_assets_dir(self) -> Path:
+        """アセットディレクトリのパスを取得する"""
+        return self._project_path / self.ASSETS_DIR_PATH
+
+    def _should_exclude(self, file_path: Path) -> bool:
+        """ファイルが除外パターンに一致するかを判定する
+
+        Args:
+            file_path: 判定するファイルのパス
+
+        Returns:
+            除外すべき場合はTrue
+        """
+        file_name = file_path.name
+        return any(fnmatch.fnmatch(file_name, pattern) for pattern in self._exclude_patterns)
+
+    def _get_build_gradle_path(self) -> Path | None:
+        """build.gradleまたはbuild.gradle.ktsのパスを取得する
+
+        Returns:
+            build.gradleファイルのパス。存在しない場合はNone。
+        """
+        # Groovy DSL (build.gradle) を優先
+        gradle_path = self._project_path / "app" / "build.gradle"
+        if gradle_path.exists():
+            return gradle_path
+
+        # Kotlin DSL (build.gradle.kts)
+        gradle_kts_path = self._project_path / "app" / "build.gradle.kts"
+        if gradle_kts_path.exists():
+            return gradle_kts_path
+
+        return None
+
+    def _is_kotlin_dsl(self, gradle_path: Path) -> bool:
+        """Kotlin DSLかどうかを判定する"""
+        return gradle_path.suffix == ".kts"
+
+    def place_assets(
+        self,
+        source_dir: Path,
+        exclude_patterns: list[str] | None = None,
+    ) -> AssetPlacementResult:
         """アセットをAndroidプロジェクトに配置する
 
         Args:
             source_dir: 配置するアセットが格納されたディレクトリ
+            exclude_patterns: 除外パターンのリスト（オプション、インスタンスの設定を上書き）
 
         Returns:
             配置結果を表すAssetPlacementResult
@@ -924,7 +977,65 @@ class AssetPlacer:
         Raises:
             AssetPlacementError: アセット配置に失敗した場合
         """
-        raise NotImplementedError
+        # ソースディレクトリの存在確認
+        if not source_dir.exists():
+            raise AssetPlacementError(f"Source directory does not exist: {source_dir}")
+
+        # プロジェクトパスの存在確認
+        if not self._project_path.exists():
+            raise AssetPlacementError(f"Project path does not exist: {self._project_path}")
+
+        # アセットディレクトリの存在確認
+        assets_dir = self._get_assets_dir()
+        if not assets_dir.exists():
+            raise AssetPlacementError(f"Assets directory does not exist: {assets_dir}")
+
+        # 除外パターンの決定
+        patterns = exclude_patterns if exclude_patterns is not None else self._exclude_patterns
+
+        placed_files: list[Path] = []
+        total_size = 0
+
+        try:
+            # ソースディレクトリ内のすべてのファイルを走査
+            for source_file in source_dir.rglob("*"):
+                if source_file.is_dir():
+                    continue
+
+                # 除外パターンのチェック
+                if self._should_exclude_with_patterns(source_file, patterns):
+                    continue
+
+                # 相対パスを維持して配置先を決定
+                relative_path = source_file.relative_to(source_dir)
+                dest_file = assets_dir / relative_path
+
+                # 配置先ディレクトリの作成
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # ファイルのコピー
+                shutil.copy2(source_file, dest_file)
+
+                placed_files.append(relative_path)
+                total_size += source_file.stat().st_size
+
+        except OSError as e:
+            raise AssetPlacementError(f"Failed to place assets: {e}") from e
+
+        return AssetPlacementResult(
+            total_files=len(placed_files),
+            total_size=total_size,
+            placed_files=placed_files,
+        )
+
+    def _should_exclude_with_patterns(
+        self,
+        file_path: Path,
+        patterns: list[str],
+    ) -> bool:
+        """指定されたパターンでファイルが除外対象かを判定する"""
+        file_name = file_path.name
+        return any(fnmatch.fnmatch(file_name, pattern) for pattern in patterns)
 
     def configure_build_gradle(self, asset_config: AssetConfig) -> None:
         """build.gradleにアセット設定を追加する
@@ -937,7 +1048,118 @@ class AssetPlacer:
         Raises:
             AssetPlacementError: build.gradleの設定に失敗した場合
         """
-        raise NotImplementedError
+        gradle_path = self._get_build_gradle_path()
+        if gradle_path is None:
+            raise AssetPlacementError(
+                f"build.gradle or build.gradle.kts not found in: {self._project_path / 'app'}"
+            )
+
+        try:
+            content = gradle_path.read_text(encoding="utf-8")
+            is_kotlin = self._is_kotlin_dsl(gradle_path)
+
+            # noCompress設定の追加
+            if asset_config.no_compress_extensions:
+                content = self._add_no_compress_config(
+                    content,
+                    asset_config.no_compress_extensions,
+                    is_kotlin,
+                )
+
+            gradle_path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            raise AssetPlacementError(f"Failed to configure build.gradle: {e}") from e
+
+    def _add_no_compress_config(
+        self,
+        content: str,
+        extensions: list[str],
+        is_kotlin: bool,
+    ) -> str:
+        """noCompress設定をbuild.gradleに追加する
+
+        Args:
+            content: build.gradleの内容
+            extensions: 圧縮しない拡張子のリスト
+            is_kotlin: Kotlin DSLかどうか
+
+        Returns:
+            更新されたbuild.gradleの内容
+        """
+        # 既にaaptOptionsが存在するかチェック
+        if "aaptOptions" in content:
+            # 既存のaaptOptions内にnoCompressを追加/更新
+            return self._update_existing_aapt_options(content, extensions, is_kotlin)
+
+        # aaptOptionsが存在しない場合、androidブロック内に追加
+        return self._add_new_aapt_options(content, extensions, is_kotlin)
+
+    def _update_existing_aapt_options(
+        self,
+        content: str,
+        extensions: list[str],
+        is_kotlin: bool,
+    ) -> str:
+        """既存のaaptOptionsにnoCompress設定を追加/更新する"""
+        if is_kotlin:
+            # Kotlin DSL形式
+            extensions_str = ", ".join(f'"{ext}"' for ext in extensions)
+            no_compress_line = f"        noCompress += listOf({extensions_str})"
+        else:
+            # Groovy形式
+            extensions_str = ", ".join(f"'{ext}'" for ext in extensions)
+            no_compress_line = f"        noCompress {extensions_str}"
+
+        # aaptOptionsブロック内にnoCompressがあれば置換、なければ追加
+        if "noCompress" in content:
+            # 既存のnoCompress行を置換
+            content = re.sub(
+                r"(\s*)noCompress.*",
+                f"\\1{no_compress_line.strip()}",
+                content,
+            )
+        else:
+            # aaptOptionsブロック内にnoCompressを追加
+            content = re.sub(
+                r"(aaptOptions\s*\{)",
+                f"\\1\n{no_compress_line}",
+                content,
+            )
+
+        return content
+
+    def _add_new_aapt_options(
+        self,
+        content: str,
+        extensions: list[str],
+        is_kotlin: bool,
+    ) -> str:
+        """新しいaaptOptionsブロックをandroidブロック内に追加する"""
+        if is_kotlin:
+            # Kotlin DSL形式
+            extensions_str = ", ".join(f'"{ext}"' for ext in extensions)
+            aapt_block = f"""    aaptOptions {{
+        noCompress += listOf({extensions_str})
+    }}"""
+        else:
+            # Groovy形式
+            extensions_str = ", ".join(f"'{ext}'" for ext in extensions)
+            aapt_block = f"""    aaptOptions {{
+        noCompress {extensions_str}
+    }}"""
+
+        # androidブロックの終了直前に挿入
+        # androidブロックの最後の } を見つけて、その前に挿入
+        pattern = r"(android\s*\{)(.*?)(^\})"
+        match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+
+        if match:
+            android_start = match.group(1)
+            android_body = match.group(2)
+            android_end = match.group(3)
+            content = f"{android_start}{android_body}{aapt_block}\n{android_end}"
+
+        return content
 
     def validate_placement(self) -> bool:
         """アセット配置が正しく行われたかを検証する
@@ -948,4 +1170,20 @@ class AssetPlacer:
         Raises:
             AssetPlacementError: 検証中にエラーが発生した場合
         """
-        raise NotImplementedError
+        try:
+            assets_dir = self._get_assets_dir()
+
+            # アセットディレクトリの存在確認
+            if not assets_dir.exists():
+                return False
+
+            # アセットディレクトリ内にファイルが存在するか確認
+            has_files = False
+            for item in assets_dir.rglob("*"):
+                if item.is_file():
+                    has_files = True
+                    break
+
+            return has_files
+        except OSError as e:
+            raise AssetPlacementError(f"Failed to validate placement: {e}") from e
