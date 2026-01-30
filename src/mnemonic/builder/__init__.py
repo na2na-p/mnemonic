@@ -1,5 +1,12 @@
 """Builder module for Mnemonic."""
 
+from mnemonic.builder.gradle import (
+    GradleBuilder,
+    GradleBuildError,
+    GradleBuildResult,
+    GradleNotFoundError,
+    GradleTimeoutError,
+)
 from mnemonic.builder.template import (
     AssetConfig,
     AssetPlacementError,
@@ -23,6 +30,11 @@ __all__ = [
     "AssetPlacementError",
     "AssetPlacementResult",
     "AssetPlacer",
+    "GradleBuildError",
+    "GradleBuildResult",
+    "GradleBuilder",
+    "GradleNotFoundError",
+    "GradleTimeoutError",
     "InvalidTemplateError",
     "NetworkError",
     "ProjectConfig",
