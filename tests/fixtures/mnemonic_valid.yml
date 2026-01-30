@@ -1,0 +1,21 @@
+package_name: com.example.mygame
+app_name: My Game
+version_code: 1
+version_name: "1.0.0"
+
+image:
+  format: webp
+  quality: high
+  lossless_alpha: true
+
+video:
+  codec: h264
+  profile: baseline
+  audio_codec: aac
+
+encoding:
+  target: utf-8
+
+timeouts:
+  ffmpeg: 300
+  gradle: 1800
