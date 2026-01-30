@@ -35,9 +35,20 @@ class TestDoctorCommand:
     """doctorコマンドのテスト"""
 
     def test_doctor_runs(self) -> None:
-        """doctorコマンドが正常終了する"""
+        """doctorコマンドが実行される"""
         result = runner.invoke(app, ["doctor"])
-        assert result.exit_code == 0
+        # exit_code は環境に依存（必須ツールが揃っていれば0、不足していれば1）
+        assert result.exit_code in (0, 1)
+
+    def test_doctor_shows_table(self) -> None:
+        """doctorコマンドがテーブルを表示する"""
+        result = runner.invoke(app, ["doctor"])
+        assert "依存ツールチェック結果" in result.stdout
+
+    def test_doctor_shows_python(self) -> None:
+        """doctorコマンドがPythonチェック結果を表示する"""
+        result = runner.invoke(app, ["doctor"])
+        assert "Python" in result.stdout
 
 class TestInfoCommand:
     """infoコマンドのテスト"""

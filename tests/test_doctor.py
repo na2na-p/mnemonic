@@ -215,20 +215,6 @@ class TestDependencyCheckerProtocol:
         """DependencyCheckerにcheck_oneメソッドが定義されている"""
         assert hasattr(DependencyChecker, "check_one")
 
-class TestCheckAllDependencies:
-    """check_all_dependencies関数のテスト"""
-
-    def test_check_all_dependencies_is_callable(self) -> None:
-        """check_all_dependenciesは呼び出し可能"""
-        assert callable(check_all_dependencies)
-
-    def test_check_all_dependencies_raises_not_implemented(self) -> None:
-        """check_all_dependenciesはNotImplementedErrorを発生させる"""
-        with pytest.raises(NotImplementedError) as exc_info:
-            check_all_dependencies()
-
-        assert "F-05-03" in str(exc_info.value)
-
 class TestCheckDependency:
     """check_dependency関数のテスト"""
 
@@ -236,16 +222,110 @@ class TestCheckDependency:
         """check_dependencyは呼び出し可能"""
         assert callable(check_dependency)
 
-    def test_check_dependency_raises_not_implemented(self) -> None:
-        """check_dependencyはNotImplementedErrorを発生させる"""
+    def test_check_dependency_returns_check_result(self) -> None:
+        """check_dependencyはCheckResultを返す"""
         test_info = DependencyInfo(
-            name="Test",
-            command="test",
+            name="Python",
+            command="python",
             version_flag="--version",
             required=True,
         )
 
-        with pytest.raises(NotImplementedError) as exc_info:
-            check_dependency(test_info)
+        result = check_dependency(test_info)
 
-        assert "F-05-03" in str(exc_info.value)
+        assert isinstance(result, CheckResult)
+        assert result.name == "Python"
+
+    @pytest.mark.parametrize(
+        "command,version_flag,expected_found",
+        [
+            pytest.param(
+                "python",
+                "--version",
+                True,
+                id="正常系: Pythonが見つかる",
+            ),
+            pytest.param(
+                "nonexistent_command_xyz123",
+                "--version",
+                False,
+                id="異常系: 存在しないコマンド",
+            ),
+        ],
+    )
+    def test_check_dependency_found_status(
+        self,
+        command: str,
+        version_flag: str,
+        expected_found: bool,
+    ) -> None:
+        """コマンドの存在有無が正しく検出される"""
+        test_info = DependencyInfo(
+            name="Test",
+            command=command,
+            version_flag=version_flag,
+            required=True,
+        )
+
+        result = check_dependency(test_info)
+
+        assert result.found == expected_found
+
+    def test_check_dependency_extracts_version(self) -> None:
+        """バージョン情報が抽出される"""
+        test_info = DependencyInfo(
+            name="Python",
+            command="python",
+            version_flag="--version",
+            required=True,
+        )
+
+        result = check_dependency(test_info)
+
+        assert result.found is True
+        assert result.version is not None
+        assert len(result.version) > 0
+
+    def test_check_dependency_not_found_has_message(self) -> None:
+        """コマンドが見つからない場合はメッセージが設定される"""
+        test_info = DependencyInfo(
+            name="NotFound",
+            command="nonexistent_command_xyz123",
+            version_flag="--version",
+            required=True,
+        )
+
+        result = check_dependency(test_info)
+
+        assert result.found is False
+        assert result.message is not None
+
+class TestCheckAllDependencies:
+    """check_all_dependencies関数のテスト"""
+
+    def test_check_all_dependencies_is_callable(self) -> None:
+        """check_all_dependenciesは呼び出し可能"""
+        assert callable(check_all_dependencies)
+
+    def test_check_all_dependencies_returns_list(self) -> None:
+        """check_all_dependenciesはリストを返す"""
+        results = check_all_dependencies()
+
+        assert isinstance(results, list)
+        assert len(results) == len(DEPENDENCIES)
+
+    def test_check_all_dependencies_contains_check_results(self) -> None:
+        """check_all_dependenciesの結果は全てCheckResult型"""
+        results = check_all_dependencies()
+
+        for result in results:
+            assert isinstance(result, CheckResult)
+
+    def test_check_all_dependencies_covers_all_dependencies(self) -> None:
+        """check_all_dependenciesは全てのDEPENDENCIESをチェックする"""
+        results = check_all_dependencies()
+
+        result_names = {r.name for r in results}
+        expected_names = {d.name for d in DEPENDENCIES}
+
+        assert result_names == expected_names
