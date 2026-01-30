@@ -1,0 +1,1 @@
+"""Signer module for Mnemonic."""
