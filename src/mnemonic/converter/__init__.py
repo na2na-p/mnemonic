@@ -18,9 +18,11 @@ from mnemonic.converter.image import (
     TLGInfo,
     TLGVersion,
 )
+from mnemonic.converter.script import AdjustmentRule, ScriptAdjuster
 from mnemonic.converter.video import VideoConverter, VideoInfo
 
 __all__ = [
+    "AdjustmentRule",
     "BaseConverter",
     "ConversionResult",
     "ConversionStatus",
@@ -29,6 +31,7 @@ __all__ = [
     "EncodingDetector",
     "ImageConverter",
     "QualityPreset",
+    "ScriptAdjuster",
     "SUPPORTED_ENCODINGS",
     "TLGImageDecoder",
     "TLGInfo",
