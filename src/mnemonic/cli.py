@@ -176,23 +176,6 @@ def cache_info() -> None:
     console.print(Panel(table, border_style="blue"))
     raise typer.Exit(0)
 
-def _format_size(size_bytes: int) -> str:
-    """バイト数を人間が読みやすい形式に変換する"""
-    if size_bytes == 0:
-        return "0 B"
-
-    units = ["B", "KB", "MB", "GB"]
-    size = float(size_bytes)
-    unit_index = 0
-
-    while size >= 1024 and unit_index < len(units) - 1:
-        size /= 1024
-        unit_index += 1
-
-    if unit_index == 0:
-        return f"{int(size)} B"
-    return f"{size:.1f} {units[unit_index]}"
-
 def version_callback(value: bool) -> None:
     """バージョン表示コールバック"""
     if value:
