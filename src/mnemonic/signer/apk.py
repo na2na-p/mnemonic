@@ -264,3 +264,134 @@ class ApkSignerRunner(Protocol):
             apksignerコマンドのパス。見つからない場合はNone。
         """
         ...
+
+class DefaultApkSignerRunner:
+    """apksignerコマンドを実行するデフォルト実装
+
+    Android SDKのapksignerコマンドを使用してAPKファイルの
+    署名と検証を行います。
+    """
+
+    def sign(self, apk_path: Path, keystore_config: KeystoreConfig) -> Path:
+        """APKファイルに署名を適用する
+
+        指定されたAPKファイルに対してapksigner signを実行し、
+        キーストア設定を使用して署名を適用します。
+
+        Args:
+            apk_path: 署名対象のAPKファイルのパス
+            keystore_config: キーストア設定
+
+        Returns:
+            署名されたAPKファイルのパス
+
+        Raises:
+            ApkSignerError: APKファイルが存在しない、キーストアが存在しない、
+                          apksignerが見つからない、または署名処理に失敗した場合
+        """
+        if not apk_path.exists():
+            raise ApkSignerError(f"APK file not found: {apk_path}")
+
+        if not keystore_config.keystore_path.exists():
+            raise ApkSignerError(f"Keystore file not found: {keystore_config.keystore_path}")
+
+        apksigner_path = self.find_apksigner()
+        if apksigner_path is None:
+            raise ApkSignerError("apksigner command not found")
+
+        key_password = (
+            keystore_config.key_password
+            if keystore_config.key_password is not None
+            else keystore_config.keystore_password
+        )
+
+        result = subprocess.run(
+            [
+                str(apksigner_path),
+                "sign",
+                "--ks",
+                str(keystore_config.keystore_path),
+                "--ks-key-alias",
+                keystore_config.key_alias,
+                "--ks-pass",
+                f"pass:{keystore_config.keystore_password}",
+                "--key-pass",
+                f"pass:{key_password}",
+                str(apk_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            raise ApkSignerError(f"apksigner sign failed: {result.stderr}")
+
+        return apk_path
+
+    def verify(self, apk_path: Path) -> bool:
+        """APKファイルの署名を検証する
+
+        apksigner verifyコマンドを使用してAPKファイルの
+        署名の有効性を検証します。
+
+        Args:
+            apk_path: 検証対象のAPKファイルのパス
+
+        Returns:
+            署名が有効な場合はTrue、無効な場合はFalse
+
+        Raises:
+            ApkSignerError: ファイルが存在しない、apksignerが見つからない、
+                          またはコマンド実行中にエラーが発生した場合
+        """
+        if not apk_path.exists():
+            raise ApkSignerError(f"APK file not found: {apk_path}")
+
+        apksigner_path = self.find_apksigner()
+        if apksigner_path is None:
+            raise ApkSignerError("apksigner command not found")
+
+        try:
+            result = subprocess.run(
+                [str(apksigner_path), "verify", str(apk_path)],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except subprocess.SubprocessError as e:
+            raise ApkSignerError(f"apksigner verify failed: {e}") from e
+
+    def find_apksigner(self) -> Path | None:
+        """apksignerコマンドのパスを検索する
+
+        Android SDKのbuild-toolsディレクトリからapksignerコマンドを検索します。
+        複数のバージョンがある場合は最新バージョンを選択します。
+        ANDROID_HOMEが設定されていない、またはapksignerが見つからない場合は
+        システムPATHから検索します。
+
+        Returns:
+            apksignerコマンドのパス。見つからない場合はNone。
+        """
+        android_home = os.environ.get("ANDROID_HOME")
+
+        if android_home:
+            android_home_path = Path(android_home)
+            build_tools_dir = android_home_path / "build-tools"
+
+            if build_tools_dir.exists():
+                versions = sorted(
+                    [d for d in build_tools_dir.iterdir() if d.is_dir()],
+                    key=lambda x: x.name,
+                    reverse=True,
+                )
+
+                for version_dir in versions:
+                    apksigner_path = version_dir / "apksigner"
+                    if apksigner_path.exists():
+                        return apksigner_path
+
+        which_result = shutil.which("apksigner")
+        if which_result:
+            return Path(which_result)
+
+        return None
