@@ -4,6 +4,13 @@
 XP3アーカイブの操作と暗号化チェック機能を提供する。
 """
 
+from mnemonic.parser.assets import (
+    AssetFile,
+    AssetManifest,
+    AssetScanner,
+    AssetType,
+    ConversionAction,
+)
 from mnemonic.parser.detector import EngineType, GameDetector, GameStructure
 from mnemonic.parser.xp3 import (
     EncryptionInfo,
@@ -14,6 +21,11 @@ from mnemonic.parser.xp3 import (
 )
 
 __all__ = [
+    "AssetFile",
+    "AssetManifest",
+    "AssetScanner",
+    "AssetType",
+    "ConversionAction",
     "EncryptionInfo",
     "EncryptionType",
     "EngineType",
