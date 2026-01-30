@@ -1,1 +1,1 @@
-"""XP3パーサーモジュールのテストパッケージ"""
+"""Tests for parser module."""
