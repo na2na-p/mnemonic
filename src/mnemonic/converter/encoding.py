@@ -8,6 +8,8 @@ from pathlib import Path
 
 import chardet
 
+from .base import BaseConverter, ConversionResult, ConversionStatus
+
 SUPPORTED_ENCODINGS: tuple[str, ...] = (
     "shift_jis",
     "euc-jp",
@@ -177,3 +179,169 @@ class EncodingDetector:
 
         # エンコーディングが検出できなかった場合はバイナリファイルと判定
         return result.encoding is not None
+
+class EncodingConverter(BaseConverter):
+    """文字コード変換Converter
+
+    テキストファイルの文字コードを変換するためのConverterクラス。
+    ソースエンコーディングが指定されていない場合は自動検出を行う。
+
+    Attributes:
+        target_encoding: 変換先の文字コード（デフォルト: utf-8）
+        source_encoding: 変換元の文字コード（Noneの場合は自動検出）
+    """
+
+    def __init__(
+        self,
+        target_encoding: str = "utf-8",
+        source_encoding: str | None = None,
+    ) -> None:
+        """EncodingConverterを初期化する
+
+        Args:
+            target_encoding: 変換先の文字コード（デフォルト: utf-8）
+            source_encoding: 変換元の文字コード（Noneの場合は自動検出）
+        """
+        self._target_encoding = target_encoding
+        self._source_encoding = source_encoding
+        self._detector = EncodingDetector()
+
+    @property
+    def target_encoding(self) -> str:
+        """変換先の文字コードを返す"""
+        return self._target_encoding
+
+    @property
+    def source_encoding(self) -> str | None:
+        """変換元の文字コードを返す（Noneの場合は自動検出）"""
+        return self._source_encoding
+
+    @property
+    def supported_extensions(self) -> tuple[str, ...]:
+        """対応する拡張子のタプルを返す
+
+        Returns:
+            対応するテキストファイル拡張子のタプル
+        """
+        return (".ks", ".tjs", ".txt", ".csv", ".ini")
+
+    def can_convert(self, file_path: Path) -> bool:
+        """このConverterで変換可能なファイルかを判定する
+
+        拡張子がサポート対象であり、かつテキストファイルである場合にTrueを返す。
+
+        Args:
+            file_path: 判定対象のファイルパス
+
+        Returns:
+            変換可能な場合True、そうでない場合False
+        """
+        if file_path.suffix.lower() not in self.supported_extensions:
+            return False
+        if not file_path.exists():
+            return False
+        return self._detector.is_text_file(file_path)
+
+    def convert(self, source: Path, dest: Path) -> ConversionResult:
+        """ファイルの文字コードを変換する
+
+        指定された変換元ファイルを変換先文字コードに変換し、
+        変換先パスに出力する。
+
+        Args:
+            source: 変換元ファイルのパス
+            dest: 変換先ファイルのパス
+
+        Returns:
+            変換結果を表すConversionResultオブジェクト
+        """
+        if not source.exists():
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=f"変換元ファイルが見つかりません: {source}",
+            )
+
+        bytes_before = self._get_file_size(source)
+        data = source.read_bytes()
+
+        # ソースエンコーディングの決定
+        if self._source_encoding is not None:
+            source_encoding = self._source_encoding
+        else:
+            detection_result = self._detector.detect_bytes(data)
+            source_encoding = detection_result.encoding or "utf-8"
+
+        # 既にターゲットエンコーディングの場合はスキップ（BOMなしのUTF-8）
+        target_normalized = self._target_encoding.lower().replace("-", "_")
+        source_normalized = source_encoding.lower().replace("-", "_")
+        utf8_bom = b"\xef\xbb\xbf"
+        has_bom = data.startswith(utf8_bom)
+
+        if source_normalized == target_normalized and not has_bom:
+            return ConversionResult(
+                source_path=source,
+                dest_path=dest,
+                status=ConversionStatus.SKIPPED,
+                message="既にターゲットエンコーディングです",
+                bytes_before=bytes_before,
+                bytes_after=bytes_before,
+            )
+
+        # BOM除去
+        if has_bom:
+            data = data[len(utf8_bom) :]
+
+        # 変換実行
+        try:
+            text = data.decode(source_encoding)
+            result_bytes = text.encode(self._target_encoding)
+        except (UnicodeDecodeError, UnicodeEncodeError) as e:
+            return ConversionResult(
+                source_path=source,
+                dest_path=None,
+                status=ConversionStatus.FAILED,
+                message=f"エンコーディング変換に失敗しました: {e}",
+                bytes_before=bytes_before,
+            )
+
+        # 出力先ディレクトリを作成
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(result_bytes)
+        bytes_after = self._get_file_size(dest)
+
+        return ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
+
+    def convert_bytes(self, data: bytes) -> tuple[bytes, str]:
+        """バイトデータの文字コードを変換する
+
+        Args:
+            data: 変換対象のバイトデータ
+
+        Returns:
+            (変換後のバイトデータ, 検出されたソースエンコーディング)のタプル
+        """
+        # ソースエンコーディングの決定
+        if self._source_encoding is not None:
+            source_encoding = self._source_encoding
+        else:
+            detection_result = self._detector.detect_bytes(data)
+            source_encoding = detection_result.encoding or "utf-8"
+
+        # BOM除去
+        utf8_bom = b"\xef\xbb\xbf"
+        if data.startswith(utf8_bom):
+            data = data[len(utf8_bom) :]
+
+        # デコードしてターゲットエンコーディングでエンコード
+        text = data.decode(source_encoding)
+        result_bytes = text.encode(self._target_encoding)
+
+        return result_bytes, source_encoding
