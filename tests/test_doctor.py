@@ -11,6 +11,7 @@ from mnemonic.doctor import (
     check_dependency,
 )
 
+
 class TestCheckResult:
     """CheckResult データクラスのテスト"""
 
@@ -78,6 +79,7 @@ class TestCheckResult:
 
         with pytest.raises(AttributeError):
             result.name = "Modified"  # type: ignore[misc]
+
 
 class TestDependencyInfo:
     """DependencyInfo データクラスのテスト"""
@@ -157,6 +159,7 @@ class TestDependencyInfo:
         with pytest.raises(AttributeError):
             info.name = "Modified"  # type: ignore[misc]
 
+
 class TestDependencies:
     """DEPENDENCIESリストのテスト"""
 
@@ -165,8 +168,8 @@ class TestDependencies:
         assert len(DEPENDENCIES) > 0
 
     def test_dependencies_count(self) -> None:
-        """DEPENDENCIESは6つの依存ツールを含む"""
-        assert len(DEPENDENCIES) == 6
+        """DEPENDENCIESは5つの依存ツールを含む"""
+        assert len(DEPENDENCIES) == 5
 
     @pytest.mark.parametrize(
         "expected_name,expected_command,expected_required",
@@ -176,7 +179,6 @@ class TestDependencies:
             pytest.param("Android SDK", "sdkmanager", True, id="Android SDK"),
             pytest.param("Android NDK", "ndk-build", True, id="Android NDK"),
             pytest.param("FFmpeg", "ffmpeg", True, id="FFmpeg"),
-            pytest.param("Gradle", "gradle", True, id="Gradle"),
         ],
     )
     def test_dependencies_contains_required_tools(
@@ -204,6 +206,7 @@ class TestDependencies:
         for dep in DEPENDENCIES:
             assert isinstance(dep, DependencyInfo)
 
+
 class TestDependencyCheckerProtocol:
     """DependencyChecker Protocolのテスト"""
 
@@ -214,6 +217,7 @@ class TestDependencyCheckerProtocol:
     def test_protocol_has_check_one_method(self) -> None:
         """DependencyCheckerにcheck_oneメソッドが定義されている"""
         assert hasattr(DependencyChecker, "check_one")
+
 
 class TestCheckDependency:
     """check_dependency関数のテスト"""
@@ -299,6 +303,7 @@ class TestCheckDependency:
 
         assert result.found is False
         assert result.message is not None
+
 
 class TestCheckAllDependencies:
     """check_all_dependencies関数のテスト"""
