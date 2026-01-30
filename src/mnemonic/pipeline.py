@@ -29,6 +29,7 @@ from mnemonic.converter.image import ImageConverter
 from mnemonic.converter.manager import ConversionManager
 from mnemonic.converter.video import VideoConverter
 from mnemonic.parser.detector import GameDetector, GameStructure
+from mnemonic.parser.exe import EmbeddedXP3Extractor
 from mnemonic.parser.xp3 import XP3Archive, XP3EncryptionChecker
 from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, KeystoreConfig
 
@@ -338,12 +339,11 @@ class BuildPipeline:
         suffix = input_path.suffix.lower()
 
         if suffix == ".exe":
-            # EXEファイルのサポートは将来の実装課題
-            # 現時点ではXP3ファイルの直接入力のみサポート
-            raise ValueError(
-                f"EXEファイルの直接入力は現在サポートされていません: {input_path}。"
-                "XP3ファイルを直接指定してください。"
-            )
+            # EXEの場合: 埋め込みXP3を検出
+            extractor = EmbeddedXP3Extractor(input_path)
+            xp3_list = extractor.find_embedded_xp3()
+            if not xp3_list:
+                raise ValueError(f"EXEファイル内にXP3アーカイブが見つかりません: {input_path}")
         elif suffix == ".xp3":
             # XP3の場合: 暗号化チェック
             checker = XP3EncryptionChecker(input_path)
@@ -353,19 +353,31 @@ class BuildPipeline:
         """EXTRACTフェーズ: アセット抽出
 
         XP3アーカイブを展開し、ゲーム構造を解析する。
+        EXEファイルの場合は、埋め込みXP3を抽出してから展開する。
 
         Raises:
             ValueError: 抽出に失敗した場合
         """
         input_path = self._config.input_path
+        suffix = input_path.suffix.lower()
 
         # 一時ディレクトリ作成
         self._extract_dir = Path(tempfile.mkdtemp(prefix="mnemonic_extract_"))
         self._temp_dirs.append(self._extract_dir)
 
-        # XP3を展開
-        archive = XP3Archive(input_path)
-        archive.extract_all(self._extract_dir)
+        if suffix == ".exe":
+            # EXEから埋め込みXP3を抽出
+            extractor = EmbeddedXP3Extractor(input_path)
+            xp3_files = extractor.extract_all(self._extract_dir)
+
+            # 各XP3を展開
+            for xp3_file in xp3_files:
+                archive = XP3Archive(xp3_file)
+                archive.extract_all(self._extract_dir)
+        else:
+            # XP3を直接展開
+            archive = XP3Archive(input_path)
+            archive.extract_all(self._extract_dir)
 
         # ゲーム構造解析
         detector = GameDetector(self._extract_dir)
