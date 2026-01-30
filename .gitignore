@@ -3,3 +3,25 @@ CLAUDE.md
 .mcp*.json
 .serena
 .idea
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Coverage
+.coverage
+htmlcov/
