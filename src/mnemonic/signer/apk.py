@@ -443,3 +443,55 @@ class PasswordProvider(Protocol):
             環境変数に設定されたパスワード。未設定の場合はNone。
         """
         ...
+
+class DefaultPasswordProvider:
+    """キーストアパスワードを取得するデフォルト実装
+
+    対話的入力（getpass）と環境変数からのパスワード取得をサポートします。
+    """
+
+    def get_password(self, prompt: str = "Enter keystore password: ") -> str:
+        """対話的にパスワードを取得する
+
+        ユーザーに対してプロンプトを表示し、パスワードの入力を求めます。
+        入力されたパスワードは画面に表示されません。
+
+        Args:
+            prompt: パスワード入力を求める際に表示するプロンプト文字列
+
+        Returns:
+            入力されたパスワード文字列
+
+        Raises:
+            PasswordError: パスワードが空、または入力がキャンセルされた場合
+        """
+        import getpass
+
+        try:
+            password = getpass.getpass(prompt)
+        except KeyboardInterrupt as e:
+            raise PasswordError("Password input cancelled by user interrupt") from e
+        except EOFError as e:
+            raise PasswordError("Password input failed: EOF received") from e
+
+        if not password:
+            raise PasswordError("Password cannot be empty")
+
+        return password
+
+    def get_password_from_env(self, env_var: str = "MNEMONIC_KEYSTORE_PASS") -> str | None:
+        """環境変数からパスワードを取得する
+
+        指定された環境変数からパスワードを取得します。
+        環境変数が設定されていない、または空文字列の場合はNoneを返します。
+
+        Args:
+            env_var: パスワードが格納されている環境変数名
+
+        Returns:
+            環境変数に設定されたパスワード。未設定または空の場合はNone。
+        """
+        password = os.environ.get(env_var)
+        if not password:
+            return None
+        return password
