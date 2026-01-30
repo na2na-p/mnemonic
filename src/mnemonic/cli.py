@@ -1,5 +1,6 @@
 """CLI entry point for Mnemonic."""
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -10,8 +11,21 @@ from rich.table import Table
 from mnemonic import __version__
 from mnemonic.cache import clear_cache, get_cache_info
 from mnemonic.doctor import check_all_dependencies
+from mnemonic.info import analyze_game
 
 app = typer.Typer(help="吉里吉里ゲームをAndroid APKに変換するCLIツール")
+console = Console()
+
+def _format_size(size_bytes: int) -> str:
+    """バイト数を人間が読みやすい形式に変換する"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 @app.command()
 def build(
@@ -64,6 +78,50 @@ def info(
     input_path: Annotated[str, typer.Argument(help="解析対象パス")],
 ) -> None:
     """ゲーム構成を解析・表示する"""
+    path = Path(input_path)
+
+    if not path.exists():
+        console.print(f"[red]Error: パスが見つかりません: {input_path}[/red]")
+        raise typer.Exit(1)
+
+    if not path.is_dir():
+        console.print(f"[red]Error: ディレクトリを指定してください: {input_path}[/red]")
+        raise typer.Exit(1)
+
+    game_info = analyze_game(path)
+
+    table = Table(title="Game Info")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="green")
+
+    table.add_row("Engine", game_info.engine)
+    table.add_row("Encoding", game_info.detected_encoding if game_info.detected_encoding else "N/A")
+
+    table.add_section()
+    table.add_row("Scripts", f"{game_info.scripts.count} files")
+    if game_info.scripts.extensions:
+        table.add_row("  Extensions", ", ".join(game_info.scripts.extensions))
+    table.add_row("  Total Size", _format_size(game_info.scripts.total_size_bytes))
+
+    table.add_section()
+    table.add_row("Images", f"{game_info.images.count} files")
+    if game_info.images.extensions:
+        table.add_row("  Extensions", ", ".join(game_info.images.extensions))
+    table.add_row("  Total Size", _format_size(game_info.images.total_size_bytes))
+
+    table.add_section()
+    table.add_row("Audio", f"{game_info.audio.count} files")
+    if game_info.audio.extensions:
+        table.add_row("  Extensions", ", ".join(game_info.audio.extensions))
+    table.add_row("  Total Size", _format_size(game_info.audio.total_size_bytes))
+
+    table.add_section()
+    table.add_row("Video", f"{game_info.video.count} files")
+    if game_info.video.extensions:
+        table.add_row("  Extensions", ", ".join(game_info.video.extensions))
+    table.add_row("  Total Size", _format_size(game_info.video.total_size_bytes))
+
+    console.print(table)
     raise typer.Exit(0)
 
 # cache サブコマンドグループ
