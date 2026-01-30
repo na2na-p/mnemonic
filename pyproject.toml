@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mnemonic = "mnemonic.cli:main"
+mnemonic = "mnemonic.cli:app"
 
 [build-system]
 requires = ["hatchling"]
