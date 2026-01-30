@@ -10,6 +10,7 @@ from mnemonic.converter.encoding import (
     EncodingDetectionResult,
     EncodingDetector,
 )
+from mnemonic.converter.image import TLGImageDecoder, TLGInfo, TLGVersion
 
 __all__ = [
     "BaseConverter",
@@ -18,4 +19,7 @@ __all__ = [
     "EncodingDetectionResult",
     "EncodingDetector",
     "SUPPORTED_ENCODINGS",
+    "TLGImageDecoder",
+    "TLGInfo",
+    "TLGVersion",
 ]
