@@ -395,3 +395,51 @@ class DefaultApkSignerRunner:
             return Path(which_result)
 
         return None
+
+class PasswordError(Exception):
+    """パスワード取得に関する基本例外クラス
+
+    キーストアパスワードの取得時に発生するエラーを表します。
+    環境変数が未設定、対話的入力の失敗、キャンセルなどを含みます。
+    """
+
+    pass
+
+class PasswordProvider(Protocol):
+    """キーストアパスワードを取得するためのインターフェース
+
+    APK署名時に必要なキーストアパスワードを
+    様々なソース（対話的入力、環境変数など）から取得する機能を
+    抽象化したProtocolです。
+    """
+
+    def get_password(self, prompt: str = "Enter keystore password: ") -> str:
+        """対話的にパスワードを取得する
+
+        ユーザーに対してプロンプトを表示し、パスワードの入力を求めます。
+        入力されたパスワードは画面に表示されません。
+
+        Args:
+            prompt: パスワード入力を求める際に表示するプロンプト文字列
+
+        Returns:
+            入力されたパスワード文字列
+
+        Raises:
+            PasswordError: パスワードの取得に失敗した場合
+        """
+        ...
+
+    def get_password_from_env(self, env_var: str = "MNEMONIC_KEYSTORE_PASS") -> str | None:
+        """環境変数からパスワードを取得する
+
+        指定された環境変数からパスワードを取得します。
+        環境変数が設定されていない場合はNoneを返します。
+
+        Args:
+            env_var: パスワードが格納されている環境変数名
+
+        Returns:
+            環境変数に設定されたパスワード。未設定の場合はNone。
+        """
+        ...

@@ -9,6 +9,8 @@ from mnemonic.signer.apk import (
     DefaultApkSignerRunner,
     DefaultZipalignRunner,
     KeystoreConfig,
+    PasswordError,
+    PasswordProvider,
     ZipalignError,
     ZipalignRunner,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "DefaultApkSignerRunner",
     "DefaultZipalignRunner",
     "KeystoreConfig",
+    "PasswordError",
+    "PasswordProvider",
     "ZipalignError",
     "ZipalignRunner",
 ]
