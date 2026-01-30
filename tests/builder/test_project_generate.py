@@ -114,11 +114,11 @@ class TestProjectGeneratorValidateTemplate:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
-            generator.validate_template()
+        result = generator.validate_template()
+        assert result is True
 
-    def test_validate_template_returns_false_for_missing_files(self, tmp_path: Path) -> None:
-        """異常系: 必要なファイルが欠けている場合にFalseまたはInvalidTemplateErrorを返す"""
+    def test_validate_template_raises_error_for_missing_files(self, tmp_path: Path) -> None:
+        """異常系: 必要なファイルが欠けている場合にInvalidTemplateErrorを返す"""
         template_path = tmp_path / "incomplete_template.zip"
 
         with zipfile.ZipFile(template_path, "w") as zf:
@@ -126,7 +126,7 @@ class TestProjectGeneratorValidateTemplate:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidTemplateError):
             generator.validate_template()
 
     @pytest.mark.parametrize(
@@ -174,8 +174,12 @@ class TestProjectGeneratorValidateTemplate:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
-            generator.validate_template()
+        if expected_valid:
+            result = generator.validate_template()
+            assert result is True
+        else:
+            with pytest.raises(InvalidTemplateError):
+                generator.validate_template()
 
 class TestProjectGeneratorGenerate:
     """ProjectGenerator.generateのテスト"""
@@ -235,8 +239,13 @@ class TestProjectGeneratorGenerate:
 
         generator = ProjectGenerator(template_path=valid_template)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        result = generator.generate(output_dir=output_dir, config=valid_config)
+
+        assert result == output_dir
+        assert (output_dir / "app" / "build.gradle").exists()
+        assert (output_dir / "app" / "src" / "main" / "AndroidManifest.xml").exists()
+        assert (output_dir / "settings.gradle").exists()
+        assert (output_dir / "build.gradle").exists()
 
     def test_generate_sets_package_name_correctly(
         self,
@@ -249,9 +258,18 @@ class TestProjectGeneratorGenerate:
         output_dir.mkdir()
 
         generator = ProjectGenerator(template_path=valid_template)
+        generator.generate(output_dir=output_dir, config=valid_config)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        # AndroidManifest.xmlのpackage属性を検証
+        manifest_path = output_dir / "app" / "src" / "main" / "AndroidManifest.xml"
+        manifest_content = manifest_path.read_text(encoding="utf-8")
+        assert f'package="{valid_config.package_name}"' in manifest_content
+
+        # build.gradleのapplicationIdとnamespaceを検証
+        gradle_path = output_dir / "app" / "build.gradle"
+        gradle_content = gradle_path.read_text(encoding="utf-8")
+        assert f'applicationId "{valid_config.package_name}"' in gradle_content
+        assert f'namespace "{valid_config.package_name}"' in gradle_content
 
     def test_generate_sets_app_name_correctly(
         self,
@@ -264,9 +282,11 @@ class TestProjectGeneratorGenerate:
         output_dir.mkdir()
 
         generator = ProjectGenerator(template_path=valid_template)
+        generator.generate(output_dir=output_dir, config=valid_config)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        manifest_path = output_dir / "app" / "src" / "main" / "AndroidManifest.xml"
+        manifest_content = manifest_path.read_text(encoding="utf-8")
+        assert f'android:label="{valid_config.app_name}"' in manifest_content
 
     def test_generate_sets_version_code_and_name_correctly(
         self,
@@ -279,9 +299,12 @@ class TestProjectGeneratorGenerate:
         output_dir.mkdir()
 
         generator = ProjectGenerator(template_path=valid_template)
+        generator.generate(output_dir=output_dir, config=valid_config)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        gradle_path = output_dir / "app" / "build.gradle"
+        gradle_content = gradle_path.read_text(encoding="utf-8")
+        assert f"versionCode {valid_config.version_code}" in gradle_content
+        assert f'versionName "{valid_config.version_name}"' in gradle_content
 
     def test_generate_updates_android_manifest(
         self,
@@ -294,9 +317,16 @@ class TestProjectGeneratorGenerate:
         output_dir.mkdir()
 
         generator = ProjectGenerator(template_path=valid_template)
+        generator.generate(output_dir=output_dir, config=valid_config)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        manifest_path = output_dir / "app" / "src" / "main" / "AndroidManifest.xml"
+        manifest_content = manifest_path.read_text(encoding="utf-8")
+
+        # 元のテンプレート値が置換されていることを確認
+        assert "com.krkrsdl2.template" not in manifest_content
+        assert "Template App" not in manifest_content
+        assert valid_config.package_name in manifest_content
+        assert valid_config.app_name in manifest_content
 
     def test_generate_updates_build_gradle(
         self,
@@ -309,9 +339,16 @@ class TestProjectGeneratorGenerate:
         output_dir.mkdir()
 
         generator = ProjectGenerator(template_path=valid_template)
+        generator.generate(output_dir=output_dir, config=valid_config)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=valid_config)
+        gradle_path = output_dir / "app" / "build.gradle"
+        gradle_content = gradle_path.read_text(encoding="utf-8")
+
+        # 元のテンプレート値が置換されていることを確認
+        assert "com.krkrsdl2.template" not in gradle_content
+        # versionCode が新しい値に更新されていることを確認
+        assert f"versionCode {valid_config.version_code}" in gradle_content
+        assert 'versionName "1.0"' not in gradle_content
 
     @pytest.mark.parametrize(
         "package_name,app_name,version_code,version_name",
@@ -360,8 +397,22 @@ class TestProjectGeneratorGenerate:
         )
         generator = ProjectGenerator(template_path=valid_template)
 
-        with pytest.raises(NotImplementedError):
-            generator.generate(output_dir=output_dir, config=config)
+        result = generator.generate(output_dir=output_dir, config=config)
+
+        assert result == output_dir
+
+        # AndroidManifest.xmlの検証
+        manifest_path = output_dir / "app" / "src" / "main" / "AndroidManifest.xml"
+        manifest_content = manifest_path.read_text(encoding="utf-8")
+        assert f'package="{package_name}"' in manifest_content
+        assert f'android:label="{app_name}"' in manifest_content
+
+        # build.gradleの検証
+        gradle_path = output_dir / "app" / "build.gradle"
+        gradle_content = gradle_path.read_text(encoding="utf-8")
+        assert f'applicationId "{package_name}"' in gradle_content
+        assert f"versionCode {version_code}" in gradle_content
+        assert f'versionName "{version_name}"' in gradle_content
 
 class TestProjectGeneratorErrorCases:
     """ProjectGenerator エラーケースのテスト"""
@@ -385,7 +436,7 @@ class TestProjectGeneratorErrorCases:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(InvalidTemplateError):
             generator.generate(output_dir=output_dir, config=config)
 
     def test_generate_handles_nonexistent_output_directory(self, tmp_path: Path) -> None:
@@ -395,6 +446,8 @@ class TestProjectGeneratorErrorCases:
         with zipfile.ZipFile(template_path, "w") as zf:
             zf.writestr("app/build.gradle", "android { }")
             zf.writestr("app/src/main/AndroidManifest.xml", "<manifest />")
+            zf.writestr("settings.gradle", "include ':app'")
+            zf.writestr("build.gradle", "buildscript { }")
 
         output_dir = tmp_path / "nonexistent" / "output"
 
@@ -407,7 +460,7 @@ class TestProjectGeneratorErrorCases:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ProjectGenerationError):
             generator.generate(output_dir=output_dir, config=config)
 
     @pytest.mark.parametrize(
@@ -452,6 +505,8 @@ class TestProjectGeneratorErrorCases:
         with zipfile.ZipFile(template_path, "w") as zf:
             zf.writestr("app/build.gradle", "android { }")
             zf.writestr("app/src/main/AndroidManifest.xml", "<manifest />")
+            zf.writestr("settings.gradle", "include ':app'")
+            zf.writestr("build.gradle", "buildscript { }")
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
@@ -465,7 +520,7 @@ class TestProjectGeneratorErrorCases:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(expected_error_type):
             generator.generate(output_dir=output_dir, config=config)
 
     def test_generate_raises_error_when_template_not_exists(self, tmp_path: Path) -> None:
@@ -483,7 +538,7 @@ class TestProjectGeneratorErrorCases:
 
         generator = ProjectGenerator(template_path=template_path)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(ProjectGenerationError):
             generator.generate(output_dir=output_dir, config=config)
 
 class TestProjectGenerationExceptions:
