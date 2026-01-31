@@ -531,6 +531,9 @@ class BuildPipeline:
             else base_name
         )
 
+        # アイコンを検索
+        icon_path = self._find_game_icon()
+
         # APKマージビルド
         unsigned_apk_path = self._project_dir / "app-unsigned.apk"
 
@@ -540,6 +543,7 @@ class BuildPipeline:
             package_name=package_name,
             app_name=app_name,
             output_path=unsigned_apk_path,
+            icon_path=icon_path,
         )
 
         builder = ApkMergeBuilder()
@@ -577,6 +581,31 @@ class BuildPipeline:
             return builder.find_base_apk_in_template(extract_dir)
         except zipfile.BadZipFile:
             return None
+
+    def _find_game_icon(self) -> Path | None:
+        """ゲームアイコンを検索する
+
+        抽出ディレクトリからアイコンファイルを検索します。
+        krkr/吉里吉里ゲームでよく使われるアイコンファイル名を優先的に検索します。
+
+        Returns:
+            アイコンファイルのパス。見つからない場合はNone。
+        """
+        if self._extract_dir is None:
+            return None
+
+        # 優先順位の高いファイル名から検索
+        icon_names = ["icon.png", "icon.ico", "icon.bmp"]
+        for name in icon_names:
+            icon_path = self._extract_dir / name
+            if icon_path.exists():
+                return icon_path
+
+        # 任意のicoファイルを検索
+        for ico_file in self._extract_dir.glob("*.ico"):
+            return ico_file
+
+        return None
 
     def _execute_sign(self) -> None:
         """SIGNフェーズ: APK署名
