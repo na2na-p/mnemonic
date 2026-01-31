@@ -10,17 +10,15 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import mnemonic.cache as cache_module
-from mnemonic.builder.gradle import GradleBuilder
+from mnemonic.builder.apk_merge import ApkMergeBuilder, ApkMergeConfig
 from mnemonic.builder.template import (
-    AssetPlacer,
-    ProjectConfig,
-    ProjectGenerator,
     TemplateCache,
     TemplateDownloader,
 )
@@ -469,7 +467,7 @@ class BuildPipeline:
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
 
-        Androidプロジェクトを生成し、Gradleでビルドする。
+        テンプレートに含まれるベースAPKにassetsを追加してAPKをマージする。
 
         Raises:
             ValueError: 変換フェーズが完了していない、またはビルド失敗の場合
@@ -509,6 +507,11 @@ class BuildPipeline:
         if template_path is None:
             raise ValueError("テンプレートが利用できません。オンラインモードで再実行してください。")
 
+        # テンプレートからベースAPKを取得
+        base_apk_path = self._find_base_apk_in_template(template_path)
+        if base_apk_path is None:
+            raise ValueError("テンプレート内にベースAPKが見つかりません。")
+
         # タイトルからパッケージ名を生成（フォールバック: ファイル名）
         if self._game_structure and self._game_structure.title:
             base_name = self._game_structure.title
@@ -522,31 +525,52 @@ class BuildPipeline:
             else base_name
         )
 
-        # プロジェクト生成
-        project_config = ProjectConfig(
+        # APKマージビルド
+        unsigned_apk_path = self._project_dir / "app-unsigned.apk"
+
+        merge_config = ApkMergeConfig(
+            base_apk_path=base_apk_path,
+            assets_dir=self._convert_dir,
             package_name=package_name,
             app_name=app_name,
-            version_code=1,
-            version_name="1.0.0",
+            output_path=unsigned_apk_path,
         )
 
-        generator = ProjectGenerator(template_path)
-        generator.generate(self._project_dir, project_config)
-
-        # アセット配置
-        placer = AssetPlacer(self._project_dir)
-        assets_dir = self._project_dir / "app" / "src" / "main" / "assets"
-        assets_dir.mkdir(parents=True, exist_ok=True)
-        placer.place_assets(self._convert_dir)
-
-        # Gradleビルド
-        builder = GradleBuilder(self._project_dir, timeout=self._config.gradle_timeout)
-        result = builder.build("release")
+        builder = ApkMergeBuilder()
+        result = builder.merge(merge_config)
 
         if not result.success or result.apk_path is None:
-            raise ValueError(f"Gradleビルドに失敗しました: {result.output_log}")
+            raise ValueError(f"APKマージに失敗しました: {result.error_message}")
 
         self._unsigned_apk = result.apk_path
+
+    def _find_base_apk_in_template(self, template_path: Path) -> Path | None:
+        """テンプレートからベースAPKを検索する
+
+        テンプレートZIPファイルを展開し、ベースAPKを検索します。
+
+        Args:
+            template_path: テンプレートZIPファイルのパス
+
+        Returns:
+            ベースAPKのパス。見つからない場合はNone。
+        """
+        if not template_path.exists():
+            return None
+
+        # テンプレートを一時ディレクトリに展開
+        extract_dir = Path(tempfile.mkdtemp(prefix="mnemonic_template_"))
+        self._temp_dirs.append(extract_dir)
+
+        try:
+            with zipfile.ZipFile(template_path, "r") as zf:
+                zf.extractall(extract_dir)
+
+            # APKファイルを検索
+            builder = ApkMergeBuilder()
+            return builder.find_base_apk_in_template(extract_dir)
+        except zipfile.BadZipFile:
+            return None
 
     def _execute_sign(self) -> None:
         """SIGNフェーズ: APK署名
@@ -585,8 +609,71 @@ class BuildPipeline:
             signer.sign(output_path, keystore_config)
             aligned_apk.unlink()
         else:
-            # 署名なし（デバッグ用）
-            shutil.move(str(aligned_apk), str(output_path))
+            # デバッグ用キーストアで署名
+            debug_keystore = self._create_debug_keystore()
+            debug_config = KeystoreConfig(
+                keystore_path=debug_keystore,
+                key_alias="debug",
+                keystore_password="android",
+            )
+            signer = DefaultApkSignerRunner()
+            shutil.copy2(aligned_apk, output_path)
+            signer.sign(output_path, debug_config)
+            aligned_apk.unlink()
+
+    def _create_debug_keystore(self) -> Path:
+        """デバッグ用キーストアを作成する
+
+        keytool コマンドを使用してデバッグ用の自己署名キーストアを生成します。
+
+        Returns:
+            生成されたキーストアのパス
+
+        Raises:
+            ValueError: keytool コマンドが見つからない場合
+        """
+        import subprocess
+
+        debug_keystore = Path(tempfile.mkdtemp(prefix="mnemonic_keystore_")) / "debug.keystore"
+        self._temp_dirs.append(debug_keystore.parent)
+
+        keytool_cmd = [
+            "keytool",
+            "-genkeypair",
+            "-v",
+            "-keystore",
+            str(debug_keystore),
+            "-storepass",
+            "android",
+            "-alias",
+            "debug",
+            "-keypass",
+            "android",
+            "-keyalg",
+            "RSA",
+            "-keysize",
+            "2048",
+            "-validity",
+            "10000",
+            "-dname",
+            "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US",
+        ]
+
+        try:
+            result = subprocess.run(
+                keytool_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                raise ValueError(f"keytool failed: {result.stderr}")
+        except FileNotFoundError as e:
+            raise ValueError("keytool command not found. Please install JDK.") from e
+        except subprocess.TimeoutExpired as e:
+            raise ValueError("keytool command timed out.") from e
+
+        return debug_keystore
 
     def _sanitize_name(self, name: str) -> str:
         """パッケージ名に使用できる形式に変換

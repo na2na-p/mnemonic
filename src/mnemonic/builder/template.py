@@ -207,6 +207,9 @@ class ProjectGenerator:
         # build.gradle または build.gradle.kts の更新
         self._update_build_gradle(output_dir, config)
 
+        # リソースファイルの生成
+        self._generate_resources(output_dir, config)
+
         return output_dir
 
     def validate_template(self) -> bool:
@@ -395,6 +398,112 @@ class ProjectGenerator:
             gradle_path.write_text(content, encoding="utf-8")
         except OSError as e:
             raise ProjectGenerationError(f"Failed to update build.gradle: {e}") from e
+
+    def _generate_resources(self, output_dir: Path, config: ProjectConfig) -> None:
+        """Androidリソースファイルを生成する
+
+        Args:
+            output_dir: プロジェクトディレクトリ
+            config: プロジェクト設定
+
+        Raises:
+            ProjectGenerationError: リソース生成に失敗した場合
+        """
+        res_dir = output_dir / "app" / "src" / "main" / "res"
+
+        try:
+            # values/strings.xml を生成
+            values_dir = res_dir / "values"
+            values_dir.mkdir(parents=True, exist_ok=True)
+
+            strings_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">{config.app_name}</string>
+</resources>
+"""
+            (values_dir / "strings.xml").write_text(strings_xml, encoding="utf-8")
+
+            # mipmap ディレクトリにデフォルトアイコンを生成
+            # 最小限の有効なPNG（1x1ピクセル、透明）
+            minimal_png = bytes(
+                [
+                    0x89,
+                    0x50,
+                    0x4E,
+                    0x47,
+                    0x0D,
+                    0x0A,
+                    0x1A,
+                    0x0A,  # PNG signature
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x0D,
+                    0x49,
+                    0x48,
+                    0x44,
+                    0x52,  # IHDR chunk
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x01,  # 1x1 pixel
+                    0x08,
+                    0x06,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x1F,
+                    0x15,
+                    0xC4,  # RGBA, etc
+                    0x89,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x0A,
+                    0x49,
+                    0x44,
+                    0x41,  # IDAT chunk
+                    0x54,
+                    0x78,
+                    0x9C,
+                    0x63,
+                    0x00,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x05,
+                    0x00,
+                    0x01,
+                    0x0D,
+                    0x0A,
+                    0x2D,
+                    0xB4,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x49,
+                    0x45,
+                    0x4E,
+                    0x44,
+                    0xAE,  # IEND chunk
+                    0x42,
+                    0x60,
+                    0x82,
+                ]
+            )
+
+            for density in ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]:
+                mipmap_dir = res_dir / f"mipmap-{density}"
+                mipmap_dir.mkdir(parents=True, exist_ok=True)
+                (mipmap_dir / "ic_launcher.png").write_bytes(minimal_png)
+
+        except OSError as e:
+            raise ProjectGenerationError(f"Failed to generate resources: {e}") from e
 
 
 class TemplateCache:

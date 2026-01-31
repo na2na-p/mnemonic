@@ -66,6 +66,32 @@ class GradleBuilder:
         """
         self._project_path = project_path
         self._timeout = timeout
+        self._disable_gradle_caching()
+
+    def _disable_gradle_caching(self) -> None:
+        """gradle.propertiesにキャッシュ無効化設定を追加する
+
+        一時ディレクトリでのビルドで発生するincremental build問題を回避するため、
+        Gradleのキャッシュ機能とファイルシステムウォッチングを無効化する。
+        """
+        gradle_props = self._project_path / "gradle.properties"
+        settings = [
+            "org.gradle.caching=false",
+            "org.gradle.vfs.watch=false",
+        ]
+
+        if gradle_props.exists():
+            content = gradle_props.read_text()
+            additions = []
+            for setting in settings:
+                key = setting.split("=")[0]
+                if key not in content:
+                    additions.append(setting)
+            if additions:
+                with gradle_props.open("a") as f:
+                    f.write("\n" + "\n".join(additions) + "\n")
+        else:
+            gradle_props.write_text("\n".join(settings) + "\n")
 
     def _get_gradle_command(self) -> Path:
         """プラットフォームに応じたGradle Wrapperコマンドを取得する
@@ -106,7 +132,21 @@ class GradleBuilder:
             GradleTimeoutError: タイムアウトした場合
         """
         gradlew = self._get_gradle_command()
-        cmd = [str(gradlew), *args, "--no-daemon", "--stacktrace"]
+        cmd = [
+            str(gradlew),
+            *args,
+            "--no-daemon",
+            "--no-build-cache",
+            "--rerun-tasks",
+            "--stacktrace",
+        ]
+
+        # ロケール関連の問題を回避するため、C.utf8 を設定
+        import os
+
+        env = os.environ.copy()
+        env["LC_ALL"] = "C.utf8"
+        env["LANG"] = "C.utf8"
 
         try:
             result = subprocess.run(
@@ -115,6 +155,7 @@ class GradleBuilder:
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
+                env=env,
             )
             return result
         except subprocess.TimeoutExpired as e:
