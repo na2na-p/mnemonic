@@ -60,6 +60,12 @@ with(global.Window)
 		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "kagparser.tjs");
 	}
 
+	// Load MIDISoundBuffer stub if not available (MIDI not supported on Android)
+	if (typeof(global.MIDISoundBuffer) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "midisoundbuffer_stub.tjs");
+	}
+
 	// Load font and set it as default
 	if (typeof(global.Font) === "Object" && typeof(global.Font.addFont) === "Object")
 	{

@@ -558,6 +558,7 @@ class BuildPipeline:
             "PolyfillInitialize.tjs",
             "MenuItem_stub.tjs",
             "KAGParser.tjs",
+            "MIDISoundBuffer_stub.tjs",
         ]
 
         resources_package = "mnemonic.resources.system_polyfill"
