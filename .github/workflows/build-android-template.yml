@@ -97,34 +97,39 @@ jobs:
         run: |
           mkdir -p template-output
 
-          # Copy APK (for reference/testing)
-          cp krkrsdl2/android-project/app/build/outputs/apk/release/*.apk \
-             template-output/ || true
+          # Copy full Android project structure (expected by mnemonic pipeline)
+          # Root gradle files
+          cp krkrsdl2/android-project/build.gradle template-output/
+          cp krkrsdl2/android-project/settings.gradle template-output/ 2>/dev/null || \
+            cp krkrsdl2/external/SDL/android-project/settings.gradle template-output/
+          cp krkrsdl2/android-project/gradle.properties template-output/ 2>/dev/null || \
+            cp krkrsdl2/external/SDL/android-project/gradle.properties template-output/
 
-          # Create template structure
-          mkdir -p template-output/template
+          # Copy gradle wrapper
+          mkdir -p template-output/gradle/wrapper
+          cp -r krkrsdl2/android-project/gradle/wrapper/* template-output/gradle/wrapper/
+          cp krkrsdl2/android-project/gradlew template-output/
+
+          # App module structure
+          mkdir -p template-output/app/src/main/jniLibs
+
+          # Copy app build.gradle
+          cp krkrsdl2/android-project/app/build.gradle template-output/app/
+
+          # Copy source files
+          cp -r krkrsdl2/android-project/app/src/main/java template-output/app/src/main/
+          cp -r krkrsdl2/android-project/app/src/main/res template-output/app/src/main/
+          cp krkrsdl2/android-project/app/src/main/AndroidManifest.xml template-output/app/src/main/
 
           # Copy native libraries (.so files)
           cp -r krkrsdl2/android-project/app/build/intermediates/cxx/Release/*/obj/* \
-                template-output/template/jniLibs/ 2>/dev/null || \
+                template-output/app/src/main/jniLibs/ 2>/dev/null || \
           cp -r krkrsdl2/android-project/app/build/intermediates/merged_native_libs/release/mergeReleaseNativeLibs/out/lib/* \
-                template-output/template/jniLibs/ 2>/dev/null || true
+                template-output/app/src/main/jniLibs/ 2>/dev/null || true
 
-          # Copy Java/Kotlin source
-          cp -r krkrsdl2/android-project/app/src/main/java \
-                template-output/template/ 2>/dev/null || true
-
-          # Copy resources
-          cp -r krkrsdl2/android-project/app/src/main/res \
-                template-output/template/ 2>/dev/null || true
-
-          # Copy manifest
-          cp krkrsdl2/android-project/app/src/main/AndroidManifest.xml \
-             template-output/template/
-
-          # Copy gradle files (for reference)
-          cp krkrsdl2/android-project/app/build.gradle \
-             template-output/template/build.gradle.template
+          # Copy APK (for reference/testing)
+          cp krkrsdl2/android-project/app/build/outputs/apk/release/*.apk \
+             template-output/ 2>/dev/null || true
 
           # Create version info
           cd krkrsdl2
