@@ -2,7 +2,7 @@
 # krkrsdl2をビルドしてAndroidテンプレートを生成するワークフロー
 #
 # 手動実行: Actions > Build Android Template > Run workflow
-# 自動実行: v*タグがプッシュされた時
+# 自動実行: template-v*タグがプッシュされた時
 
 name: Build Android Template
 
@@ -13,6 +13,10 @@ on:
         description: 'krkrsdl2 ref (branch, tag, or commit)'
         required: false
         default: 'main'
+      version:
+        description: 'Release version (e.g., template-v1.0.0). If set, creates a GitHub Release.'
+        required: false
+        default: ''
   push:
     tags:
       - 'template-v*'
@@ -109,9 +113,26 @@ jobs:
           path: android-template.zip
           retention-days: 30
 
+      - name: Determine release version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/template-v* ]]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/template-v')
+        if: steps.version.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Android Template ${{ steps.version.outputs.version }}
           files: android-template.zip
           generate_release_notes: true
+          draft: false
+          prerelease: false
