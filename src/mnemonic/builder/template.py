@@ -611,15 +611,16 @@ class TemplateCache:
 
 
 # GitHub APIとダウンロードURL構築に使用する定数
-GITHUB_API_BASE = "https://api.github.com/repos/krkrsdl2/krkrsdl2"
+# mnemonicリポジトリでビルドしたAndroidテンプレートをダウンロード
+GITHUB_API_BASE = "https://api.github.com/repos/na2na-p/mnemonic"
 GITHUB_RELEASES_URL = f"{GITHUB_API_BASE}/releases"
 GITHUB_LATEST_RELEASE_URL = f"{GITHUB_RELEASES_URL}/latest"
 
 # テンプレートアセットのファイル名パターン
-TEMPLATE_ASSET_PATTERN = re.compile(r"krkrsdl2_android.*\.zip$", re.IGNORECASE)
+TEMPLATE_ASSET_PATTERN = re.compile(r"android-template\.zip$", re.IGNORECASE)
 
-# バージョン文字列の検証パターン
-VERSION_PATTERN = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+# バージョン文字列の検証パターン（template-vX.X.X形式）
+VERSION_PATTERN = re.compile(r"^template-v\d+\.\d+(\.\d+)?$")
 
 
 class TemplateDownloader:
@@ -756,12 +757,9 @@ class TemplateDownloader:
         """
         self._validate_version(version)
 
-        # バージョンがvプレフィックスで始まらない場合は追加
-        normalized_version = version if version.startswith("v") else f"v{version}"
-
+        # template-vX.X.X形式のバージョンをそのまま使用
         return (
-            f"https://github.com/krkrz/krkrsdl2/releases/download/"
-            f"{normalized_version}/krkrsdl2_android_{normalized_version}.zip"
+            f"https://github.com/na2na-p/mnemonic/releases/download/{version}/android-template.zip"
         )
 
     def _validate_version(self, version: str) -> None:
@@ -793,8 +791,8 @@ class TemplateDownloader:
             TemplateNotFoundError: 指定されたバージョンが存在しない場合
             NetworkError: ネットワークエラーが発生した場合
         """
-        normalized_version = version if version.startswith("v") else f"v{version}"
-        release_url = f"{GITHUB_RELEASES_URL}/tags/{normalized_version}"
+        # template-vX.X.X形式のバージョンをそのまま使用
+        release_url = f"{GITHUB_RELEASES_URL}/tags/{version}"
 
         client = await self._get_client()
         try:
