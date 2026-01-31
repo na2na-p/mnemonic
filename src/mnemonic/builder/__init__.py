@@ -33,6 +33,11 @@ from mnemonic.builder.template import (
     TemplateInfo,
     TemplateNotFoundError,
 )
+from mnemonic.builder.template_preparer import (
+    JniLibsNotFoundError,
+    TemplatePreparer,
+    TemplatePreparerError,
+)
 
 __all__ = [
     "ApkMergeBuilder",
@@ -51,6 +56,7 @@ __all__ = [
     "GradleTimeoutError",
     "InvalidApkError",
     "InvalidTemplateError",
+    "JniLibsNotFoundError",
     "ManifestUpdateError",
     "NetworkError",
     "ProjectConfig",
@@ -62,4 +68,6 @@ __all__ = [
     "TemplateDownloader",
     "TemplateInfo",
     "TemplateNotFoundError",
+    "TemplatePreparer",
+    "TemplatePreparerError",
 ]

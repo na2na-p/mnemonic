@@ -17,11 +17,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import mnemonic.cache as cache_module
-from mnemonic.builder.apk_merge import ApkMergeBuilder, ApkMergeConfig
+from mnemonic.builder.gradle import GradleBuilder
 from mnemonic.builder.template import (
     TemplateCache,
     TemplateDownloader,
 )
+from mnemonic.builder.template_preparer import TemplatePreparer
 from mnemonic.converter.encoding import EncodingConverter
 from mnemonic.converter.image import ImageConverter
 from mnemonic.converter.manager import ConversionManager
@@ -473,7 +474,8 @@ class BuildPipeline:
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
 
-        テンプレートに含まれるベースAPKにassetsを追加してAPKをマージする。
+        Gradleビルドを使用してAPKを生成する。
+        テンプレートを展開し、ゲームファイルをassetsに配置してビルドする。
 
         Raises:
             ValueError: 変換フェーズが完了していない、またはビルド失敗の場合
@@ -513,10 +515,8 @@ class BuildPipeline:
         if template_path is None:
             raise ValueError("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-        # テンプレートからベースAPKを取得
-        base_apk_path = self._find_base_apk_in_template(template_path)
-        if base_apk_path is None:
-            raise ValueError("テンプレート内にベースAPKが見つかりません。")
+        # テンプレートをプロジェクトディレクトリに展開
+        self._extract_template(template_path, self._project_dir)
 
         # タイトルからパッケージ名を生成（フォールバック: ファイル名）
         if self._game_structure and self._game_structure.title:
@@ -531,56 +531,44 @@ class BuildPipeline:
             else base_name
         )
 
-        # アイコンを検索
-        icon_path = self._find_game_icon()
-
-        # APKマージビルド
-        unsigned_apk_path = self._project_dir / "app-unsigned.apk"
-
-        merge_config = ApkMergeConfig(
-            base_apk_path=base_apk_path,
-            assets_dir=self._convert_dir,
+        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー）
+        preparer = TemplatePreparer(self._project_dir)
+        preparer.prepare(
             package_name=package_name,
             app_name=app_name,
-            output_path=unsigned_apk_path,
-            icon_path=icon_path,
+            assets_dir=self._convert_dir,
         )
 
-        builder = ApkMergeBuilder()
-        result = builder.merge(merge_config)
+        # Gradleビルド実行
+        builder = GradleBuilder(
+            project_path=self._project_dir,
+            timeout=self._config.gradle_timeout,
+        )
+        result = builder.build(build_type="release")
 
         if not result.success or result.apk_path is None:
-            raise ValueError(f"APKマージに失敗しました: {result.error_message}")
+            raise ValueError(f"Gradleビルドに失敗しました: {result.output_log}")
 
         self._unsigned_apk = result.apk_path
 
-    def _find_base_apk_in_template(self, template_path: Path) -> Path | None:
-        """テンプレートからベースAPKを検索する
-
-        テンプレートZIPファイルを展開し、ベースAPKを検索します。
+    def _extract_template(self, template_path: Path, dest_dir: Path) -> None:
+        """テンプレートをプロジェクトディレクトリに展開する
 
         Args:
             template_path: テンプレートZIPファイルのパス
+            dest_dir: 展開先ディレクトリ
 
-        Returns:
-            ベースAPKのパス。見つからない場合はNone。
+        Raises:
+            ValueError: テンプレートの展開に失敗した場合
         """
         if not template_path.exists():
-            return None
-
-        # テンプレートを一時ディレクトリに展開
-        extract_dir = Path(tempfile.mkdtemp(prefix="mnemonic_template_"))
-        self._temp_dirs.append(extract_dir)
+            raise ValueError(f"テンプレートが見つかりません: {template_path}")
 
         try:
             with zipfile.ZipFile(template_path, "r") as zf:
-                zf.extractall(extract_dir)
-
-            # APKファイルを検索
-            builder = ApkMergeBuilder()
-            return builder.find_base_apk_in_template(extract_dir)
-        except zipfile.BadZipFile:
-            return None
+                zf.extractall(dest_dir)
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"無効なテンプレートファイルです: {template_path}") from e
 
     def _find_game_icon(self) -> Path | None:
         """ゲームアイコンを検索する
