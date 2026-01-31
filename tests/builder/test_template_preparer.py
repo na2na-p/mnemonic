@@ -122,6 +122,71 @@ android {
         assert strings_xml.exists()
         assert "My Game" in strings_xml.read_text(encoding="utf-8")
 
+        # デフォルトアイコンが生成されていることを確認（icon_path=Noneの場合）
+        res_dir = project_dir / "app" / "src" / "main" / "res"
+        assert (res_dir / "mipmap-mdpi" / "ic_launcher.png").exists()
+
+    def test_prepare_creates_default_icon_when_no_icon_provided(self, tmp_path: Path) -> None:
+        """正常系: アイコンが提供されない場合にデフォルトアイコンが生成される"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        # APK ファイルを作成
+        apk_path = project_dir / "krkrsdl2_universal.apk"
+        with zipfile.ZipFile(apk_path, "w") as zf:
+            zf.writestr("lib/arm64-v8a/libmain.so", b"fake so content")
+
+        # app/build.gradle を作成
+        app_dir = project_dir / "app"
+        app_dir.mkdir()
+        build_gradle = app_dir / "build.gradle"
+        build_gradle.write_text(
+            """
+android {
+    compileSdkVersion 30
+    defaultConfig {
+        applicationId "pw.uyjulian.krkrsdl2"
+        minSdkVersion 16
+        targetSdkVersion 30
+    }
+}
+""",
+            encoding="utf-8",
+        )
+
+        # AndroidManifest.xml を作成
+        manifest_dir = app_dir / "src" / "main"
+        manifest_dir.mkdir(parents=True)
+        manifest_path = manifest_dir / "AndroidManifest.xml"
+        manifest_path.write_text(
+            """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="pw.uyjulian.krkrsdl2">
+    <application>
+        <activity android:name=".KirikiriSDL2Activity">
+        </activity>
+    </application>
+</manifest>
+""",
+            encoding="utf-8",
+        )
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        # icon_path を指定しない
+        preparer.prepare(
+            package_name="com.example.game",
+            app_name="My Game",
+            icon_path=None,
+        )
+
+        # デフォルトアイコンが生成されていることを確認
+        res_dir = project_dir / "app" / "src" / "main" / "res"
+        densities = ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]
+        for density in densities:
+            icon_file = res_dir / f"mipmap-{density}" / "ic_launcher.png"
+            assert icon_file.exists(), f"mipmap-{density} にアイコンがありません"
+
     def test_prepare_raises_error_when_apk_not_found(self, tmp_path: Path) -> None:
         """異常系: APK ファイルが見つからない場合"""
         project_dir = tmp_path / "project"
@@ -788,6 +853,74 @@ class TestTemplatePreparerCopyAssets:
 
         assets_dest = project_dir / "app" / "src" / "main" / "assets" / "data"
         assert (assets_dest / "scenario" / "first.ks").exists()
+
+
+class TestTemplatePreparerCreateDefaultIcon:
+    """TemplatePreparer._create_default_iconのテスト"""
+
+    def test_create_default_icon_creates_icons_for_all_densities(self, tmp_path: Path) -> None:
+        """正常系: 全ての解像度でデフォルトアイコンが生成される"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._create_default_icon()
+
+        densities = ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]
+        res_dir = project_dir / "app" / "src" / "main" / "res"
+
+        for density in densities:
+            icon_file = res_dir / f"mipmap-{density}" / "ic_launcher.png"
+            assert icon_file.exists(), f"mipmap-{density} にアイコンがありません"
+
+    @pytest.mark.parametrize(
+        "density,expected_size",
+        [
+            pytest.param("mdpi", 48, id="正常系: mdpi は 48x48"),
+            pytest.param("hdpi", 72, id="正常系: hdpi は 72x72"),
+            pytest.param("xhdpi", 96, id="正常系: xhdpi は 96x96"),
+            pytest.param("xxhdpi", 144, id="正常系: xxhdpi は 144x144"),
+            pytest.param("xxxhdpi", 192, id="正常系: xxxhdpi は 192x192"),
+        ],
+    )
+    def test_create_default_icon_generates_correct_sizes(
+        self, tmp_path: Path, density: str, expected_size: int
+    ) -> None:
+        """正常系: 各解像度で正しいサイズのアイコンが生成される"""
+        from PIL import Image
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._create_default_icon()
+
+        res_dir = project_dir / "app" / "src" / "main" / "res"
+        icon_file = res_dir / f"mipmap-{density}" / "ic_launcher.png"
+
+        with Image.open(icon_file) as img:
+            assert img.size == (expected_size, expected_size)
+
+    def test_create_default_icon_generates_valid_png(self, tmp_path: Path) -> None:
+        """正常系: 有効なPNGファイルが生成される"""
+        from PIL import Image
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._create_default_icon()
+
+        res_dir = project_dir / "app" / "src" / "main" / "res"
+        icon_file = res_dir / "mipmap-mdpi" / "ic_launcher.png"
+
+        # PIL で読み込めれば有効な PNG
+        with Image.open(icon_file) as img:
+            assert img.format == "PNG"
+            assert img.mode == "RGB"
 
 
 class TestExceptionClasses:

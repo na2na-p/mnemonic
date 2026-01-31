@@ -29,6 +29,7 @@ from mnemonic.converter.manager import ConversionManager
 from mnemonic.converter.video import VideoConverter
 from mnemonic.parser.detector import GameDetector, GameStructure
 from mnemonic.parser.exe import EmbeddedXP3Extractor
+from mnemonic.parser.icon import ExeIconExtractor
 from mnemonic.parser.xp3 import XP3Archive, XP3EncryptionChecker
 from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, KeystoreConfig
 
@@ -577,8 +578,9 @@ class BuildPipeline:
     def _find_game_icon(self) -> Path | None:
         """ゲームアイコンを検索する
 
-        抽出ディレクトリからアイコンファイルを検索します。
-        krkr/吉里吉里ゲームでよく使われるアイコンファイル名を優先的に検索します。
+        以下の優先順位でアイコンを検索します:
+        1. 抽出ディレクトリからアイコンファイルを検索
+        2. EXEファイルから埋め込みアイコンを抽出
 
         Returns:
             アイコンファイルのパス。見つからない場合はNone。
@@ -586,7 +588,7 @@ class BuildPipeline:
         if self._extract_dir is None:
             return None
 
-        # 優先順位の高いファイル名から検索
+        # 1. 抽出ディレクトリから既存アイコンファイルを検索
         icon_names = ["icon.png", "icon.ico", "icon.bmp"]
         for name in icon_names:
             icon_path = self._extract_dir / name
@@ -596,6 +598,13 @@ class BuildPipeline:
         # 任意のicoファイルを検索
         for ico_file in self._extract_dir.glob("*.ico"):
             return ico_file
+
+        # 2. EXEファイルからアイコンを抽出（入力がEXEの場合のみ）
+        if self._config.input_path.suffix.lower() == ".exe":
+            icon_extractor = ExeIconExtractor()
+            extracted_icon = icon_extractor.extract(self._config.input_path, self._extract_dir)
+            if extracted_icon is not None:
+                return extracted_icon
 
         return None
 

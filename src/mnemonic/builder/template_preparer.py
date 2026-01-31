@@ -14,6 +14,8 @@ import zipfile
 from pathlib import Path
 from typing import Final
 
+from PIL import Image
+
 
 class TemplatePreparerError(Exception):
     """テンプレート準備に関する基本例外クラス"""
@@ -97,9 +99,11 @@ class TemplatePreparer:
         if assets_dir is not None:
             self._copy_assets(assets_dir)
 
-        # 7. アイコンを更新（指定されている場合）
+        # 7. アイコンを更新（指定されている場合）、またはデフォルトアイコンを生成
         if icon_path is not None and icon_path.exists():
             self._update_icon(icon_path)
+        else:
+            self._create_default_icon()
 
     def _extract_jni_libs(self) -> None:
         """krkrsdl2_universal.apkから.soファイルを抽出する
@@ -461,3 +465,32 @@ public class KirikiriSDL2Activity extends SDLActivity {{
             mipmap_dir.mkdir(parents=True, exist_ok=True)
             dest_path = mipmap_dir / "ic_launcher.png"
             shutil.copy2(icon_path, dest_path)
+
+    def _create_default_icon(self) -> None:
+        """デフォルトアイコンを生成する
+
+        アイコンが提供されない場合のフォールバックとして、
+        単色の正方形アイコンを各解像度で生成します。
+        """
+        res_dir = self._project_dir / "app" / "src" / "main" / "res"
+
+        # 各密度に対応するアイコンサイズ
+        density_sizes = {
+            "mdpi": 48,
+            "hdpi": 72,
+            "xhdpi": 96,
+            "xxhdpi": 144,
+            "xxxhdpi": 192,
+        }
+
+        # デフォルトカラー（吉里吉里のテーマカラーに近い青紫）
+        default_color = (100, 80, 160)
+
+        for density, size in density_sizes.items():
+            mipmap_dir = res_dir / f"mipmap-{density}"
+            mipmap_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = mipmap_dir / "ic_launcher.png"
+
+            # 単色の正方形アイコンを生成
+            img = Image.new("RGB", (size, size), default_color)
+            img.save(str(dest_path), "PNG")

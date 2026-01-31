@@ -13,6 +13,7 @@ dependencies = [
     "pillow>=12.1.0",
     "ffmpeg-python>=0.2.0",
     "httpx>=0.28.1",
+    "icoextract>=0.2.0",
 ]
 
 [project.scripts]
