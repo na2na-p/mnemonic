@@ -287,12 +287,14 @@ class EncodingConverter(BaseConverter):
             source_encoding = detection_result.encoding or "utf-8"
 
         # 既にターゲットエンコーディングの場合はスキップ（BOMなしのUTF-8）
+        # ただし吉里吉里スクリプトファイルは BOM が必要なのでスキップしない
         target_normalized = self._target_encoding.lower().replace("-", "_")
         source_normalized = source_encoding.lower().replace("-", "_")
         utf8_bom = b"\xef\xbb\xbf"
         has_bom = data.startswith(utf8_bom)
+        is_kirikiri_script = source.suffix.lower() in self._kirikiri_script_extensions
 
-        if source_normalized == target_normalized and not has_bom:
+        if source_normalized == target_normalized and not has_bom and not is_kirikiri_script:
             return ConversionResult(
                 source_path=source,
                 dest_path=dest,

@@ -596,3 +596,22 @@ class TestEncodingConverterKirikiriScripts:
         assert result.status == ConversionStatus.SUCCESS
         raw_bytes = dest.read_bytes()
         assert not raw_bytes.startswith(b"\xef\xbb\xbf"), "UTF-8 BOM should NOT be present"
+
+    def test_adds_bom_to_ascii_only_script_files(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """ASCII のみの吉里吉里スクリプトファイルにも BOM が追加される"""
+        converter = EncodingConverter(target_encoding="utf-8")
+        source = tmp_path / "source.asd"
+        dest = tmp_path / "dest.asd"
+        # ASCII-only content (common in .asd animation files)
+        ascii_content = b"*start\r\n@wait time=150\r\n@clip left=445 top=0"
+
+        source.write_bytes(ascii_content)
+
+        result = converter.convert(source, dest)
+
+        assert result.status == ConversionStatus.SUCCESS
+        raw_bytes = dest.read_bytes()
+        assert raw_bytes.startswith(b"\xef\xbb\xbf"), "UTF-8 BOM should be present for ASCII script"
