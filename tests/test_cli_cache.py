@@ -1,11 +1,19 @@
 """cache CLIサブコマンドのテスト"""
 
+import re
+
 import pytest
 from typer.testing import CliRunner
 
 from mnemonic.cli import app
 
 runner = CliRunner(env={"NO_COLOR": "1"})
+
+
+def strip_ansi(text: str) -> str:
+    """ANSIエスケープシーケンスを除去する"""
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    return ansi_escape.sub("", text)
 
 
 class TestCacheHelpCommand:
@@ -72,8 +80,9 @@ class TestCacheCleanCommand:
         """cache clean --help でオプション一覧が表示される"""
         result = runner.invoke(app, ["cache", "clean", "--help"])
         assert result.exit_code == 0
-        assert "--force" in result.stdout or "-f" in result.stdout
-        assert "--template-only" in result.stdout
+        stdout = strip_ansi(result.stdout)
+        assert "--force" in stdout or "-f" in stdout
+        assert "--template-only" in stdout
 
     def test_cache_clean_cancelled_when_declined(self) -> None:
         """cache clean で確認を拒否した場合はキャンセルされる"""
