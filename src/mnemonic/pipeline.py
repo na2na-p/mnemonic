@@ -442,6 +442,8 @@ class BuildPipeline:
         """CONVERTフェーズ: アセット変換
 
         抽出されたアセットをAndroid互換形式に変換する。
+        まず全ファイルをコピーし（ゲームコアファイルを含む）、
+        その後変換対象ファイルを変換（上書き）する。
 
         Raises:
             ValueError: 抽出フェーズが完了していない場合
@@ -452,6 +454,9 @@ class BuildPipeline:
         self._convert_dir = Path(tempfile.mkdtemp(prefix="mnemonic_convert_"))
         self._temp_dirs.append(self._convert_dir)
 
+        # まず全ファイルをコピー（data.xp3等のゲームコアファイルを含む）
+        shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
+
         # コンバーターを設定
         converters: list[Any] = [
             EncodingConverter(),
@@ -461,6 +466,7 @@ class BuildPipeline:
         if not self._config.skip_video:
             converters.append(VideoConverter(timeout=self._config.ffmpeg_timeout))
 
+        # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
 
