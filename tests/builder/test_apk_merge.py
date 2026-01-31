@@ -355,12 +355,12 @@ class TestApkMergeBuilderMerge:
         assert result.success is True
         assert result.files_added == 3
 
-        # APKの内容を確認
+        # APKの内容を確認（krkrsdl2は assets/data/ からファイルを読み込む）
         with zipfile.ZipFile(output_apk, "r") as zf:
             names = zf.namelist()
-            assert "assets/data.xp3" in names
-            assert "assets/startup.tjs" in names
-            assert "assets/scenario/first.ks" in names
+            assert "assets/data/data.xp3" in names
+            assert "assets/data/startup.tjs" in names
+            assert "assets/data/scenario/first.ks" in names
 
     def test_merge_returns_correct_statistics(
         self, tmp_path: Path, mock_apktool_path: Path

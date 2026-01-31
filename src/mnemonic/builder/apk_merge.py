@@ -164,8 +164,8 @@ class ApkMergeBuilder:
                     self.TARGET_SDK_VERSION,
                 )
 
-                # 3. assetsを追加
-                assets_dest = decode_dir / self.ASSETS_DIR
+                # 3. assetsを追加（krkrsdl2は assets/data/ からファイルを読み込む）
+                assets_dest = decode_dir / self.ASSETS_DIR / "data"
                 files_added = self._add_assets(assets_dest, config.assets_dir)
 
                 # 4. アイコンを更新（指定されている場合）
