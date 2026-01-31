@@ -786,3 +786,413 @@ class TestBuildPipelineFindGameIcon:
         result = pipeline._find_game_icon()
 
         assert result is None
+
+    def test_extracts_icon_from_exe_when_no_icon_file(self, tmp_path: Path, mocker) -> None:
+        """アイコンファイルがない場合はEXEからアイコン抽出を試みる"""
+        # EXE入力ファイルを作成
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # 抽出ディレクトリをセット（アイコンファイルなし）
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        pipeline._extract_dir = extract_dir
+
+        # ExeIconExtractorをモック
+        mock_icon_extractor = mocker.patch("mnemonic.pipeline.ExeIconExtractor")
+        extracted_icon = extract_dir / "extracted_icon.png"
+        extracted_icon.write_bytes(b"\x89PNG\r\n\x1a\n")
+        mock_icon_extractor.return_value.extract.return_value = extracted_icon
+
+        result = pipeline._find_game_icon()
+
+        # EXEからアイコン抽出が呼ばれたことを確認
+        mock_icon_extractor.return_value.extract.assert_called_once_with(input_file, extract_dir)
+        assert result == extracted_icon
+
+
+class TestBuildPipelineNormalizeCriticalFilenames:
+    """BuildPipeline._normalize_critical_filenames メソッドのテスト"""
+
+    def test_normalizes_uppercase_filenames(self, tmp_path: Path) -> None:
+        """大文字ファイル名を小文字に変換"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # 大文字ファイル名でファイルを作成
+        (test_dir / "Data.XP3").write_bytes(b"data")
+        (test_dir / "Config.TJS").write_text("config")
+        (test_dir / "README.TXT").write_text("readme")
+
+        # 正規化を実行
+        pipeline._normalize_critical_filenames(test_dir)
+
+        # 小文字に変換されていることを確認
+        assert (test_dir / "data.xp3").exists()
+        assert (test_dir / "config.tjs").exists()
+        assert (test_dir / "readme.txt").exists()
+
+        # 元の大文字ファイルは存在しない
+        assert not (test_dir / "Data.XP3").exists()
+        assert not (test_dir / "Config.TJS").exists()
+        assert not (test_dir / "README.TXT").exists()
+
+    def test_keeps_lowercase_filenames_unchanged(self, tmp_path: Path) -> None:
+        """小文字ファイル名はそのまま"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # 小文字ファイル名でファイルを作成
+        (test_dir / "data.xp3").write_bytes(b"data")
+        (test_dir / "config.tjs").write_text("config")
+
+        # 正規化を実行
+        pipeline._normalize_critical_filenames(test_dir)
+
+        # ファイルがそのまま存在することを確認
+        assert (test_dir / "data.xp3").exists()
+        assert (test_dir / "config.tjs").exists()
+
+    def test_normalizes_nested_directory_files(self, tmp_path: Path) -> None:
+        """ネストしたディレクトリ内のファイルも正規化"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリ構造を作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+        nested_dir = test_dir / "system"
+        nested_dir.mkdir()
+        deep_dir = nested_dir / "plugins"
+        deep_dir.mkdir()
+
+        # 各階層にファイルを作成
+        (test_dir / "Data.XP3").write_bytes(b"data")
+        (nested_dir / "MainWindow.TJS").write_text("mainwindow")
+        (deep_dir / "Plugin.DLL").write_bytes(b"plugin")
+
+        # 正規化を実行
+        pipeline._normalize_critical_filenames(test_dir)
+
+        # 全階層で小文字に変換されていることを確認
+        assert (test_dir / "data.xp3").exists()
+        assert (nested_dir / "mainwindow.tjs").exists()
+        assert (deep_dir / "plugin.dll").exists()
+
+        # 元の大文字ファイルは存在しない
+        assert not (test_dir / "Data.XP3").exists()
+        assert not (nested_dir / "MainWindow.TJS").exists()
+        assert not (deep_dir / "Plugin.DLL").exists()
+
+
+class TestBuildPipelineAdjustScripts:
+    """BuildPipeline._adjust_scripts メソッドのテスト"""
+
+    def test_adjusts_startup_tjs(self, tmp_path: Path, mocker) -> None:
+        """startup.tjs にポリフィル読み込みを追加"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # startup.tjs を作成
+        startup_file = test_dir / "startup.tjs"
+        startup_file.write_text("// original content")
+
+        # ScriptAdjusterをモック
+        mock_adjuster = mocker.patch("mnemonic.pipeline.ScriptAdjuster")
+        mock_adjuster_instance = mock_adjuster.return_value
+
+        # スクリプト調整を実行
+        pipeline._adjust_scripts(test_dir)
+
+        # ScriptAdjuster.convertが呼ばれたことを確認
+        mock_adjuster_instance.convert.assert_called_once_with(startup_file, startup_file)
+
+    @pytest.mark.parametrize(
+        "variant",
+        [
+            pytest.param("Startup.tjs", id="正常系: Startup.tjs（先頭大文字）"),
+            pytest.param("STARTUP.TJS", id="正常系: STARTUP.TJS（全大文字）"),
+            pytest.param("StartUp.tjs", id="正常系: StartUp.tjs（キャメルケース）"),
+        ],
+    )
+    def test_detects_startup_case_variants(self, tmp_path: Path, mocker, variant: str) -> None:
+        """Startup.tjs, STARTUP.TJS などを検出"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # バリエーションのファイルを作成
+        startup_file = test_dir / variant
+        startup_file.write_text("// original content")
+
+        # ScriptAdjusterをモック
+        mock_adjuster = mocker.patch("mnemonic.pipeline.ScriptAdjuster")
+        mock_adjuster_instance = mock_adjuster.return_value
+
+        # スクリプト調整を実行
+        pipeline._adjust_scripts(test_dir)
+
+        # ScriptAdjuster.convertが呼ばれたことを確認
+        mock_adjuster_instance.convert.assert_called_once_with(startup_file, startup_file)
+
+
+class TestBuildPipelineCopyPolyfillFiles:
+    """BuildPipeline._copy_polyfill_files メソッドのテスト"""
+
+    def test_creates_system_directory(self, tmp_path: Path, mocker) -> None:
+        """system ディレクトリが作成される"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成（systemディレクトリなし）
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # importlib.resourcesをモック
+        mocker.patch("importlib.resources.files")
+
+        # _copy_font_fileをモック（フォントダウンロードを回避）
+        mocker.patch.object(pipeline, "_copy_font_file")
+
+        # ポリフィルファイルコピーを実行
+        pipeline._copy_polyfill_files(test_dir)
+
+        # systemディレクトリが作成されたことを確認
+        assert (test_dir / "system").exists()
+        assert (test_dir / "system").is_dir()
+
+    def test_copies_all_polyfill_files(self, tmp_path: Path, mocker) -> None:
+        """全ポリフィルファイルがコピーされる"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # モックリソースファイルを作成
+        polyfill_files = [
+            "PolyfillInitialize.tjs",
+            "MenuItem_stub.tjs",
+            "KAGParser.tjs",
+            "MIDISoundBuffer_stub.tjs",
+        ]
+
+        # importlib.resourcesをモックしてファイル内容を返す
+        mock_files = mocker.patch("importlib.resources.files")
+        mock_package = mocker.MagicMock()
+        mock_files.return_value = mock_package
+
+        # 各ファイルのモックを設定
+        def create_mock_resource(filename: str):
+            mock_resource = mocker.MagicMock()
+            mock_file = mocker.MagicMock()
+            mock_file.read.return_value = f"// {filename} content".encode()
+            mock_resource.open.return_value.__enter__ = mocker.MagicMock(return_value=mock_file)
+            mock_resource.open.return_value.__exit__ = mocker.MagicMock(return_value=False)
+            return mock_resource
+
+        mock_package.joinpath.side_effect = lambda f: create_mock_resource(f)
+
+        # _copy_font_fileをモック（フォントダウンロードを回避）
+        mocker.patch.object(pipeline, "_copy_font_file")
+
+        # ポリフィルファイルコピーを実行
+        pipeline._copy_polyfill_files(test_dir)
+
+        # systemディレクトリが作成されたことを確認
+        system_dir = test_dir / "system"
+        assert system_dir.exists()
+
+        # 各ポリフィルファイルがコピーされたことを確認
+        for filename in polyfill_files:
+            assert (system_dir / filename).exists()
+            content = (system_dir / filename).read_text()
+            assert f"// {filename} content" in content
+
+
+class TestBuildPipelineRemovePluginDirectory:
+    """BuildPipeline._remove_plugin_directory メソッドのテスト"""
+
+    def test_removes_lowercase_plugin_directory(self, tmp_path: Path) -> None:
+        """正常系: 小文字のpluginディレクトリが削除される"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # pluginディレクトリを作成
+        plugin_dir = test_dir / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "test.dll").write_bytes(b"\x00" * 10)
+
+        # プラグインディレクトリ削除を実行
+        pipeline._remove_plugin_directory(test_dir)
+
+        # pluginディレクトリが削除されたことを確認
+        assert not plugin_dir.exists()
+
+    @pytest.mark.parametrize(
+        "dir_name",
+        [
+            pytest.param("Plugin", id="正常系: 先頭大文字Pluginが削除される"),
+            pytest.param("PLUGIN", id="正常系: 全大文字PLUGINが削除される"),
+            pytest.param("Plugins", id="正常系: 複数形Pluginsが削除される"),
+            pytest.param("plugins", id="正常系: 小文字複数形pluginsが削除される"),
+            pytest.param("PLUGINS", id="正常系: 全大文字複数形PLUGINSが削除される"),
+        ],
+    )
+    def test_removes_plugin_directory_case_variants(self, tmp_path: Path, dir_name: str) -> None:
+        """正常系: 大文字小文字のバリエーションが削除される"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # プラグインディレクトリを作成
+        plugin_dir = test_dir / dir_name
+        plugin_dir.mkdir()
+        (plugin_dir / "wuvorbis.dll").write_bytes(b"\x00" * 10)
+
+        # プラグインディレクトリ削除を実行
+        pipeline._remove_plugin_directory(test_dir)
+
+        # ディレクトリが削除されたことを確認
+        assert not plugin_dir.exists()
+
+    def test_does_nothing_when_no_plugin_directory(self, tmp_path: Path) -> None:
+        """正常系: pluginディレクトリがない場合は何もしない"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成（pluginディレクトリなし）
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # 他のディレクトリを作成
+        other_dir = test_dir / "other"
+        other_dir.mkdir()
+        (other_dir / "test.txt").write_text("test")
+
+        # プラグインディレクトリ削除を実行（例外が発生しないことを確認）
+        pipeline._remove_plugin_directory(test_dir)
+
+        # 他のディレクトリは残っていることを確認
+        assert other_dir.exists()
+        assert (other_dir / "test.txt").exists()
+
+    def test_removes_nested_dll_files(self, tmp_path: Path) -> None:
+        """正常系: ネストされたDLLファイルも含めて削除される"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # pluginディレクトリとサブディレクトリを作成
+        plugin_dir = test_dir / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "wuvorbis.dll").write_bytes(b"\x00" * 10)
+        (plugin_dir / "krwinmm.dll").write_bytes(b"\x00" * 10)
+
+        sub_dir = plugin_dir / "subdir"
+        sub_dir.mkdir()
+        (sub_dir / "other.dll").write_bytes(b"\x00" * 10)
+
+        # プラグインディレクトリ削除を実行
+        pipeline._remove_plugin_directory(test_dir)
+
+        # pluginディレクトリ全体が削除されたことを確認
+        assert not plugin_dir.exists()

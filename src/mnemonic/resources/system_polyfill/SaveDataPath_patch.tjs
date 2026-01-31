@@ -1,0 +1,36 @@
+// SaveDataPath_patch.tjs - Save Data Path Patch for krkrsdl2/Android
+// This patch redirects save data to System.dataPath (writable location)
+// Copyright (C) W.Dee and contributors - 改変・配布は自由です
+//
+// On Android, System.exePath is read-only (inside APK).
+// Save data must be written to System.dataPath instead.
+
+// Store original exePath
+var _originalExePath = System.exePath;
+
+// Create a wrapper that returns dataPath for save operations
+// This patches the KAGWindow class after it's defined
+if (typeof(global.KAGWindow_patchSaveDataLocation) === "undefined")
+{
+	global.KAGWindow_patchSaveDataLocation = function(window)
+	{
+		// Patch saveDataLocation to use System.dataPath
+		if (typeof(window.saveDataLocation) !== "undefined")
+		{
+			// If saveDataLocation contains exePath, replace with dataPath
+			if (window.saveDataLocation.indexOf(_originalExePath) === 0)
+			{
+				window.saveDataLocation = System.dataPath;
+			}
+			else if (window.saveDataLocation.indexOf(":") === -1 &&
+			         window.saveDataLocation.indexOf("/") !== 0)
+			{
+				// Relative path - use dataPath
+				window.saveDataLocation = System.dataPath;
+			}
+		}
+	};
+}
+
+// Also set a global flag that can be checked
+global.krkrsdl2_use_dataPath_for_save = true;
