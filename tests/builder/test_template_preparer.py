@@ -5,14 +5,33 @@ TemplatePreparer クラスと関連する例外クラスのユニットテスト
 
 import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from mnemonic.builder.template_preparer import (
     JniLibsNotFoundError,
+    SDL2SourceFetchError,
     TemplatePreparer,
     TemplatePreparerError,
 )
+
+
+@pytest.fixture
+def mock_sdl2_fetcher():
+    """SDL2SourceFetcher のモック fixture"""
+    with patch("mnemonic.builder.template_preparer.SDL2SourceFetcher") as mock_class:
+        mock_instance = MagicMock()
+
+        async def mock_fetch(dest_dir: Path):
+            # SDL2 Java ソースファイルを模擬作成
+            sdl_app_dir = dest_dir / "org" / "libsdl" / "app"
+            sdl_app_dir.mkdir(parents=True, exist_ok=True)
+            (sdl_app_dir / "SDLActivity.java").write_text("mock content", encoding="utf-8")
+
+        mock_instance.fetch = mock_fetch
+        mock_class.return_value = mock_instance
+        yield mock_class
 
 
 class TestTemplatePreparerInit:
@@ -45,7 +64,9 @@ class TestTemplatePreparerInit:
 class TestTemplatePreparerPrepare:
     """TemplatePreparer.prepareのテスト"""
 
-    def test_prepare_executes_all_steps_successfully(self, tmp_path: Path) -> None:
+    def test_prepare_executes_all_steps_successfully(
+        self, tmp_path: Path, mock_sdl2_fetcher: MagicMock
+    ) -> None:
         """正常系: すべての処理が成功するケース"""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
@@ -126,7 +147,9 @@ android {
         res_dir = project_dir / "app" / "src" / "main" / "res"
         assert (res_dir / "mipmap-mdpi" / "ic_launcher.png").exists()
 
-    def test_prepare_creates_default_icon_when_no_icon_provided(self, tmp_path: Path) -> None:
+    def test_prepare_creates_default_icon_when_no_icon_provided(
+        self, tmp_path: Path, mock_sdl2_fetcher: MagicMock
+    ) -> None:
         """正常系: アイコンが提供されない場合にデフォルトアイコンが生成される"""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
@@ -923,6 +946,41 @@ class TestTemplatePreparerCreateDefaultIcon:
             assert img.mode == "RGB"
 
 
+class TestTemplatePreparerFetchSDL2Sources:
+    """TemplatePreparer._fetch_sdl2_sources のテスト"""
+
+    def test_fetch_sdl2_sources_creates_java_files(
+        self, tmp_path: Path, mock_sdl2_fetcher: MagicMock
+    ) -> None:
+        """正常系: SDL2 Java ソースが作成される"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._fetch_sdl2_sources()
+
+        sdl_app_dir = project_dir / "app" / "src" / "main" / "java" / "org" / "libsdl" / "app"
+        assert sdl_app_dir.exists()
+        assert (sdl_app_dir / "SDLActivity.java").exists()
+
+    def test_fetch_sdl2_sources_passes_cache_to_fetcher(
+        self, tmp_path: Path, mock_sdl2_fetcher: MagicMock
+    ) -> None:
+        """正常系: キャッシュが SDL2SourceFetcher に渡される"""
+        from mnemonic.builder.sdl2_sources import SDL2SourceCache
+
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        cache = SDL2SourceCache(cache_dir=tmp_path / "cache")
+        preparer = TemplatePreparer(project_dir=project_dir, sdl2_cache=cache)
+
+        preparer._fetch_sdl2_sources()
+
+        mock_sdl2_fetcher.assert_called_once_with(cache=cache)
+
+
 class TestExceptionClasses:
     """例外クラスのテスト"""
 
@@ -937,3 +995,9 @@ class TestExceptionClasses:
         error = JniLibsNotFoundError("JNI not found")
         assert isinstance(error, TemplatePreparerError)
         assert str(error) == "JNI not found"
+
+    def test_sdl2_source_fetch_error_is_template_preparer_error(self) -> None:
+        """正常系: SDL2SourceFetchError は TemplatePreparerError を継承"""
+        error = SDL2SourceFetchError("SDL2 fetch error")
+        assert isinstance(error, TemplatePreparerError)
+        assert str(error) == "SDL2 fetch error"

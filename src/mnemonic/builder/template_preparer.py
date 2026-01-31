@@ -7,6 +7,7 @@ krkrsdl2_universal.apkから.soファイルを抽出し、Javaコードを拡張
 
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 import shutil
@@ -15,6 +16,12 @@ from pathlib import Path
 from typing import Final
 
 from PIL import Image
+
+from mnemonic.builder.sdl2_sources import (
+    SDL2SourceCache,
+    SDL2SourceFetcher,
+    SDL2SourceFetcherError,
+)
 
 
 class TemplatePreparerError(Exception):
@@ -29,16 +36,23 @@ class JniLibsNotFoundError(TemplatePreparerError):
     pass
 
 
+class SDL2SourceFetchError(TemplatePreparerError):
+    """SDL2 Java ソースの取得に失敗した場合の例外"""
+
+    pass
+
+
 class TemplatePreparer:
     """Androidプロジェクトテンプレートを準備するクラス
 
     このクラスはGradleビルド用のAndroidプロジェクトを準備します。
     以下の処理を行います：
     1. krkrsdl2_universal.apkから.soファイルを抽出してjniLibsに配置
-    2. KirikiriSDL2Activity.javaをassets コピー機能付きに置き換え
-    3. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
-    4. AndroidManifest.xmlを更新（android:exported="true"追加）
-    5. res/values/strings.xmlを作成（app_name設定）
+    2. SDL2 Java ソースをダウンロードして配置
+    3. KirikiriSDL2Activity.javaをassets コピー機能付きに置き換え
+    4. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
+    5. AndroidManifest.xmlを更新（android:exported="true"追加）
+    6. res/values/strings.xmlを作成（app_name設定）
     """
 
     # 推奨ターゲット/コンパイルSDKバージョン
@@ -54,13 +68,19 @@ class TemplatePreparer:
         "x86_64",
     ]
 
-    def __init__(self, project_dir: Path) -> None:
+    def __init__(
+        self,
+        project_dir: Path,
+        sdl2_cache: SDL2SourceCache | None = None,
+    ) -> None:
         """TemplatePreparerを初期化する
 
         Args:
             project_dir: Androidプロジェクトのルートディレクトリ
+            sdl2_cache: SDL2 Java ソースのキャッシュ（オプション）
         """
         self._project_dir = project_dir
+        self._sdl2_cache = sdl2_cache
 
     def prepare(
         self,
@@ -83,23 +103,26 @@ class TemplatePreparer:
         # 1. ベースAPKから.soファイルを抽出
         self._extract_jni_libs()
 
-        # 2. Javaソースを置き換え
+        # 2. SDL2 Java ソースを取得
+        self._fetch_sdl2_sources()
+
+        # 3. Javaソースを置き換え
         self._update_java_source(package_name)
 
-        # 3. build.gradleを更新
+        # 4. build.gradleを更新
         self._update_build_gradle(package_name)
 
-        # 4. AndroidManifest.xmlを更新
+        # 5. AndroidManifest.xmlを更新
         self._update_manifest()
 
-        # 5. strings.xmlを作成/更新
+        # 6. strings.xmlを作成/更新
         self._update_strings_xml(app_name)
 
-        # 6. assetsをコピー（指定されている場合）
+        # 7. assetsをコピー（指定されている場合）
         if assets_dir is not None:
             self._copy_assets(assets_dir)
 
-        # 7. アイコンを更新（指定されている場合）、またはデフォルトアイコンを生成
+        # 8. アイコンを更新（指定されている場合）、またはデフォルトアイコンを生成
         if icon_path is not None and icon_path.exists():
             self._update_icon(icon_path)
         else:
@@ -144,6 +167,26 @@ class TemplatePreparer:
 
         if so_files_extracted == 0:
             raise JniLibsNotFoundError(f"APK内に.soファイルが見つかりません: {base_apk}")
+
+    def _fetch_sdl2_sources(self) -> None:
+        """SDL2 Java ソースを取得して配置する
+
+        SDL2 の Java ソースファイル（SDLActivity.java 等）を
+        GitHub からダウンロードしてプロジェクトに配置します。
+        キャッシュが有効な場合はキャッシュから復元します。
+
+        Raises:
+            SDL2SourceFetchError: SDL2 ソースの取得に失敗した場合
+        """
+        java_dir = self._project_dir / "app" / "src" / "main" / "java"
+        java_dir.mkdir(parents=True, exist_ok=True)
+
+        fetcher = SDL2SourceFetcher(cache=self._sdl2_cache)
+
+        try:
+            asyncio.run(fetcher.fetch(java_dir))
+        except SDL2SourceFetcherError as e:
+            raise SDL2SourceFetchError(f"SDL2 Java ソースの取得に失敗しました: {e}") from e
 
     def _update_java_source(self, package_name: str) -> None:
         """KirikiriSDL2Activity.javaを拡張版に置き換える

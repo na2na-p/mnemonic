@@ -7,6 +7,15 @@ from mnemonic.builder.gradle import (
     GradleNotFoundError,
     GradleTimeoutError,
 )
+from mnemonic.builder.sdl2_sources import (
+    SDL2SourceCache,
+    SDL2SourceCacheError,
+    SDL2SourceCacheInfo,
+    SDL2SourceFetcher,
+    SDL2SourceFetcherError,
+    SDL2SourceFetchNetworkError,
+    SDL2SourceFetchTimeoutError,
+)
 from mnemonic.builder.template import (
     AssetConfig,
     AssetPlacementError,
@@ -26,6 +35,7 @@ from mnemonic.builder.template import (
 )
 from mnemonic.builder.template_preparer import (
     JniLibsNotFoundError,
+    SDL2SourceFetchError,
     TemplatePreparer,
     TemplatePreparerError,
 )
@@ -46,6 +56,14 @@ __all__ = [
     "ProjectConfig",
     "ProjectGenerationError",
     "ProjectGenerator",
+    "SDL2SourceCache",
+    "SDL2SourceCacheError",
+    "SDL2SourceCacheInfo",
+    "SDL2SourceFetcher",
+    "SDL2SourceFetcherError",
+    "SDL2SourceFetchError",
+    "SDL2SourceFetchNetworkError",
+    "SDL2SourceFetchTimeoutError",
     "TemplateCache",
     "TemplateCacheError",
     "TemplateDownloadError",
