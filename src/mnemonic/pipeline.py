@@ -459,6 +459,10 @@ class BuildPipeline:
         # まず全ファイルをコピー（data.xp3等のゲームコアファイルを含む）
         shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
 
+        # Androidのファイルシステムは大文字小文字を区別するため、
+        # 重要なファイル名を正規化（小文字化）
+        self._normalize_critical_filenames(self._convert_dir)
+
         # コンバーターを設定
         converters: list[Any] = [
             EncodingConverter(),
@@ -471,6 +475,32 @@ class BuildPipeline:
         # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
+
+    def _normalize_critical_filenames(self, directory: Path) -> None:
+        """Kirikiri の重要なファイル名を正規化（小文字化）する
+
+        Windows はファイル名の大文字小文字を区別しないが、Android は区別する。
+        Kirikiri エンジンが期待するファイル名（小文字）に合わせてリネームする。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        # system ディレクトリ内のファイルを小文字化
+        system_dir = directory / "system"
+        if system_dir.exists():
+            for file_path in system_dir.iterdir():
+                if file_path.is_file():
+                    lower_name = file_path.name.lower()
+                    if file_path.name != lower_name:
+                        new_path = file_path.parent / lower_name
+                        file_path.rename(new_path)
+
+        # startup.tjs も小文字化（ルートディレクトリ）
+        for startup_variant in ["Startup.tjs", "STARTUP.TJS", "StartUp.tjs"]:
+            startup_file = directory / startup_variant
+            if startup_file.exists():
+                startup_file.rename(directory / "startup.tjs")
+                break
 
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
