@@ -42,6 +42,26 @@ class ScriptAdjuster(BaseConverter):
             replacement=r"\1// \2 // Disabled for Android",
             description="プラグインDLL読み込みの無効化",
         ),
+        AdjustmentRule(
+            pattern=r"saveDataLocation\s*=\s*System\.exePath\s*\+\s*saveDataLocation",
+            replacement="saveDataLocation = System.dataPath",
+            description="セーブデータパスをdataPathに変更（Android対応）",
+        ),
+        AdjustmentRule(
+            pattern=r"MIDISoundBuffer",
+            replacement="WaveSoundBuffer",
+            description="MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+        ),
+        AdjustmentRule(
+            pattern=r'(["\'])([^"\']*\.mid)(["\'])',
+            replacement=r"\1\2.ogg\3",
+            description="MIDI参照をOGGに変換（.mid → .mid.ogg）",
+        ),
+        AdjustmentRule(
+            pattern=r'(["\'])([^"\']*\.midi)(["\'])',
+            replacement=r"\1\2.ogg\3",
+            description="MIDI参照をOGGに変換（.midi → .midi.ogg）",
+        ),
     ]
 
     def __init__(

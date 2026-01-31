@@ -257,9 +257,8 @@ var initialized = false;
 """
         result = adjuster.add_startup_directive(content)
 
-        assert "@if (kirikiriz)" in result
-        assert 'System.setArgument("-readencoding", "UTF-8");' in result
-        assert "@endif" in result
+        assert "// krkrsdl2 polyfill initialization" in result
+        assert 'Scripts.execStorage("system/polyfillinitialize.tjs");' in result
         assert "// Original script" in result
 
     def test_directive_is_added_at_beginning(self, adjuster: ScriptAdjuster) -> None:
@@ -267,7 +266,7 @@ var initialized = false;
         content = "var x = 1;"
         result = adjuster.add_startup_directive(content)
 
-        assert result.startswith("@if (kirikiriz)")
+        assert result.startswith("// krkrsdl2 polyfill initialization")
 
     def test_original_content_preserved(self, adjuster: ScriptAdjuster) -> None:
         """元の内容が保持されることを確認する"""
@@ -336,8 +335,8 @@ var kag = new KAGWindow();
 
         assert result.status == ConversionStatus.SUCCESS
         converted = dest.read_text(encoding="utf-8")
-        assert "@if (kirikiriz)" in converted
-        assert 'System.setArgument("-readencoding", "UTF-8");' in converted
+        assert "// krkrsdl2 polyfill initialization" in converted
+        assert 'Scripts.execStorage("system/polyfillinitialize.tjs");' in converted
 
     def test_skips_directive_when_disabled(self, tmp_path: Path) -> None:
         """add_encoding_directiveが無効の場合ディレクティブを追加しないことを確認する"""
@@ -432,3 +431,74 @@ var x = 1;
         converted = dest.read_text(encoding="utf-8")
         assert "日本語テスト" in converted
         assert "日本語コメント" in converted
+
+
+class TestScriptAdjusterMidiRules:
+    """MIDIファイル参照の変換ルールテスト"""
+
+    def test_replaces_midi_sound_buffer(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBufferをWaveSoundBufferに変換することを確認する"""
+        content = 'var bgm = new MIDISoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "WaveSoundBuffer" in adjusted
+        assert "MIDISoundBuffer" not in adjusted
+        assert count >= 1
+
+    def test_replaces_mid_extension_in_double_quotes(self, adjuster: ScriptAdjuster) -> None:
+        """.mid参照を.mid.oggに変換することを確認する（ダブルクォート）"""
+        content = 'var bgm = new WaveSoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '"bgm/title.mid.ogg"' in adjusted
+        assert count >= 1
+
+    def test_replaces_mid_extension_in_single_quotes(self, adjuster: ScriptAdjuster) -> None:
+        """.mid参照を.mid.oggに変換することを確認する（シングルクォート）"""
+        content = "var bgm = new WaveSoundBuffer('bgm/title.mid');"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "'bgm/title.mid.ogg'" in adjusted
+        assert count >= 1
+
+    def test_replaces_midi_extension(self, adjuster: ScriptAdjuster) -> None:
+        """.midi参照を.midi.oggに変換することを確認する"""
+        content = 'var bgm = new WaveSoundBuffer("bgm/title.midi");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '"bgm/title.midi.ogg"' in adjusted
+        assert count >= 1
+
+    def test_combined_midi_sound_buffer_and_extension(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBufferと.mid拡張子の両方を変換することを確認する"""
+        content = 'var bgm = new MIDISoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "WaveSoundBuffer" in adjusted
+        assert "MIDISoundBuffer" not in adjusted
+        assert ".mid.ogg" in adjusted
+        assert count >= 2
+
+    def test_multiple_midi_references(self, adjuster: ScriptAdjuster) -> None:
+        """複数のMIDI参照を変換することを確認する"""
+        content = """var bgm1 = new MIDISoundBuffer("bgm/title.mid");
+var bgm2 = new MIDISoundBuffer("bgm/battle.midi");
+var se = new WaveSoundBuffer("se/click.wav");
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("WaveSoundBuffer") == 3
+        assert "MIDISoundBuffer" not in adjusted
+        assert '"bgm/title.mid.ogg"' in adjusted
+        assert '"bgm/battle.midi.ogg"' in adjusted
+        assert '"se/click.wav"' in adjusted  # WAVはそのまま
+
+    def test_does_not_replace_mid_in_unquoted_context(self, adjuster: ScriptAdjuster) -> None:
+        """クォートされていないコンテキストではMIDが変換されないことを確認する"""
+        content = "var midpoint = calculateMidpoint();"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # midpoint はそのまま維持されるべき
+        assert "midpoint" in adjusted
+        # MIDISoundBufferルールによるカウントがなければ0
+        # （他のルールがマッチしない限り）

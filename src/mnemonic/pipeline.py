@@ -17,16 +17,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import mnemonic.cache as cache_module
+from mnemonic.builder.font_fetcher import FontDownloadError, FontFetcher
 from mnemonic.builder.gradle import GradleBuilder
 from mnemonic.builder.template import (
     TemplateCache,
     TemplateDownloader,
 )
 from mnemonic.builder.template_preparer import TemplatePreparer
-from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.encoding import EncodingConverter
-from mnemonic.converter.image import ImageConverter
 from mnemonic.converter.manager import ConversionManager
+from mnemonic.converter.midi import MidiConverter
 from mnemonic.converter.script import ScriptAdjuster
 from mnemonic.converter.video import VideoConverter
 from mnemonic.parser.detector import GameDetector, GameStructure
@@ -462,17 +462,28 @@ class BuildPipeline:
         shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
 
         # コンバーターを設定
+        # 注意: ImageConverterは無効（krkrsdl2がWebP未対応のため）
         converters: list[Any] = [
             EncodingConverter(),
-            ImageConverter(),
         ]
 
         if not self._config.skip_video:
             converters.append(VideoConverter(timeout=self._config.ffmpeg_timeout))
 
+        # MidiConverterを追加（krkrsdl2はMIDI再生未対応のため、OGGに変換）
+        midi_converter = MidiConverter(timeout=self._config.ffmpeg_timeout)
+        if midi_converter.is_fluidsynth_available():
+            converters.append(midi_converter)
+
         # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
+
+        # MIDI変換後、元のMIDIファイルを削除（.mid.oggに変換されているため）
+        self._remove_converted_midi_files(self._convert_dir)
+
+        # プラグインディレクトリを削除（Windows DLLはAndroidで使用不可）
+        self._remove_plugin_directory(self._convert_dir)
 
         # krkrsdl2 polyfill ファイルをコピー
         self._copy_polyfill_files(self._convert_dir)
@@ -486,63 +497,98 @@ class BuildPipeline:
         self._normalize_critical_filenames(self._convert_dir)
 
     def _normalize_critical_filenames(self, directory: Path) -> None:
-        """Kirikiri の重要なファイル名を正規化（小文字化）する
+        """全ファイル名を正規化（小文字化）する
 
         Windows はファイル名の大文字小文字を区別しないが、Android は区別する。
-        Kirikiri エンジンが期待するファイル名（小文字）に合わせてリネームする。
+        全てのファイル名を小文字に変換して一貫性を保つ。
 
         Args:
             directory: 処理対象のディレクトリ
         """
-        # system ディレクトリ内のファイルを小文字化
-        system_dir = directory / "system"
-        if system_dir.exists():
-            for file_path in system_dir.iterdir():
-                if file_path.is_file():
-                    lower_name = file_path.name.lower()
-                    if file_path.name != lower_name:
-                        new_path = file_path.parent / lower_name
-                        file_path.rename(new_path)
+        # 全ディレクトリを再帰的に処理（ファイルを先に処理、ディレクトリは後で）
+        # 深い階層から処理するためにリストを逆順にソート
+        all_paths = sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True)
 
-        # startup.tjs も小文字化（ルートディレクトリ）
-        for startup_variant in ["Startup.tjs", "STARTUP.TJS", "StartUp.tjs"]:
-            startup_file = directory / startup_variant
-            if startup_file.exists():
-                startup_file.rename(directory / "startup.tjs")
-                break
+        for path in all_paths:
+            if path.is_file():
+                lower_name = path.name.lower()
+                if path.name != lower_name:
+                    new_path = path.parent / lower_name
+                    # 同名ファイルが既に存在する場合はスキップ
+                    if not new_path.exists():
+                        path.rename(new_path)
+
+    def _remove_converted_midi_files(self, directory: Path) -> None:
+        """変換済みMIDIファイルの元ファイルを削除する
+
+        MIDIファイルはOGGに変換された後、元のMIDIファイルは不要になるため削除する。
+        対応する.mid.oggファイルが存在する場合のみ削除する。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        midi_extensions = (".mid", ".midi")
+        for midi_file in directory.rglob("*"):
+            if not midi_file.is_file():
+                continue
+            if midi_file.suffix.lower() not in midi_extensions:
+                continue
+            # 対応する.mid.oggファイルが存在するか確認
+            ogg_file = midi_file.with_suffix(midi_file.suffix + ".ogg")
+            if ogg_file.exists():
+                midi_file.unlink()
+
+    def _remove_plugin_directory(self, directory: Path) -> None:
+        """プラグインディレクトリを削除する
+
+        Windows用の.dllプラグインはAndroidで使用できないため、
+        プラグインディレクトリを削除する。krkrsdl2は多くの機能をビルトインで
+        持っているため、プラグインDLLは不要。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        # 大文字小文字のバリエーションを考慮
+        plugin_dir_names = ["plugin", "Plugin", "PLUGIN", "Plugins", "plugins", "PLUGINS"]
+
+        for name in plugin_dir_names:
+            plugin_dir = directory / name
+            if plugin_dir.exists() and plugin_dir.is_dir():
+                shutil.rmtree(plugin_dir)
 
     def _adjust_scripts(self, directory: Path) -> None:
         """スクリプトファイルを調整する
 
-        startup.tjs に Android 互換性のためのスタブ（MenuItem クラス等）を追加する。
+        startup.tjs に Android 互換性のためのスタブ（MenuItem クラス等）を追加し、
+        mainwindow.tjs のセーブデータパスを修正する。
 
         Args:
             directory: 処理対象のディレクトリ
         """
-        # startup.tjs を検索（大文字小文字のバリエーション対応）
-        startup_file = None
+        adjuster = ScriptAdjuster()
+
+        # startup.tjs を検索・調整（大文字小文字のバリエーション対応）
         for variant in ["startup.tjs", "Startup.tjs", "STARTUP.TJS", "StartUp.tjs"]:
             candidate = directory / variant
             if candidate.exists():
-                startup_file = candidate
+                adjuster.convert(candidate, candidate)
                 break
 
-        if startup_file is None:
-            return
-
-        # ScriptAdjuster で調整を適用
-        adjuster = ScriptAdjuster()
-        result = adjuster.convert(startup_file, startup_file)
-
-        if result.status == ConversionStatus.SUCCESS:
-            # 調整が成功した場合、ログ等は不要
-            pass
+        # mainwindow.tjs を検索・調整（セーブデータパス修正）
+        system_dir = directory / "system"
+        if system_dir.exists():
+            for variant in ["mainwindow.tjs", "MainWindow.tjs", "MAINWINDOW.TJS"]:
+                candidate = system_dir / variant
+                if candidate.exists():
+                    adjuster.convert(candidate, candidate)
+                    break
 
     def _copy_polyfill_files(self, directory: Path) -> None:
         """krkrsdl2 polyfill ファイルをコピーする
 
         krkrsdl2/kag3 プロジェクトの polyfill ファイルをゲームデータディレクトリにコピーする。
         これにより MenuItem や KAGParser などの不足クラスが提供される。
+        また、Koruriフォントをsystem/font.ttfとしてコピーする。
 
         Args:
             directory: コピー先のディレクトリ（ゲームデータのルート）
@@ -564,12 +610,55 @@ class BuildPipeline:
         resources_package = "mnemonic.resources.system_polyfill"
         for filename in polyfill_files:
             try:
-                with importlib.resources.files(resources_package).joinpath(filename).open("rb") as src:
+                resource_path = importlib.resources.files(resources_package).joinpath(filename)
+                with resource_path.open("rb") as src:
                     content = src.read()
                     (system_dir / filename).write_bytes(content)
             except (FileNotFoundError, TypeError):
                 # リソースが見つからない場合はスキップ
                 pass
+
+        # Koruriフォントをsystem/font.ttfとしてコピー
+        self._copy_font_file(system_dir)
+
+    def _copy_font_file(self, system_dir: Path) -> None:
+        """Koruriフォントをsystem/font.ttfとしてコピーする
+
+        PolyfillInitialize.tjsはsystem/font.ttfまたはsystem/font.otfを探して
+        デフォルトフォントとして設定する。
+
+        Args:
+            system_dir: システムディレクトリのパス
+        """
+        import asyncio
+        import logging
+
+        logger = logging.getLogger(__name__)
+        font_dest = system_dir / "font.ttf"
+
+        # 既にフォントが存在する場合はスキップ
+        if font_dest.exists():
+            return
+
+        try:
+            fetcher = FontFetcher()
+
+            # 同期コンテキストで非同期メソッドを実行
+            loop = asyncio.new_event_loop()
+            try:
+                font_info = loop.run_until_complete(fetcher.get_font())
+            finally:
+                loop.close()
+
+            # フォントファイルをコピー
+            shutil.copy2(font_info.path, font_dest)
+            logger.info(f"Koruriフォントをコピーしました: {font_dest}")
+
+        except FontDownloadError as e:
+            # フォントダウンロードに失敗してもビルドは継続
+            logger.warning(f"フォントのダウンロードに失敗しました: {e}")
+        except OSError as e:
+            logger.warning(f"フォントファイルのコピーに失敗しました: {e}")
 
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド

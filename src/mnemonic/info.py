@@ -138,7 +138,7 @@ def analyze_game(path: Path) -> GameInfo:
 
     script_extensions = [".ks", ".tjs"]
     image_extensions = [".png", ".jpg", ".jpeg", ".bmp", ".gif"]
-    audio_extensions = [".ogg", ".wav", ".mp3", ".flac"]
+    audio_extensions = [".ogg", ".wav", ".mp3", ".flac", ".mid", ".midi"]
     video_extensions = [".mp4", ".avi", ".wmv", ".mkv"]
 
     scripts = collect_file_stats(path, script_extensions)
