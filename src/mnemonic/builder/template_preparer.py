@@ -65,6 +65,7 @@ class TemplatePreparer:
         package_name: str,
         app_name: str,
         assets_dir: Path | None = None,
+        icon_path: Path | None = None,
     ) -> None:
         """テンプレートを準備する
 
@@ -72,6 +73,7 @@ class TemplatePreparer:
             package_name: Androidパッケージ名（例: com.example.game）
             app_name: アプリケーション表示名
             assets_dir: ゲームファイルを含むディレクトリ（オプション）
+            icon_path: アプリアイコンのパス（オプション）
 
         Raises:
             TemplatePreparerError: テンプレート準備に失敗した場合
@@ -94,6 +96,10 @@ class TemplatePreparer:
         # 6. assetsをコピー（指定されている場合）
         if assets_dir is not None:
             self._copy_assets(assets_dir)
+
+        # 7. アイコンを更新（指定されている場合）
+        if icon_path is not None and icon_path.exists():
+            self._update_icon(icon_path)
 
     def _extract_jni_libs(self) -> None:
         """krkrsdl2_universal.apkから.soファイルを抽出する
@@ -438,3 +444,20 @@ public class KirikiriSDL2Activity extends SDLActivity {{
 
         # ディレクトリをコピー
         shutil.copytree(assets_dir, dest_dir, dirs_exist_ok=True)
+
+    def _update_icon(self, icon_path: Path) -> None:
+        """アプリアイコンを更新する
+
+        各解像度のmipmapディレクトリにアイコンファイルをコピーする。
+
+        Args:
+            icon_path: アイコン画像のパス
+        """
+        res_dir = self._project_dir / "app" / "src" / "main" / "res"
+        densities = ["mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"]
+
+        for density in densities:
+            mipmap_dir = res_dir / f"mipmap-{density}"
+            mipmap_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = mipmap_dir / "ic_launcher.png"
+            shutil.copy2(icon_path, dest_path)

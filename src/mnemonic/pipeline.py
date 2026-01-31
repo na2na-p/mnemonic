@@ -531,12 +531,16 @@ class BuildPipeline:
             else base_name
         )
 
-        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー）
+        # ゲームアイコンを検索
+        icon_path = self._find_game_icon()
+
+        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー、アイコン設定）
         preparer = TemplatePreparer(self._project_dir)
         preparer.prepare(
             package_name=package_name,
             app_name=app_name,
             assets_dir=self._convert_dir,
+            icon_path=icon_path,
         )
 
         # Gradleビルド実行
