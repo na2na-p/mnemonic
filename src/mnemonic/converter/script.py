@@ -111,7 +111,7 @@ class ScriptAdjuster(BaseConverter):
             )
 
         try:
-            content = source.read_text(encoding="utf-8")
+            content = source.read_text(encoding="utf-8-sig")  # BOM を自動除去
             bytes_before = len(content.encode("utf-8"))
 
             adjusted_content, adjustment_count = self.adjust_content(content, source.name)
@@ -136,9 +136,9 @@ class ScriptAdjuster(BaseConverter):
             # 出力先ディレクトリを作成
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # 調整後の内容を書き込み
-            dest.write_text(adjusted_content, encoding="utf-8")
-            bytes_after = len(adjusted_content.encode("utf-8"))
+            # 調整後の内容を書き込み（Kirikiri スクリプトは UTF-8 BOM が必要）
+            dest.write_text(adjusted_content, encoding="utf-8-sig")
+            bytes_after = len(adjusted_content.encode("utf-8")) + 3  # BOM 3バイト
 
             return ConversionResult(
                 source_path=source,
@@ -181,20 +181,19 @@ class ScriptAdjuster(BaseConverter):
         return result, total_count
 
     def add_startup_directive(self, content: str) -> str:
-        """startup.tjsにエンコーディングディレクティブを追加する
+        """startup.tjsにエンコーディングディレクティブとプラットフォームスタブを追加する
 
-        KiriKiriZ用のエンコーディング指定ディレクティブをスクリプト先頭に追加する。
+        KiriKiriZ用のエンコーディング指定ディレクティブと、
+        Android で欠落しているクラス（MenuItem等）のスタブをスクリプト先頭に追加する。
 
         Args:
             content: 元のスクリプト内容
 
         Returns:
-            ディレクティブを追加した内容
+            ディレクティブとスタブを追加した内容
         """
-        directive = """@if (kirikiriz)
-{
-    System.setArgument("-readencoding", "UTF-8");
-}
-@endif
+        directive = """// krkrsdl2 polyfill initialization
+Scripts.execStorage("system/polyfillinitialize.tjs");
+
 """
         return directive + content

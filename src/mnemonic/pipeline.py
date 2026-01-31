@@ -23,9 +23,11 @@ from mnemonic.builder.template import (
     TemplateDownloader,
 )
 from mnemonic.builder.template_preparer import TemplatePreparer
+from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.encoding import EncodingConverter
 from mnemonic.converter.image import ImageConverter
 from mnemonic.converter.manager import ConversionManager
+from mnemonic.converter.script import ScriptAdjuster
 from mnemonic.converter.video import VideoConverter
 from mnemonic.parser.detector import GameDetector, GameStructure
 from mnemonic.parser.exe import EmbeddedXP3Extractor
@@ -459,10 +461,6 @@ class BuildPipeline:
         # まず全ファイルをコピー（data.xp3等のゲームコアファイルを含む）
         shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
 
-        # Androidのファイルシステムは大文字小文字を区別するため、
-        # 重要なファイル名を正規化（小文字化）
-        self._normalize_critical_filenames(self._convert_dir)
-
         # コンバーターを設定
         converters: list[Any] = [
             EncodingConverter(),
@@ -475,6 +473,17 @@ class BuildPipeline:
         # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
+
+        # krkrsdl2 polyfill ファイルをコピー
+        self._copy_polyfill_files(self._convert_dir)
+
+        # スクリプト調整（startup.tjs に polyfill 読み込みを追加）
+        self._adjust_scripts(self._convert_dir)
+
+        # Androidのファイルシステムは大文字小文字を区別するため、
+        # 重要なファイル名を正規化（小文字化）
+        # 注意: 変換処理の後に行う必要がある（変換が元のケースでファイルを作成するため）
+        self._normalize_critical_filenames(self._convert_dir)
 
     def _normalize_critical_filenames(self, directory: Path) -> None:
         """Kirikiri の重要なファイル名を正規化（小文字化）する
@@ -501,6 +510,65 @@ class BuildPipeline:
             if startup_file.exists():
                 startup_file.rename(directory / "startup.tjs")
                 break
+
+    def _adjust_scripts(self, directory: Path) -> None:
+        """スクリプトファイルを調整する
+
+        startup.tjs に Android 互換性のためのスタブ（MenuItem クラス等）を追加する。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        # startup.tjs を検索（大文字小文字のバリエーション対応）
+        startup_file = None
+        for variant in ["startup.tjs", "Startup.tjs", "STARTUP.TJS", "StartUp.tjs"]:
+            candidate = directory / variant
+            if candidate.exists():
+                startup_file = candidate
+                break
+
+        if startup_file is None:
+            return
+
+        # ScriptAdjuster で調整を適用
+        adjuster = ScriptAdjuster()
+        result = adjuster.convert(startup_file, startup_file)
+
+        if result.status == ConversionStatus.SUCCESS:
+            # 調整が成功した場合、ログ等は不要
+            pass
+
+    def _copy_polyfill_files(self, directory: Path) -> None:
+        """krkrsdl2 polyfill ファイルをコピーする
+
+        krkrsdl2/kag3 プロジェクトの polyfill ファイルをゲームデータディレクトリにコピーする。
+        これにより MenuItem や KAGParser などの不足クラスが提供される。
+
+        Args:
+            directory: コピー先のディレクトリ（ゲームデータのルート）
+        """
+        import importlib.resources
+
+        # system ディレクトリにコピー（Kirikiri が確実に見つけられる場所）
+        system_dir = directory / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+
+        # リソースからpolyfillファイルをコピー
+        polyfill_files = [
+            "PolyfillInitialize.tjs",
+            "MenuItem_stub.tjs",
+            "KAGParser.tjs",
+        ]
+
+        resources_package = "mnemonic.resources.system_polyfill"
+        for filename in polyfill_files:
+            try:
+                with importlib.resources.files(resources_package).joinpath(filename).open("rb") as src:
+                    content = src.read()
+                    (system_dir / filename).write_bytes(content)
+            except (FileNotFoundError, TypeError):
+                # リソースが見つからない場合はスキップ
+                pass
 
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
