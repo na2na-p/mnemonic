@@ -6,7 +6,7 @@ PNG形式で保存する機能を提供します。
 
 from __future__ import annotations
 
-from io import BytesIO
+import tempfile
 from pathlib import Path
 from typing import Protocol
 
@@ -57,34 +57,41 @@ class ExeIconExtractor:
         try:
             extractor = IcoExtractor(str(exe_path))
 
-            # ICO形式でアイコンを抽出
-            ico_data = BytesIO()
-            extractor.export_icon(ico_data)
-            ico_data.seek(0)
+            # ICO形式でアイコンを一時ファイルに抽出
+            # icoextract は BytesIO をサポートしていないため一時ファイルを使用
+            with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as tmp:
+                tmp_ico_path = Path(tmp.name)
 
-            # ICOを開いて最大サイズのアイコンを取得
-            with Image.open(ico_data) as img:
-                # ICOファイルには複数サイズが含まれている場合がある
-                # 最大サイズを選択
-                if hasattr(img, "n_frames") and img.n_frames > 1:
-                    max_size = 0
-                    best_frame = 0
-                    for frame in range(img.n_frames):
-                        img.seek(frame)
-                        size = img.size[0] * img.size[1]
-                        if size > max_size:
-                            max_size = size
-                            best_frame = frame
-                    img.seek(best_frame)
+            try:
+                extractor.export_icon(str(tmp_ico_path))
 
-                # 出力ディレクトリを作成
-                output_path.mkdir(parents=True, exist_ok=True)
+                # ICOを開いて最大サイズのアイコンを取得
+                with Image.open(tmp_ico_path) as img:
+                    # ICOファイルには複数サイズが含まれている場合がある
+                    # 最大サイズを選択
+                    if hasattr(img, "n_frames") and img.n_frames > 1:
+                        max_size = 0
+                        best_frame = 0
+                        for frame in range(img.n_frames):
+                            img.seek(frame)
+                            size = img.size[0] * img.size[1]
+                            if size > max_size:
+                                max_size = size
+                                best_frame = frame
+                        img.seek(best_frame)
 
-                # PNG形式で保存
-                icon_output = output_path / "icon.png"
-                img.save(str(icon_output), "PNG")
+                    # 出力ディレクトリを作成
+                    output_path.mkdir(parents=True, exist_ok=True)
 
-                return icon_output
+                    # PNG形式で保存
+                    icon_output = output_path / "icon.png"
+                    img.save(str(icon_output), "PNG")
+
+                    return icon_output
+            finally:
+                # 一時ファイルを削除
+                if tmp_ico_path.exists():
+                    tmp_ico_path.unlink()
 
         except NoIconsAvailableError:
             # アイコンが見つからない
