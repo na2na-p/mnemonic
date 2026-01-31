@@ -698,6 +698,9 @@ class TemplateDownloader:
     async def get_latest_version(self) -> str:
         """最新バージョンを取得する
 
+        /releases/latestを試み、404の場合は/releasesから最初のリリースを取得する。
+        これにより、pre-releaseのみのリポジトリにも対応できる。
+
         Returns:
             最新のテンプレートバージョン文字列
 
@@ -710,6 +713,20 @@ class TemplateDownloader:
                 GITHUB_LATEST_RELEASE_URL,
                 headers={"Accept": "application/vnd.github+json"},
             )
+
+            if response.status_code == 404:
+                # /releases/latestが404の場合（pre-releaseのみの場合）
+                # /releasesから最初のリリースを取得
+                response = await client.get(
+                    GITHUB_RELEASES_URL,
+                    headers={"Accept": "application/vnd.github+json"},
+                )
+                response.raise_for_status()
+                releases = response.json()
+                if not releases:
+                    raise NetworkError("リリースが見つかりません")
+                return str(releases[0]["tag_name"])
+
             response.raise_for_status()
             data = response.json()
             return str(data["tag_name"])
@@ -719,7 +736,7 @@ class TemplateDownloader:
             raise NetworkError(f"HTTP error occurred: {e.response.status_code}") from e
         except httpx.RequestError as e:
             raise NetworkError(f"Network error occurred: {e}") from e
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError, IndexError) as e:
             raise NetworkError(f"Invalid API response format: {e}") from e
         finally:
             if self._owns_client:

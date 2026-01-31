@@ -15,6 +15,7 @@ from mnemonic.builder.template import (
     TemplateNotFoundError,
 )
 
+
 async def async_byte_iterator(data: bytes) -> AsyncIterator[bytes]:
     """バイトデータを非同期イテレータとして返すヘルパー関数"""
     yield data
@@ -152,6 +153,57 @@ class TestTemplateDownloaderGetLatestVersion:
             await downloader.get_latest_version()
 
         assert "timed out" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_get_latest_version_fallback_to_releases_on_404(self) -> None:
+        """正常系: /releases/latestが404の場合、/releasesにフォールバック"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+        # 最初の呼び出し: /releases/latest が404を返す
+        latest_response = MagicMock()
+        latest_response.status_code = 404
+
+        # 2回目の呼び出し: /releases がリリース一覧を返す
+        releases_response = MagicMock()
+        releases_response.status_code = 200
+        releases_response.json.return_value = [
+            {"tag_name": "v1.2.0"},
+            {"tag_name": "v1.1.0"},
+            {"tag_name": "v1.0.0"},
+        ]
+        releases_response.raise_for_status = MagicMock()
+
+        mock_client.get.side_effect = [latest_response, releases_response]
+
+        downloader = TemplateDownloader(http_client=mock_client)
+        version = await downloader.get_latest_version()
+
+        assert version == "v1.2.0"
+        assert mock_client.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_latest_version_fallback_with_empty_releases(self) -> None:
+        """異常系: フォールバック先でリリースが空の場合、NetworkErrorが発生"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+        # /releases/latest が404を返す
+        latest_response = MagicMock()
+        latest_response.status_code = 404
+
+        # /releases が空のリストを返す
+        releases_response = MagicMock()
+        releases_response.status_code = 200
+        releases_response.json.return_value = []
+        releases_response.raise_for_status = MagicMock()
+
+        mock_client.get.side_effect = [latest_response, releases_response]
+
+        downloader = TemplateDownloader(http_client=mock_client)
+
+        with pytest.raises(NetworkError) as exc_info:
+            await downloader.get_latest_version()
+
+        assert "リリースが見つかりません" in str(exc_info.value)
 
 class TestTemplateDownloaderGetDownloadUrl:
     """TemplateDownloader.get_download_urlのテスト"""
