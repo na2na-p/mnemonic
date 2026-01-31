@@ -16,30 +16,36 @@ import httpx
 if TYPE_CHECKING:
     from mnemonic.cache import CacheManager
 
+
 class TemplateDownloadError(Exception):
     """テンプレートダウンロードに関する基本例外クラス"""
 
     pass
+
 
 class TemplateCacheError(Exception):
     """テンプレートキャッシュに関する基本例外クラス"""
 
     pass
 
+
 class TemplateNotFoundError(TemplateDownloadError):
     """指定されたバージョンのテンプレートが存在しない場合の例外"""
 
     pass
+
 
 class NetworkError(TemplateDownloadError):
     """ネットワークエラー発生時の例外"""
 
     pass
 
+
 class FileIntegrityError(TemplateDownloadError):
     """ファイル整合性チェックに失敗した場合の例外"""
 
     pass
+
 
 @dataclass(frozen=True)
 class TemplateInfo:
@@ -49,6 +55,7 @@ class TemplateInfo:
     download_url: str
     file_size: int
     file_name: str
+
 
 @dataclass(frozen=True)
 class ProjectConfig:
@@ -66,15 +73,18 @@ class ProjectConfig:
     version_code: int
     version_name: str
 
+
 class ProjectGenerationError(Exception):
     """プロジェクト生成に関する基本例外クラス"""
 
     pass
 
+
 class InvalidTemplateError(ProjectGenerationError):
     """テンプレートの整合性検証に失敗した場合の例外"""
 
     pass
+
 
 class ProjectGenerator:
     """テンプレートからAndroidプロジェクトを生成するクラス
@@ -386,6 +396,7 @@ class ProjectGenerator:
         except OSError as e:
             raise ProjectGenerationError(f"Failed to update build.gradle: {e}") from e
 
+
 class TemplateCache:
     """テンプレートキャッシュを管理するクラス
 
@@ -598,8 +609,9 @@ class TemplateCache:
         except OSError as e:
             raise TemplateCacheError(f"Failed to clear cache: {e}") from e
 
+
 # GitHub APIとダウンロードURL構築に使用する定数
-GITHUB_API_BASE = "https://api.github.com/repos/krkrz/krkrsdl2"
+GITHUB_API_BASE = "https://api.github.com/repos/krkrsdl2/krkrsdl2"
 GITHUB_RELEASES_URL = f"{GITHUB_API_BASE}/releases"
 GITHUB_LATEST_RELEASE_URL = f"{GITHUB_RELEASES_URL}/latest"
 
@@ -608,6 +620,7 @@ TEMPLATE_ASSET_PATTERN = re.compile(r"krkrsdl2_android.*\.zip$", re.IGNORECASE)
 
 # バージョン文字列の検証パターン
 VERSION_PATTERN = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+
 
 class TemplateDownloader:
     """GitHub Releasesからkrkrsdl2テンプレートをダウンロードするクラス
@@ -867,10 +880,12 @@ class TemplateDownloader:
                 f"File size mismatch: expected {expected_size} bytes, got {actual_size} bytes"
             )
 
+
 class AssetPlacementError(Exception):
     """アセット配置に関する基本例外クラス"""
 
     pass
+
 
 @dataclass(frozen=True)
 class AssetConfig:
@@ -883,6 +898,7 @@ class AssetConfig:
 
     no_compress_extensions: list[str]
     exclude_patterns: list[str]
+
 
 @dataclass(frozen=True)
 class AssetPlacementResult:
@@ -897,6 +913,7 @@ class AssetPlacementResult:
     total_files: int
     total_size: int
     placed_files: list[Path]
+
 
 class AssetPlacer:
     """変換済みアセットをAndroidプロジェクトに配置するクラス
