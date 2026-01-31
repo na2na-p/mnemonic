@@ -20,6 +20,7 @@ async def async_byte_iterator(data: bytes) -> AsyncIterator[bytes]:
     """バイトデータを非同期イテレータとして返すヘルパー関数"""
     yield data
 
+
 class TestTemplateInfo:
     """TemplateInfoデータクラスのテスト"""
 
@@ -49,6 +50,7 @@ class TestTemplateInfo:
         with pytest.raises(AttributeError):
             info.version = "v2.0.0"  # type: ignore[misc]
 
+
 class TestTemplateDownloaderInit:
     """TemplateDownloader初期化のテスト"""
 
@@ -69,6 +71,7 @@ class TestTemplateDownloaderInit:
         downloader = TemplateDownloader(http_client=mock_client)
         assert downloader._http_client is mock_client
         assert downloader._owns_client is False
+
 
 class TestTemplateDownloaderGetLatestVersion:
     """TemplateDownloader.get_latest_versionのテスト"""
@@ -205,6 +208,7 @@ class TestTemplateDownloaderGetLatestVersion:
 
         assert "リリースが見つかりません" in str(exc_info.value)
 
+
 class TestTemplateDownloaderGetDownloadUrl:
     """TemplateDownloader.get_download_urlのテスト"""
 
@@ -255,6 +259,7 @@ class TestTemplateDownloaderGetDownloadUrl:
 
         assert "Invalid version format" in str(exc_info.value)
 
+
 def create_mock_stream_response(data: bytes) -> MagicMock:
     """ダウンロードストリームレスポンスのモックを作成する"""
     mock_stream_response = MagicMock()
@@ -262,6 +267,7 @@ def create_mock_stream_response(data: bytes) -> MagicMock:
     mock_stream_response.raise_for_status = MagicMock()
     mock_stream_response.aiter_bytes = lambda chunk_size=8192: async_byte_iterator(data)
     return mock_stream_response
+
 
 class TestTemplateDownloaderDownload:
     """TemplateDownloader.downloadのテスト"""
@@ -411,6 +417,7 @@ class TestTemplateDownloaderDownload:
 
         assert "Network error" in str(exc_info.value)
 
+
 class TestTemplateDownloaderIntegrityCheck:
     """ダウンロードファイルの整合性チェックのテスト"""
 
@@ -483,6 +490,7 @@ class TestTemplateDownloaderIntegrityCheck:
             await downloader.download(version="v1.0.0")
 
         assert "mismatch" in str(exc_info.value).lower()
+
 
 class TestExceptionClasses:
     """例外クラスのテスト"""
