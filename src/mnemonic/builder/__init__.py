@@ -24,6 +24,11 @@ from mnemonic.builder.template import (
     TemplateInfo,
     TemplateNotFoundError,
 )
+from mnemonic.builder.template_preparer import (
+    JniLibsNotFoundError,
+    TemplatePreparer,
+    TemplatePreparerError,
+)
 
 __all__ = [
     "AssetConfig",
@@ -36,6 +41,7 @@ __all__ = [
     "GradleNotFoundError",
     "GradleTimeoutError",
     "InvalidTemplateError",
+    "JniLibsNotFoundError",
     "NetworkError",
     "ProjectConfig",
     "ProjectGenerationError",
@@ -46,4 +52,6 @@ __all__ = [
     "TemplateDownloader",
     "TemplateInfo",
     "TemplateNotFoundError",
+    "TemplatePreparer",
+    "TemplatePreparerError",
 ]

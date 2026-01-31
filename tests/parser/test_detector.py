@@ -12,6 +12,7 @@ from mnemonic.parser.detector import EngineType, GameDetector, GameStructure
 # テストフィクスチャディレクトリのパス
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "parser" / "game_samples"
 
+
 class TestEngineType:
     """EngineType列挙型のテスト"""
 
@@ -39,6 +40,7 @@ class TestEngineType:
         """EngineTypeの値が期待通りである"""
         assert engine_type.value == expected_value
 
+
 class TestGameStructure:
     """GameStructureデータクラスのテスト"""
 
@@ -46,6 +48,7 @@ class TestGameStructure:
         """GameStructureが正しく生成される"""
         structure = GameStructure(
             engine=EngineType.KIRIKIRI2,
+            title="テストゲーム",
             scripts=["scenario/first.ks"],
             script_encoding="shift_jis",
             images=["image/bg01.tlg"],
@@ -55,6 +58,7 @@ class TestGameStructure:
         )
 
         assert structure.engine == EngineType.KIRIKIRI2
+        assert structure.title == "テストゲーム"
         assert structure.scripts == ["scenario/first.ks"]
         assert structure.script_encoding == "shift_jis"
         assert structure.images == ["image/bg01.tlg"]
@@ -66,6 +70,7 @@ class TestGameStructure:
         """GameStructureはイミュータブル"""
         structure = GameStructure(
             engine=EngineType.KIRIKIRI2,
+            title=None,
             scripts=[],
             script_encoding=None,
             images=[],
@@ -81,6 +86,7 @@ class TestGameStructure:
         """script_encodingがNoneでも正しく生成される"""
         structure = GameStructure(
             engine=EngineType.UNKNOWN,
+            title=None,
             scripts=[],
             script_encoding=None,
             images=[],
@@ -90,6 +96,7 @@ class TestGameStructure:
         )
 
         assert structure.script_encoding is None
+
 
 class TestGameDetectorInit:
     """GameDetector初期化のテスト"""
@@ -105,6 +112,7 @@ class TestGameDetectorInit:
         nonexistent_dir = Path("/nonexistent/path/to/game")
         with pytest.raises(FileNotFoundError):
             GameDetector(nonexistent_dir)
+
 
 class TestGameDetectorDetect:
     """GameDetector.detectメソッドのテスト"""
@@ -212,6 +220,7 @@ class TestGameDetectorDetect:
         # ゲームエンジンが特定できない場合はUNKNOWN
         assert result.engine == EngineType.UNKNOWN
 
+
 class TestGameDetectorGetSummary:
     """GameDetector.get_summaryメソッドのテスト"""
 
@@ -269,6 +278,49 @@ class TestGameDetectorGetSummary:
         }
         assert any(kw.lower() in summary.lower() for kw in keywords[resource_type])
 
+
+class TestGameDetectorTitleDetection:
+    """GameDetector.タイトル検出のテスト"""
+
+    @pytest.fixture
+    def kirikiri2_game_dir(self) -> Path:
+        """吉里吉里2ゲームのテストディレクトリ"""
+        return FIXTURES_DIR / "kirikiri2_game"
+
+    def test_detect_title_from_config_tjs(self, kirikiri2_game_dir: Path) -> None:
+        """Config.tjsからタイトルを正しく検出できる"""
+        detector = GameDetector(kirikiri2_game_dir)
+        result = detector.detect()
+
+        assert result.title == "テストゲーム"
+
+    def test_detect_title_returns_none_when_no_title_in_config(self, tmp_path: Path) -> None:
+        """Config.tjsにSystem.titleが存在しない場合にNoneを返す"""
+        # Config.tjsを作成（タイトルなし）
+        system_dir = tmp_path / "system"
+        system_dir.mkdir()
+        config_file = system_dir / "Config.tjs"
+        config_file.write_text("// No title here\nclass Config {}", encoding="utf-8")
+
+        # ダミーファイルを追加（空ディレクトリエラー回避）
+        (tmp_path / "dummy.txt").write_text("dummy")
+
+        detector = GameDetector(tmp_path)
+        result = detector.detect()
+
+        assert result.title is None
+
+    def test_detect_title_returns_none_when_no_config(self, tmp_path: Path) -> None:
+        """Config.tjsが存在しない場合にNoneを返す"""
+        # ダミーファイルを追加（空ディレクトリエラー回避）
+        (tmp_path / "dummy.txt").write_text("dummy")
+
+        detector = GameDetector(tmp_path)
+        result = detector.detect()
+
+        assert result.title is None
+
+
 class TestGameDetectorIntegration:
     """GameDetectorの統合テスト"""
 
@@ -287,6 +339,7 @@ class TestGameDetectorIntegration:
 
         # 3. 検出結果を検証
         assert structure.engine in (EngineType.KIRIKIRI2, EngineType.KIRIKIRI2_KAG3)
+        assert structure.title == "テストゲーム"
         assert len(structure.scripts) > 0
         assert len(structure.images) > 0
         assert len(structure.audio) > 0

@@ -575,6 +575,65 @@ class TestPipelineProgress:
         assert progress.message == message
 
 
+class TestBuildPipelineSanitizeName:
+    """BuildPipeline._sanitize_name メソッドのテスト"""
+
+    @pytest.mark.parametrize(
+        "input_name, expected",
+        [
+            pytest.param(
+                "TRUE REMEMBRANCE",
+                "true_remembrance",
+                id="正常系: スペースをアンダースコアに変換",
+            ),
+            pytest.param(
+                "true",
+                "game_true",
+                id="正常系: Java予約語にプレフィックス追加",
+            ),
+            pytest.param(
+                "false",
+                "game_false",
+                id="正常系: Java予約語falseにプレフィックス追加",
+            ),
+            pytest.param(
+                "null",
+                "game_null",
+                id="正常系: Java予約語nullにプレフィックス追加",
+            ),
+            pytest.param(
+                "123game",
+                "_123game",
+                id="正常系: 数字始まりにプレフィックス追加",
+            ),
+            pytest.param(
+                "game!@#$%",
+                "game",
+                id="正常系: 特殊文字を削除",
+            ),
+            pytest.param(
+                "My Game 2",
+                "my_game_2",
+                id="正常系: スペースと数字の組み合わせ",
+            ),
+        ],
+    )
+    def test_sanitize_name(self, input_name: str, expected: str, tmp_path: Path) -> None:
+        """_sanitize_nameが正しくパッケージ名を生成する"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        result = pipeline._sanitize_name(input_name)
+
+        assert result == expected
+
+
 class TestBuildPipelineInit:
     """BuildPipeline初期化のテスト"""
 
@@ -605,3 +664,125 @@ class TestBuildPipelineInit:
 
         assert pipeline.config.input_path == input_file
         assert pipeline.config.package_name == "com.example.game"
+
+
+class TestBuildPipelineFindGameIcon:
+    """BuildPipeline._find_game_iconのテスト"""
+
+    def test_find_game_icon_returns_none_when_extract_dir_is_none(self, tmp_path: Path) -> None:
+        """抽出ディレクトリがNoneの場合はNoneを返す"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # _extract_dirはNoneの状態
+        result = pipeline._find_game_icon()
+
+        assert result is None
+
+    @pytest.mark.parametrize(
+        "icon_name",
+        [
+            pytest.param("icon.png", id="正常系: icon.pngを検出"),
+            pytest.param("icon.ico", id="正常系: icon.icoを検出"),
+            pytest.param("icon.bmp", id="正常系: icon.bmpを検出"),
+        ],
+    )
+    def test_find_game_icon_returns_prioritized_icon(self, tmp_path: Path, icon_name: str) -> None:
+        """優先度の高いアイコンファイルを返す"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # 抽出ディレクトリをセット
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        pipeline._extract_dir = extract_dir
+
+        # アイコンファイルを作成
+        icon_path = extract_dir / icon_name
+        icon_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        result = pipeline._find_game_icon()
+
+        assert result == icon_path
+
+    def test_find_game_icon_prefers_png_over_ico(self, tmp_path: Path) -> None:
+        """icon.pngがicon.icoより優先される"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        pipeline._extract_dir = extract_dir
+
+        # 両方のアイコンファイルを作成
+        png_path = extract_dir / "icon.png"
+        png_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+        ico_path = extract_dir / "icon.ico"
+        ico_path.write_bytes(b"\x00\x00\x01\x00")
+
+        result = pipeline._find_game_icon()
+
+        assert result == png_path
+
+    def test_find_game_icon_falls_back_to_any_ico(self, tmp_path: Path) -> None:
+        """優先アイコンがない場合は任意の.icoファイルを返す"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        pipeline._extract_dir = extract_dir
+
+        # 優先ファイル名ではないicoファイルを作成
+        custom_ico = extract_dir / "game_icon.ico"
+        custom_ico.write_bytes(b"\x00\x00\x01\x00")
+
+        result = pipeline._find_game_icon()
+
+        assert result == custom_ico
+
+    def test_find_game_icon_returns_none_when_no_icon(self, tmp_path: Path) -> None:
+        """アイコンファイルが存在しない場合はNoneを返す"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        extract_dir = tmp_path / "extract"
+        extract_dir.mkdir()
+        pipeline._extract_dir = extract_dir
+
+        # アイコンファイルは作成しない
+        (extract_dir / "data.xp3").write_bytes(b"XP3")
+
+        result = pipeline._find_game_icon()
+
+        assert result is None

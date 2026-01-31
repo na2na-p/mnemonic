@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -18,12 +19,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 import mnemonic.cache as cache_module
 from mnemonic.builder.gradle import GradleBuilder
 from mnemonic.builder.template import (
-    AssetPlacer,
-    ProjectConfig,
-    ProjectGenerator,
     TemplateCache,
     TemplateDownloader,
 )
+from mnemonic.builder.template_preparer import TemplatePreparer
 from mnemonic.converter.encoding import EncodingConverter
 from mnemonic.converter.image import ImageConverter
 from mnemonic.converter.manager import ConversionManager
@@ -35,6 +34,63 @@ from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, K
 
 if TYPE_CHECKING:
     from mnemonic.cache import CacheInfo
+
+# Java予約語リスト（パッケージ名生成時のフォールバック用）
+JAVA_RESERVED_WORDS = {
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "false",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "true",
+    "try",
+    "void",
+    "volatile",
+    "while",
+}
 
 
 class DefaultCacheManager:
@@ -387,6 +443,8 @@ class BuildPipeline:
         """CONVERTフェーズ: アセット変換
 
         抽出されたアセットをAndroid互換形式に変換する。
+        まず全ファイルをコピーし（ゲームコアファイルを含む）、
+        その後変換対象ファイルを変換（上書き）する。
 
         Raises:
             ValueError: 抽出フェーズが完了していない場合
@@ -397,6 +455,9 @@ class BuildPipeline:
         self._convert_dir = Path(tempfile.mkdtemp(prefix="mnemonic_convert_"))
         self._temp_dirs.append(self._convert_dir)
 
+        # まず全ファイルをコピー（data.xp3等のゲームコアファイルを含む）
+        shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
+
         # コンバーターを設定
         converters: list[Any] = [
             EncodingConverter(),
@@ -406,13 +467,15 @@ class BuildPipeline:
         if not self._config.skip_video:
             converters.append(VideoConverter(timeout=self._config.ffmpeg_timeout))
 
+        # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
 
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
 
-        Androidプロジェクトを生成し、Gradleでビルドする。
+        Gradleビルドを使用してAPKを生成する。
+        テンプレートを展開し、ゲームファイルをassetsに配置してビルドする。
 
         Raises:
             ValueError: 変換フェーズが完了していない、またはビルド失敗の場合
@@ -452,36 +515,89 @@ class BuildPipeline:
         if template_path is None:
             raise ValueError("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-        # パッケージ名とアプリ名の決定
-        input_name = self._config.input_path.stem
-        package_name = self._config.package_name or f"com.krkr.{self._sanitize_name(input_name)}"
-        app_name = self._config.app_name or input_name
+        # テンプレートをプロジェクトディレクトリに展開
+        self._extract_template(template_path, self._project_dir)
 
-        # プロジェクト生成
-        project_config = ProjectConfig(
-            package_name=package_name,
-            app_name=app_name,
-            version_code=1,
-            version_name="1.0.0",
+        # タイトルからパッケージ名を生成（フォールバック: ファイル名）
+        if self._game_structure and self._game_structure.title:
+            base_name = self._game_structure.title
+        else:
+            base_name = self._config.input_path.stem
+
+        package_name = self._config.package_name or f"com.krkr.{self._sanitize_name(base_name)}"
+        app_name = self._config.app_name or (
+            self._game_structure.title
+            if self._game_structure and self._game_structure.title
+            else base_name
         )
 
-        generator = ProjectGenerator(template_path)
-        generator.generate(self._project_dir, project_config)
+        # ゲームアイコンを検索
+        icon_path = self._find_game_icon()
 
-        # アセット配置
-        placer = AssetPlacer(self._project_dir)
-        assets_dir = self._project_dir / "app" / "src" / "main" / "assets"
-        assets_dir.mkdir(parents=True, exist_ok=True)
-        placer.place_assets(self._convert_dir)
+        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー、アイコン設定）
+        preparer = TemplatePreparer(self._project_dir)
+        preparer.prepare(
+            package_name=package_name,
+            app_name=app_name,
+            assets_dir=self._convert_dir,
+            icon_path=icon_path,
+        )
 
-        # Gradleビルド
-        builder = GradleBuilder(self._project_dir, timeout=self._config.gradle_timeout)
-        result = builder.build("release")
+        # Gradleビルド実行
+        builder = GradleBuilder(
+            project_path=self._project_dir,
+            timeout=self._config.gradle_timeout,
+        )
+        result = builder.build(build_type="release")
 
         if not result.success or result.apk_path is None:
             raise ValueError(f"Gradleビルドに失敗しました: {result.output_log}")
 
         self._unsigned_apk = result.apk_path
+
+    def _extract_template(self, template_path: Path, dest_dir: Path) -> None:
+        """テンプレートをプロジェクトディレクトリに展開する
+
+        Args:
+            template_path: テンプレートZIPファイルのパス
+            dest_dir: 展開先ディレクトリ
+
+        Raises:
+            ValueError: テンプレートの展開に失敗した場合
+        """
+        if not template_path.exists():
+            raise ValueError(f"テンプレートが見つかりません: {template_path}")
+
+        try:
+            with zipfile.ZipFile(template_path, "r") as zf:
+                zf.extractall(dest_dir)
+        except zipfile.BadZipFile as e:
+            raise ValueError(f"無効なテンプレートファイルです: {template_path}") from e
+
+    def _find_game_icon(self) -> Path | None:
+        """ゲームアイコンを検索する
+
+        抽出ディレクトリからアイコンファイルを検索します。
+        krkr/吉里吉里ゲームでよく使われるアイコンファイル名を優先的に検索します。
+
+        Returns:
+            アイコンファイルのパス。見つからない場合はNone。
+        """
+        if self._extract_dir is None:
+            return None
+
+        # 優先順位の高いファイル名から検索
+        icon_names = ["icon.png", "icon.ico", "icon.bmp"]
+        for name in icon_names:
+            icon_path = self._extract_dir / name
+            if icon_path.exists():
+                return icon_path
+
+        # 任意のicoファイルを検索
+        for ico_file in self._extract_dir.glob("*.ico"):
+            return ico_file
+
+        return None
 
     def _execute_sign(self) -> None:
         """SIGNフェーズ: APK署名
@@ -520,11 +636,77 @@ class BuildPipeline:
             signer.sign(output_path, keystore_config)
             aligned_apk.unlink()
         else:
-            # 署名なし（デバッグ用）
-            shutil.move(str(aligned_apk), str(output_path))
+            # デバッグ用キーストアで署名
+            debug_keystore = self._create_debug_keystore()
+            debug_config = KeystoreConfig(
+                keystore_path=debug_keystore,
+                key_alias="debug",
+                keystore_password="android",
+            )
+            signer = DefaultApkSignerRunner()
+            shutil.copy2(aligned_apk, output_path)
+            signer.sign(output_path, debug_config)
+            aligned_apk.unlink()
+
+    def _create_debug_keystore(self) -> Path:
+        """デバッグ用キーストアを作成する
+
+        keytool コマンドを使用してデバッグ用の自己署名キーストアを生成します。
+
+        Returns:
+            生成されたキーストアのパス
+
+        Raises:
+            ValueError: keytool コマンドが見つからない場合
+        """
+        import subprocess
+
+        debug_keystore = Path(tempfile.mkdtemp(prefix="mnemonic_keystore_")) / "debug.keystore"
+        self._temp_dirs.append(debug_keystore.parent)
+
+        keytool_cmd = [
+            "keytool",
+            "-genkeypair",
+            "-v",
+            "-keystore",
+            str(debug_keystore),
+            "-storepass",
+            "android",
+            "-alias",
+            "debug",
+            "-keypass",
+            "android",
+            "-keyalg",
+            "RSA",
+            "-keysize",
+            "2048",
+            "-validity",
+            "10000",
+            "-dname",
+            "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US",
+        ]
+
+        try:
+            result = subprocess.run(
+                keytool_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                raise ValueError(f"keytool failed: {result.stderr}")
+        except FileNotFoundError as e:
+            raise ValueError("keytool command not found. Please install JDK.") from e
+        except subprocess.TimeoutExpired as e:
+            raise ValueError("keytool command timed out.") from e
+
+        return debug_keystore
 
     def _sanitize_name(self, name: str) -> str:
         """パッケージ名に使用できる形式に変換
+
+        空白は単語区切りとして保持するためアンダースコアに変換し、
+        その他の特殊文字（ハイフン、記号等）はパッケージ名に使用できないため削除する。
 
         Args:
             name: 変換対象の名前
@@ -532,10 +714,18 @@ class BuildPipeline:
         Returns:
             パッケージ名として使用可能な文字列
         """
-        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+        sanitized = name.replace(" ", "_")
+        sanitized = re.sub(r"[^a-zA-Z0-9_]", "", sanitized)
+        # 先頭が数字の場合はプレフィックス追加
         if sanitized and sanitized[0].isdigit():
             sanitized = "_" + sanitized
-        return sanitized.lower()
+        sanitized = sanitized.lower()
+
+        # Java予約語の場合はプレフィックス追加（フォールバック用）
+        if sanitized in JAVA_RESERVED_WORDS:
+            sanitized = f"game_{sanitized}"
+
+        return sanitized
 
     def _cleanup_temp_dirs(self) -> None:
         """一時ディレクトリをクリーンアップする"""
