@@ -619,8 +619,8 @@ GITHUB_LATEST_RELEASE_URL = f"{GITHUB_RELEASES_URL}/latest"
 # テンプレートアセットのファイル名パターン
 TEMPLATE_ASSET_PATTERN = re.compile(r"android-template\.zip$", re.IGNORECASE)
 
-# バージョン文字列の検証パターン（template-vX.X.X形式）
-VERSION_PATTERN = re.compile(r"^template-v\d+\.\d+(\.\d+)?$")
+# バージョン文字列の検証パターン（CalVer: template-YYYY.MM.DD形式）
+VERSION_PATTERN = re.compile(r"^template-\d{4}\.\d{2}\.\d{2}$")
 
 
 class TemplateDownloader:

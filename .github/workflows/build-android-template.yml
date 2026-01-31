@@ -2,7 +2,8 @@
 # krkrsdl2をビルドしてAndroidテンプレートを生成するワークフロー
 #
 # 手動実行: Actions > Build Android Template > Run workflow
-# 自動実行: template-v*タグがプッシュされた時
+#   - バージョン未指定時は CalVer (template-YYYY.MM.DD) で自動リリース
+# 自動実行: template-20*タグがプッシュされた時
 
 name: Build Android Template
 
@@ -13,13 +14,17 @@ on:
         description: 'krkrsdl2 ref (branch, tag, or commit)'
         required: false
         default: 'main'
-      version:
-        description: 'Release version (e.g., template-v1.0.0). If set, creates a GitHub Release.'
+      create_release:
+        description: 'Create GitHub Release'
         required: false
-        default: ''
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
   push:
     tags:
-      - 'template-v*'
+      - 'template-20*'
 
 env:
   KRKRSDL2_REPO: krkrsdl2/krkrsdl2
@@ -113,14 +118,17 @@ jobs:
           path: android-template.zip
           retention-days: 30
 
-      - name: Determine release version
+      - name: Determine release version (CalVer)
         id: version
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/template-v* ]]; then
+          if [[ "${{ github.ref }}" == refs/tags/template-* ]]; then
+            # Tag push: use tag name
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
-          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            # Manual dispatch with release: generate CalVer
+            CALVER="template-$(date -u +%Y.%m.%d)"
+            echo "version=${CALVER}" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
           else
             echo "should_release=false" >> $GITHUB_OUTPUT

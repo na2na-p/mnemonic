@@ -81,7 +81,7 @@ class TestTemplateDownloaderGetLatestVersion:
         """正常系: GitHub APIから最新バージョンを取得"""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"tag_name": "template-v1.0.0"}
+        mock_response.json.return_value = {"tag_name": "template-2026.01.31"}
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -90,7 +90,7 @@ class TestTemplateDownloaderGetLatestVersion:
         downloader = TemplateDownloader(http_client=mock_client)
         version = await downloader.get_latest_version()
 
-        assert version == "template-v1.0.0"
+        assert version == "template-2026.01.31"
         mock_client.get.assert_called_once()
 
     @pytest.mark.asyncio
@@ -98,14 +98,14 @@ class TestTemplateDownloaderGetLatestVersion:
         "api_response,expected_version",
         [
             pytest.param(
-                {"tag_name": "template-v1.0.0"},
-                "template-v1.0.0",
-                id="正常系: template-v1.0.0形式のバージョン",
+                {"tag_name": "template-2026.01.31"},
+                "template-2026.01.31",
+                id="正常系: template-2026.01.31形式のバージョン",
             ),
             pytest.param(
-                {"tag_name": "template-v2.1.3"},
-                "template-v2.1.3",
-                id="正常系: template-v2.1.3形式のバージョン",
+                {"tag_name": "template-2026.03.20"},
+                "template-2026.03.20",
+                id="正常系: template-2026.03.20形式のバージョン",
             ),
         ],
     )
@@ -165,9 +165,9 @@ class TestTemplateDownloaderGetLatestVersion:
         releases_response = MagicMock()
         releases_response.status_code = 200
         releases_response.json.return_value = [
-            {"tag_name": "template-v1.2.0"},
-            {"tag_name": "template-v1.1.0"},
-            {"tag_name": "template-v1.0.0"},
+            {"tag_name": "template-2026.01.15"},
+            {"tag_name": "template-2026.01.10"},
+            {"tag_name": "template-2026.01.31"},
         ]
         releases_response.raise_for_status = MagicMock()
 
@@ -176,7 +176,7 @@ class TestTemplateDownloaderGetLatestVersion:
         downloader = TemplateDownloader(http_client=mock_client)
         version = await downloader.get_latest_version()
 
-        assert version == "template-v1.2.0"
+        assert version == "template-2026.01.15"
         assert mock_client.get.call_count == 2
 
     @pytest.mark.asyncio
@@ -211,14 +211,14 @@ class TestTemplateDownloaderGetDownloadUrl:
         "version,expected_url_contains",
         [
             pytest.param(
-                "template-v1.0.0",
-                "template-v1.0.0",
-                id="正常系: template-v1.0.0でURL生成",
+                "template-2026.01.31",
+                "template-2026.01.31",
+                id="正常系: template-2026.01.31でURL生成",
             ),
             pytest.param(
-                "template-v2.1.3",
-                "template-v2.1.3",
-                id="正常系: template-v2.1.3でURL生成",
+                "template-2026.03.20",
+                "template-2026.03.20",
+                id="正常系: template-2026.03.20でURL生成",
             ),
         ],
     )
@@ -271,7 +271,7 @@ class TestTemplateDownloaderDownload:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "template-v1.0.0",
+            "tag_name": "template-2026.01.31",
             "assets": [
                 {
                     "name": "android-template.zip",
@@ -296,7 +296,7 @@ class TestTemplateDownloaderDownload:
 
         # ファイルサイズを一致させるためにモック
         with patch.object(downloader, "_verify_file_integrity"):
-            result = await downloader.download(version="template-v1.0.0")
+            result = await downloader.download(version="template-2026.01.31")
 
         assert result.parent.parent == tmp_path
 
@@ -308,14 +308,14 @@ class TestTemplateDownloaderDownload:
         # 最新バージョン取得のモック
         latest_response = MagicMock()
         latest_response.status_code = 200
-        latest_response.json.return_value = {"tag_name": "template-v2.0.0"}
+        latest_response.json.return_value = {"tag_name": "template-2026.02.15"}
         latest_response.raise_for_status = MagicMock()
 
         # リリース情報取得のモック
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "template-v2.0.0",
+            "tag_name": "template-2026.02.15",
             "assets": [
                 {
                     "name": "android-template.zip",
@@ -341,7 +341,7 @@ class TestTemplateDownloaderDownload:
         with patch.object(downloader, "_verify_file_integrity"):
             result = await downloader.download()
 
-        assert "template-v2.0.0" in str(result)
+        assert "template-2026.02.15" in str(result)
 
     @pytest.mark.asyncio
     async def test_download_returns_path_to_template(self, tmp_path: Path) -> None:
@@ -351,7 +351,7 @@ class TestTemplateDownloaderDownload:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "template-v1.0.0",
+            "tag_name": "template-2026.01.31",
             "assets": [
                 {
                     "name": "android-template.zip",
@@ -373,7 +373,7 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with patch.object(downloader, "_verify_file_integrity"):
-            result = await downloader.download(version="template-v1.0.0")
+            result = await downloader.download(version="template-2026.01.31")
 
         assert isinstance(result, Path)
         assert result.name == "android-template.zip"
@@ -390,7 +390,7 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(TemplateNotFoundError) as exc_info:
-            await downloader.download(version="template-v999.999.999")
+            await downloader.download(version="template-9999.99.99")
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -403,7 +403,7 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(NetworkError) as exc_info:
-            await downloader.download(version="template-v1.0.0")
+            await downloader.download(version="template-2026.01.31")
 
         assert "Network error" in str(exc_info.value)
 
@@ -420,7 +420,7 @@ class TestTemplateDownloaderIntegrityCheck:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "template-v1.0.0",
+            "tag_name": "template-2026.01.31",
             "assets": [
                 {
                     "name": "android-template.zip",
@@ -441,7 +441,7 @@ class TestTemplateDownloaderIntegrityCheck:
 
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
-        result = await downloader.download(version="template-v1.0.0")
+        result = await downloader.download(version="template-2026.01.31")
 
         assert result.exists()
         assert result.stat().st_size == len(test_content)
@@ -455,7 +455,7 @@ class TestTemplateDownloaderIntegrityCheck:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "template-v1.0.0",
+            "tag_name": "template-2026.01.31",
             "assets": [
                 {
                     "name": "android-template.zip",
@@ -477,7 +477,7 @@ class TestTemplateDownloaderIntegrityCheck:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(FileIntegrityError) as exc_info:
-            await downloader.download(version="template-v1.0.0")
+            await downloader.download(version="template-2026.01.31")
 
         assert "mismatch" in str(exc_info.value).lower()
 
