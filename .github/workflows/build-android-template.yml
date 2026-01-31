@@ -118,11 +118,12 @@ jobs:
           # These settings are for native compilation, not needed for pre-built .so files
           cp krkrsdl2/android-project/app/build.gradle template-output/app/
 
-          # Remove externalNativeBuild block inside defaultConfig (cmake arguments, abiFilters)
-          perl -i -0pe 's/(\s+externalNativeBuild\s*\{\s*cmake\s*\{[^}]*\}\s*\})//gs' template-output/app/build.gradle
+          # Remove CMake-related helper functions (not needed for pre-built .so files)
+          sed -i '/^def get_cmakelists_path/,/^}/d' template-output/app/build.gradle
+          sed -i '/^def get_cmake_arguments/,/^}/d' template-output/app/build.gradle
 
-          # Remove top-level externalNativeBuild block (cmake path, version)
-          perl -i -0pe 's/\n\s+externalNativeBuild\s*\{\s*cmake\s*\{[^}]*\}\s*\}//gs' template-output/app/build.gradle
+          # Remove externalNativeBuild block (8-space indented, inside if block)
+          sed -i '/^        externalNativeBuild {$/,/^        }$/d' template-output/app/build.gradle
 
           # Copy source files
           cp -r krkrsdl2/android-project/app/src/main/java template-output/app/src/main/
