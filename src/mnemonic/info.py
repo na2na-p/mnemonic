@@ -8,6 +8,7 @@ from typing import Protocol
 
 import chardet
 
+
 @dataclass(frozen=True)
 class FileStats:
     """ファイル統計"""
@@ -15,6 +16,7 @@ class FileStats:
     count: int
     extensions: tuple[str, ...]
     total_size_bytes: int
+
 
 @dataclass(frozen=True)
 class GameInfo:
@@ -27,12 +29,14 @@ class GameInfo:
     video: FileStats
     detected_encoding: str | None
 
+
 class GameAnalyzer(Protocol):
     """ゲーム解析インターフェース"""
 
     def analyze(self, path: Path) -> GameInfo:
         """ゲームを解析する"""
         ...
+
 
 def detect_engine(path: Path) -> str:
     """エンジンを検出する
@@ -56,6 +60,7 @@ def detect_engine(path: Path) -> str:
             return "rpgmaker"
 
     return "unknown"
+
 
 def collect_file_stats(path: Path, extensions: list[str]) -> FileStats:
     """ファイル統計を収集する
@@ -90,6 +95,7 @@ def collect_file_stats(path: Path, extensions: list[str]) -> FileStats:
         total_size_bytes=total_size,
     )
 
+
 def _detect_encoding(path: Path, script_extensions: list[str]) -> str | None:
     """スクリプトファイルのエンコーディングを検出する
 
@@ -117,6 +123,7 @@ def _detect_encoding(path: Path, script_extensions: list[str]) -> str | None:
                 continue
 
     return None
+
 
 def analyze_game(path: Path) -> GameInfo:
     """ゲームを解析する

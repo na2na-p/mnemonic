@@ -17,6 +17,7 @@ from mnemonic.builder.gradle import (
     GradleTimeoutError,
 )
 
+
 class TestGradleBuildResult:
     """GradleBuildResultデータクラスのテスト"""
 
@@ -62,6 +63,7 @@ class TestGradleBuildResult:
         with pytest.raises(AttributeError):
             result.success = False  # type: ignore[misc]
 
+
 class TestGradleBuilderInit:
     """GradleBuilder初期化のテスト"""
 
@@ -83,6 +85,7 @@ class TestGradleBuilderInit:
         """正常系: デフォルトタイムアウトが1800秒であることの確認"""
         assert GradleBuilder.DEFAULT_TIMEOUT == 1800
 
+
 class TestGradleBuilderCheckGradleWrapper:
     """GradleBuilder.check_gradle_wrapperのテスト"""
 
@@ -103,6 +106,7 @@ class TestGradleBuilderCheckGradleWrapper:
 
         assert result is False
 
+
 class TestGradleBuilderBuild:
     """GradleBuilder.buildのテスト"""
 
@@ -113,6 +117,7 @@ class TestGradleBuilderBuild:
         with pytest.raises(GradleNotFoundError):
             builder.build()
 
+
 class TestGradleBuilderClean:
     """GradleBuilder.cleanのテスト"""
 
@@ -122,6 +127,7 @@ class TestGradleBuilderClean:
 
         with pytest.raises(GradleNotFoundError):
             builder.clean()
+
 
 class TestGradleBuilderGetApkPath:
     """GradleBuilder.get_apk_pathのテスト"""
@@ -173,6 +179,7 @@ class TestGradleBuilderGetApkPath:
 
         assert result == apk_path
 
+
 class TestExceptionClasses:
     """例外クラスのテスト"""
 
@@ -195,6 +202,7 @@ class TestExceptionClasses:
         assert isinstance(error, GradleBuildError)
         assert isinstance(error, Exception)
         assert str(error) == "gradlew not found"
+
 
 class TestGradleBuilderWithMockedSubprocess:
     """subprocess.runをモックしたGradleBuilderのテスト

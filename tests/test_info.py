@@ -12,6 +12,7 @@ from mnemonic.info import (
     detect_engine,
 )
 
+
 class TestFileStats:
     """FileStatsデータクラスのテスト"""
 
@@ -46,6 +47,7 @@ class TestFileStats:
         stats = FileStats(count=1, extensions=(".txt",), total_size_bytes=100)
         with pytest.raises(AttributeError):
             stats.count = 2  # type: ignore[misc]
+
 
 class TestGameInfo:
     """GameInfoデータクラスのテスト"""
@@ -98,6 +100,7 @@ class TestGameInfo:
         with pytest.raises(AttributeError):
             info.engine = "renpy"  # type: ignore[misc]
 
+
 class TestDetectEngine:
     """detect_engine関数のテスト"""
 
@@ -129,6 +132,7 @@ class TestDetectEngine:
 
         result = detect_engine(tmp_path)
         assert result == "kirikiri"
+
 
 class TestCollectFileStats:
     """collect_file_stats関数のテスト"""
@@ -189,6 +193,7 @@ class TestCollectFileStats:
         assert ".png" in result.extensions
         assert ".jpg" not in result.extensions
         assert ".gif" not in result.extensions
+
 
 class TestAnalyzeGame:
     """analyze_game関数のテスト"""

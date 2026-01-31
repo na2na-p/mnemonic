@@ -11,6 +11,7 @@ from mnemonic.builder.template import (
     AssetPlacer,
 )
 
+
 class TestAssetConfig:
     """AssetConfig データクラスのテスト"""
 
@@ -73,6 +74,7 @@ class TestAssetConfig:
         assert config.no_compress_extensions == no_compress
         assert config.exclude_patterns == exclude_patterns
 
+
 class TestAssetPlacementResult:
     """AssetPlacementResult データクラスのテスト"""
 
@@ -126,6 +128,7 @@ class TestAssetPlacementResult:
         assert result.total_size == total_size
         assert len(result.placed_files) == placed_files_count
 
+
 class TestAssetPlacerInit:
     """AssetPlacer 初期化のテスト"""
 
@@ -147,6 +150,7 @@ class TestAssetPlacerInit:
         placer = AssetPlacer(project_path=project_path, exclude_patterns=exclude_patterns)
 
         assert placer._exclude_patterns == exclude_patterns
+
 
 class TestAssetPlacerPlaceAssets:
     """AssetPlacer.place_assets のテスト"""
@@ -310,6 +314,7 @@ class TestAssetPlacerPlaceAssets:
 
         # 結果のファイル数は除外されたファイルを含まない
         assert result.total_files == 1
+
 
 class TestAssetPlacerConfigureBuildGradle:
     """AssetPlacer.configure_build_gradle のテスト"""
@@ -485,6 +490,7 @@ class TestAssetPlacerConfigureBuildGradle:
         for ext in no_compress_extensions:
             assert f"'{ext}'" in content
 
+
 class TestAssetPlacerValidatePlacement:
     """AssetPlacer.validate_placement のテスト"""
 
@@ -545,6 +551,7 @@ class TestAssetPlacerValidatePlacement:
         result = placer.validate_placement()
 
         assert result is False
+
 
 class TestAssetPlacerErrorCases:
     """AssetPlacer エラーケースのテスト"""
@@ -624,6 +631,7 @@ class TestAssetPlacerErrorCases:
             placer.place_assets(source_dir=source_dir)
 
         assert "does not exist" in str(exc_info.value)
+
 
 class TestAssetPlacementExceptions:
     """AssetPlacement例外クラスのテスト"""

@@ -8,6 +8,7 @@ import pytest
 
 from mnemonic.converter import ConversionStatus, VideoConverter, VideoInfo
 
+
 class TestVideoInfo:
     """VideoInfoデータクラスのテスト"""
 
@@ -58,6 +59,7 @@ class TestVideoInfo:
         with pytest.raises(AttributeError):
             info.width = 1920  # type: ignore[misc]
 
+
 class TestVideoConverterInit:
     """VideoConverterの初期化テスト"""
 
@@ -82,6 +84,7 @@ class TestVideoConverterInit:
         assert converter._audio_codec == "opus"
         assert converter._timeout == 600
 
+
 class TestVideoConverterSupportedExtensions:
     """VideoConverter.supported_extensionsのテスト"""
 
@@ -101,6 +104,7 @@ class TestVideoConverterSupportedExtensions:
         converter = VideoConverter()
         for ext in converter.supported_extensions:
             assert ext.startswith(".")
+
 
 class TestVideoConverterCanConvert:
     """VideoConverter.can_convertのテスト"""
@@ -126,6 +130,7 @@ class TestVideoConverterCanConvert:
         result = converter.can_convert(file_path)
 
         assert result is expected
+
 
 class TestVideoConverterIsFFmpegAvailable:
     """VideoConverter.is_ffmpeg_availableのテスト"""
@@ -160,6 +165,7 @@ class TestVideoConverterIsFFmpegAvailable:
             result = converter.is_ffmpeg_available()
 
         assert result is False
+
 
 class TestVideoConverterGetVideoInfo:
     """VideoConverter.get_video_infoのテスト"""
@@ -250,6 +256,7 @@ class TestVideoConverterGetVideoInfo:
                 converter.get_video_info(invalid_file)
 
             assert "動画情報を取得できません" in str(exc_info.value)
+
 
 class TestVideoConverterConvert:
     """VideoConverter.convertのテスト"""
@@ -372,6 +379,7 @@ class TestVideoConverterConvert:
         call_kwargs = mock_output.call_args[1]
         assert call_kwargs.get("vcodec") == "libx265"
         assert call_kwargs.get("acodec") == "opus"
+
 
 class TestVideoConverterIntegration:
     """VideoConverterの統合テスト（モックなし）"""

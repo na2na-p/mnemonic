@@ -14,6 +14,7 @@ from PIL import Image
 
 from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
 
+
 class TLGVersion(Enum):
     """TLG画像のバージョン
 
@@ -25,6 +26,7 @@ class TLGVersion(Enum):
     TLG6 = "TLG6"
     UNKNOWN = "UNKNOWN"
 
+
 class QualityPreset(Enum):
     """WebP変換時の品質プリセット
 
@@ -35,6 +37,7 @@ class QualityPreset(Enum):
     HIGH = 95
     MEDIUM = 85
     LOW = 70
+
 
 @dataclass(frozen=True)
 class TLGInfo:
@@ -53,6 +56,7 @@ class TLGInfo:
     width: int
     height: int
     has_alpha: bool
+
 
 class TLGImageDecoder:
     """TLG画像デコーダー
@@ -128,6 +132,7 @@ class TLGImageDecoder:
             FileNotFoundError: ファイルが存在しない場合
         """
         raise NotImplementedError
+
 
 class ImageConverter(BaseConverter):
     """画像変換クラス

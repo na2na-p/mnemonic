@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from enum import IntEnum
 
+
 class ExitCode(IntEnum):
     """CLIの終了コード"""
 
@@ -10,6 +11,7 @@ class ExitCode(IntEnum):
     ERROR = 1
     INVALID_INPUT = 2
     DEPENDENCY_ERROR = 3
+
 
 @dataclass(frozen=True)
 class Result:

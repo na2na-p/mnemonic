@@ -6,6 +6,7 @@ import pytest
 
 from mnemonic.converter import BaseConverter, ConversionResult, ConversionStatus
 
+
 class MockConverter(BaseConverter):
     """テスト用の具象Converterクラス"""
 
@@ -26,6 +27,7 @@ class MockConverter(BaseConverter):
             bytes_after=80,
         )
 
+
 class TestConversionStatus:
     """ConversionStatus列挙型のテスト"""
 
@@ -40,6 +42,7 @@ class TestConversionStatus:
     def test_status_values(self, status: ConversionStatus, expected_value: str) -> None:
         """各ステータスが正しい値を持つことをテスト"""
         assert status.value == expected_value
+
 
 class TestConversionResult:
     """ConversionResultデータクラスのテスト"""
@@ -97,6 +100,7 @@ class TestConversionResult:
         with pytest.raises(AttributeError):
             result.status = ConversionStatus.FAILED  # type: ignore[misc]
 
+
 class TestBaseConverter:
     """BaseConverter抽象クラスのテスト"""
 
@@ -138,6 +142,7 @@ class TestBaseConverter:
         assert isinstance(extensions, tuple)
         assert len(extensions) > 0
         assert all(ext.startswith(".") for ext in extensions)
+
 
 class TestConversionResultProperties:
     """ConversionResultのユーティリティプロパティのテスト"""
@@ -210,6 +215,7 @@ class TestConversionResultProperties:
             status=status,
         )
         assert result.is_success is expected
+
 
 class TestBaseConverterUtilities:
     """BaseConverterのユーティリティメソッドのテスト"""

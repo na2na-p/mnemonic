@@ -9,6 +9,7 @@ import pytest
 
 from mnemonic.signer.apk import PasswordError
 
+
 class TestPasswordErrorClass:
     """PasswordError例外クラスのテスト"""
 
@@ -23,6 +24,7 @@ class TestPasswordErrorClass:
         error = PasswordError("Environment variable not set: MNEMONIC_KEYSTORE_PASS")
         assert "not set" in str(error)
 
+
 class TestPasswordProviderProtocol:
     """PasswordProviderプロトコルのテスト
 
@@ -31,6 +33,7 @@ class TestPasswordProviderProtocol:
     """
 
     pass
+
 
 class TestDefaultPasswordProviderGetPasswordFromEnv:
     """DefaultPasswordProvider.get_password_from_envメソッドのテスト"""
@@ -100,6 +103,7 @@ class TestDefaultPasswordProviderGetPasswordFromEnv:
             result = provider.get_password_from_env()
 
             assert result == "default_var_password"
+
 
 class TestDefaultPasswordProviderGetPassword:
     """DefaultPasswordProvider.get_passwordメソッドのテスト"""
@@ -176,6 +180,7 @@ class TestDefaultPasswordProviderGetPassword:
 
             error_msg = str(exc_info.value).lower()
             assert "eof" in error_msg or "input" in error_msg or "failed" in error_msg
+
 
 class TestDefaultPasswordProviderPriority:
     """DefaultPasswordProviderの優先順位テスト

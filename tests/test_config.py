@@ -16,6 +16,7 @@ from mnemonic.config import (
     load_config,
 )
 
+
 class TestDefaultConfig:
     """デフォルト設定のテスト"""
 
@@ -49,6 +50,7 @@ class TestDefaultConfig:
         config = get_default_config()
         assert config.timeouts.ffmpeg == 300
         assert config.timeouts.gradle == 1800
+
 
 class TestLoadConfig:
     """設定読み込みのテスト"""
@@ -196,6 +198,7 @@ exclude:
         with pytest.raises(ConfigError):
             load_config(config_file)
 
+
 class TestConfigImmutability:
     """設定のイミュータビリティテスト"""
 
@@ -210,6 +213,7 @@ class TestConfigImmutability:
         config = ImageConfig()
         with pytest.raises(AttributeError):
             config.format = "png"  # type: ignore[misc]
+
 
 class TestConfigDataclasses:
     """設定データクラスのテスト"""

@@ -542,7 +542,8 @@ class TemplateCache:
             return None
         try:
             with open(metadata_path, encoding="utf-8") as f:
-                return json.load(f)
+                result: dict[str, Any] = json.load(f)
+                return result
         except (json.JSONDecodeError, OSError):
             return None
 

@@ -17,6 +17,7 @@ from mnemonic.converter import (
     RetryConfig,
 )
 
+
 class MockConverter(BaseConverter):
     """テスト用のConverterモック"""
 
@@ -61,6 +62,7 @@ class MockConverter(BaseConverter):
             bytes_after=80,
         )
 
+
 class TestRetryConfig:
     """RetryConfigデータクラスのテスト"""
 
@@ -94,6 +96,7 @@ class TestRetryConfig:
         assert config.backoff_base == backoff_base
         assert config.backoff_multiplier == backoff_multiplier
 
+
 class TestConversionTask:
     """ConversionTaskデータクラスのテスト"""
 
@@ -119,6 +122,7 @@ class TestConversionTask:
         task = ConversionTask(source=source, dest=dest, converter=converter, retry_count=2)
 
         assert task.retry_count == 2
+
 
 class TestConversionSummary:
     """ConversionSummaryデータクラスのテスト"""
@@ -171,6 +175,7 @@ class TestConversionSummary:
         assert summary.skipped == 2
         assert len(summary.results) == 1
 
+
 class TestConversionManagerInit:
     """ConversionManager初期化のテスト"""
 
@@ -203,6 +208,7 @@ class TestConversionManagerInit:
         assert manager.retry_config.max_attempts == 5
         assert manager.max_workers == 8
         assert manager.progress_callback is progress_callback
+
 
 class TestConversionManagerGetConverterForFile:
     """ConversionManager.get_converter_for_fileのテスト"""
@@ -241,6 +247,7 @@ class TestConversionManagerGetConverterForFile:
         converter = manager.get_converter_for_file(txt_file)
 
         assert converter is first_converter
+
 
 class TestConversionManagerConvertFiles:
     """ConversionManager.convert_filesのテスト"""
@@ -357,6 +364,7 @@ class TestConversionManagerConvertFiles:
         final_calls = [call for call in callback.call_args_list if call[0][0] == 3]
         assert len(final_calls) > 0
 
+
 class TestConversionManagerRetry:
     """ConversionManagerのリトライ機能のテスト"""
 
@@ -444,6 +452,7 @@ class TestConversionManagerRetry:
 
         assert summary.failed == 1
         assert converter._call_count == 2
+
 
 class TestConversionManagerConvertDirectory:
     """ConversionManager.convert_directoryのテスト"""
@@ -537,6 +546,7 @@ class TestConversionManagerConvertDirectory:
         assert "sub" in str(result.dest_path)
         assert "nested" in str(result.dest_path)
 
+
 class TestCalculateWorkers:
     """ConversionManager.calculate_workersのテスト"""
 
@@ -578,6 +588,7 @@ class TestCalculateWorkers:
             # psutilがない場合はCPUコア数のみで計算
             workers = ConversionManager.calculate_workers()
             assert workers == 4
+
 
 class TestConversionManagerSummary:
     """ConversionManagerのサマリー生成テスト"""

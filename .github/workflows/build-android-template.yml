@@ -160,14 +160,28 @@ jobs:
 
       - name: Determine release version (CalVer)
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "${{ github.ref }}" == refs/tags/template-* ]]; then
             # Tag push: use tag name
             echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.event.inputs.create_release }}" == "true" ]]; then
-            # Manual dispatch with release: generate CalVer
-            CALVER="template-$(date -u +%Y.%m.%d)"
+            # Manual dispatch with release: generate CalVer with unique suffix
+            BASE_CALVER="template-$(date -u +%Y.%m.%d)"
+
+            # Check if base tag exists, if so add incrementing suffix
+            if gh release view "$BASE_CALVER" &>/dev/null; then
+              SUFFIX=2
+              while gh release view "${BASE_CALVER}-${SUFFIX}" &>/dev/null; do
+                ((SUFFIX++))
+              done
+              CALVER="${BASE_CALVER}-${SUFFIX}"
+            else
+              CALVER="$BASE_CALVER"
+            fi
+
             echo "version=${CALVER}" >> $GITHUB_OUTPUT
             echo "should_release=true" >> $GITHUB_OUTPUT
           else

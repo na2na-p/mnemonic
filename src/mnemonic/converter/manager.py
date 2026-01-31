@@ -17,6 +17,7 @@ from mnemonic.converter.base import (
     ConversionStatus,
 )
 
+
 @dataclass
 class RetryConfig:
     """リトライ設定
@@ -33,6 +34,7 @@ class RetryConfig:
     max_attempts: int = 3
     backoff_base: float = 1.0
     backoff_multiplier: float = 2.0
+
 
 @dataclass
 class ConversionTask:
@@ -51,6 +53,7 @@ class ConversionTask:
     dest: Path
     converter: BaseConverter
     retry_count: int = 0
+
 
 @dataclass
 class ConversionSummary:
@@ -73,11 +76,13 @@ class ConversionSummary:
     skipped: int = 0
     results: list[ConversionResult] = field(default_factory=list)
 
+
 # 進捗コールバックの型エイリアス
 ProgressCallback = Callable[[int, int], None]
 
 # 1ワーカーあたりのメモリ使用量（MB）
 MEMORY_PER_WORKER_MB = 500
+
 
 class ConversionManager:
     """変換マネージャー
@@ -302,6 +307,7 @@ class ConversionManager:
         # psutilが利用できない場合はCPUコア数のみで決定
         return max(1, cpu_count)
 
+
 def _get_available_memory_mb() -> int | None:
     """利用可能なメモリをMB単位で取得する
 
@@ -311,9 +317,9 @@ def _get_available_memory_mb() -> int | None:
         利用可能なメモリ（MB）、取得できない場合はNone
     """
     try:
-        import psutil
+        import psutil  # type: ignore[import-untyped]
 
-        available_bytes = psutil.virtual_memory().available
+        available_bytes: int = psutil.virtual_memory().available
         return available_bytes // (1024 * 1024)
     except (ImportError, AttributeError):
         return None

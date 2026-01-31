@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+
 class ConversionStatus(Enum):
     """変換ステータス
 
@@ -18,6 +19,7 @@ class ConversionStatus(Enum):
     SUCCESS = "success"
     SKIPPED = "skipped"
     FAILED = "failed"
+
 
 @dataclass(frozen=True)
 class ConversionResult:
@@ -65,6 +67,7 @@ class ConversionResult:
     def is_success(self) -> bool:
         """変換が成功したかどうかを返す"""
         return self.status == ConversionStatus.SUCCESS
+
 
 class BaseConverter(ABC):
     """Converterの基底クラス

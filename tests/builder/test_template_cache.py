@@ -8,6 +8,7 @@ import pytest
 
 from mnemonic.builder.template import TemplateCache, TemplateCacheError
 
+
 class TestTemplateCacheInit:
     """TemplateCache初期化のテスト"""
 
@@ -25,6 +26,7 @@ class TestTemplateCacheInit:
         cache = TemplateCache(cache_manager=mock_cache_manager, refresh_days=14)
 
         assert cache._refresh_days == 14
+
 
 class TestTemplateCacheGetCachedTemplate:
     """TemplateCache.get_cached_templateのテスト"""
@@ -110,6 +112,7 @@ class TestTemplateCacheGetCachedTemplate:
         result = cache.get_cached_template(version=version)
 
         assert result == template_file
+
 
 class TestTemplateCacheIsCacheValid:
     """TemplateCache.is_cache_validのテスト"""
@@ -217,6 +220,7 @@ class TestTemplateCacheIsCacheValid:
 
         assert result is True
 
+
 class TestTemplateCacheGetCachedVersion:
     """TemplateCache.get_cached_versionのテスト"""
 
@@ -259,6 +263,7 @@ class TestTemplateCacheGetCachedVersion:
         result = cache.get_cached_version()
 
         assert result is None
+
 
 class TestTemplateCacheSaveTemplate:
     """TemplateCache.save_templateのテスト"""
@@ -346,6 +351,7 @@ class TestTemplateCacheSaveTemplate:
 
         assert metadata["version"] == version
 
+
 class TestTemplateCacheClearCache:
     """TemplateCache.clear_cacheのテスト"""
 
@@ -368,6 +374,7 @@ class TestTemplateCacheClearCache:
         cache.clear_cache()
 
         mock_cache_manager.clear_cache.assert_called_once_with(template_only=True)
+
 
 class TestTemplateCacheErrorHandling:
     """TemplateCache例外処理のテスト"""

@@ -15,6 +15,7 @@ from mnemonic.parser import (
     XP3EncryptionError,
 )
 
+
 class TestEncryptionType:
     """EncryptionType列挙型のテスト"""
 
@@ -50,6 +51,7 @@ class TestEncryptionType:
     ) -> None:
         """EncryptionTypeの各値が正しいvalue文字列を持つことを確認"""
         assert encryption_type.value == expected_value
+
 
 class TestEncryptionInfo:
     """EncryptionInfoデータクラスのテスト"""
@@ -119,6 +121,7 @@ class TestEncryptionInfo:
         )
 
         assert info.details is None
+
 
 class TestXP3EncryptionError:
     """XP3EncryptionError例外クラスのテスト"""
@@ -196,6 +199,7 @@ class TestXP3EncryptionError:
         error = XP3EncryptionError(info)
 
         assert isinstance(error, Exception)
+
 
 class TestXP3EncryptionChecker:
     """XP3EncryptionCheckerクラスのテスト"""
@@ -321,6 +325,7 @@ class TestXP3EncryptionChecker:
 
         with pytest.raises(FileNotFoundError):
             checker.raise_if_encrypted()
+
 
 class TestXP3EncryptionCheckerIntegration:
     """XP3EncryptionCheckerの統合テスト

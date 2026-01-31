@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+
 def run_mnemonic_build(
     input_path: Path,
     output_path: Path,
@@ -41,6 +42,7 @@ def run_mnemonic_build(
         text=True,
         timeout=600,
     )
+
 
 @pytest.mark.e2e
 class TestMinimalBuild:
@@ -77,6 +79,7 @@ class TestMinimalBuild:
             assert unzip_result.returncode == 0
             assert "assets/" in unzip_result.stdout
 
+
 @pytest.mark.e2e
 class TestAssetConversion:
     """E2E-002: アセット変換ビルドテスト"""
@@ -108,6 +111,7 @@ class TestAssetConversion:
                 or result.returncode == 0
             )
 
+
 @pytest.mark.e2e
 class TestCustomConfig:
     """E2E-003: カスタム設定ビルドテスト"""
@@ -122,6 +126,7 @@ class TestCustomConfig:
 
             assert result.returncode == 0, f"stderr: {result.stderr}"
             assert output_path.exists()
+
 
 @pytest.mark.e2e
 class TestErrorCases:

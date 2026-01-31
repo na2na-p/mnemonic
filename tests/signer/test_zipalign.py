@@ -11,6 +11,7 @@ import pytest
 
 from mnemonic.signer.apk import ZipalignError
 
+
 class TestZipalignErrorClass:
     """ZipalignError例外クラスのテスト"""
 
@@ -25,6 +26,7 @@ class TestZipalignErrorClass:
         error = ZipalignError("Input file not found: /path/to/file.apk")
         assert "Input file not found" in str(error)
 
+
 class TestZipalignRunnerProtocol:
     """ZipalignRunnerプロトコルのテスト
 
@@ -33,6 +35,7 @@ class TestZipalignRunnerProtocol:
     """
 
     pass
+
 
 class TestDefaultZipalignRunnerAlign:
     """DefaultZipalignRunner.alignメソッドのテスト"""
@@ -153,6 +156,7 @@ class TestDefaultZipalignRunnerAlign:
 
                 assert "failed" in str(exc_info.value).lower() or "失敗" in str(exc_info.value)
 
+
 class TestDefaultZipalignRunnerFindZipalign:
     """DefaultZipalignRunner.find_zipalignメソッドのテスト"""
 
@@ -261,6 +265,7 @@ class TestDefaultZipalignRunnerFindZipalign:
 
             assert result is not None
             assert expected_version in str(result)
+
 
 class TestDefaultZipalignRunnerIsAligned:
     """DefaultZipalignRunner.is_alignedメソッドのテスト"""

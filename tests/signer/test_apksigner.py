@@ -11,6 +11,7 @@ import pytest
 
 from mnemonic.signer.apk import ApkSignerError, KeystoreConfig
 
+
 class TestApkSignerErrorClass:
     """ApkSignerError例外クラスのテスト"""
 
@@ -24,6 +25,7 @@ class TestApkSignerErrorClass:
         """正常系: ApkSignerErrorにメッセージを設定できる"""
         error = ApkSignerError("APK file not found: /path/to/file.apk")
         assert "APK file not found" in str(error)
+
 
 class TestKeystoreConfigClass:
     """KeystoreConfig設定クラスのテスト"""
@@ -63,6 +65,7 @@ class TestKeystoreConfigClass:
         with pytest.raises(AttributeError):
             config.key_alias = "new_alias"  # type: ignore[misc]
 
+
 class TestApkSignerRunnerProtocol:
     """ApkSignerRunnerプロトコルのテスト
 
@@ -71,6 +74,7 @@ class TestApkSignerRunnerProtocol:
     """
 
     pass
+
 
 class TestDefaultApkSignerRunnerSign:
     """DefaultApkSignerRunner.signメソッドのテスト"""
@@ -308,6 +312,7 @@ class TestDefaultApkSignerRunnerSign:
 
                 assert "failed" in str(exc_info.value).lower()
 
+
 class TestDefaultApkSignerRunnerVerify:
     """DefaultApkSignerRunner.verifyメソッドのテスト"""
 
@@ -400,6 +405,7 @@ class TestDefaultApkSignerRunnerVerify:
                     runner.verify(apk_path)
 
                 assert "failed" in str(exc_info.value).lower()
+
 
 class TestDefaultApkSignerRunnerFindApksigner:
     """DefaultApkSignerRunner.find_apksignerメソッドのテスト"""

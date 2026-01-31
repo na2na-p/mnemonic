@@ -31,6 +31,7 @@ _ENCODING_ALIASES: dict[str, str] = {
     "ascii": "utf-8",  # ASCIIはUTF-8のサブセット
 }
 
+
 def _normalize_encoding(encoding: str | None) -> str | None:
     """エンコーディング名を正規化する
 
@@ -51,6 +52,7 @@ def _normalize_encoding(encoding: str | None) -> str | None:
 
     # 元のエンコーディング名を返す（小文字に変換）
     return encoding.lower()
+
 
 def _is_supported_encoding(encoding: str | None) -> bool:
     """エンコーディングがサポートされているか確認する
@@ -77,6 +79,7 @@ def _is_supported_encoding(encoding: str | None) -> bool:
 
     return False
 
+
 @dataclass(frozen=True)
 class EncodingDetectionResult:
     """文字コード検出結果
@@ -90,6 +93,7 @@ class EncodingDetectionResult:
     encoding: str | None
     confidence: float
     is_supported: bool
+
 
 class EncodingDetector:
     """文字コード検出クラス
@@ -179,6 +183,7 @@ class EncodingDetector:
 
         # エンコーディングが検出できなかった場合はバイナリファイルと判定
         return result.encoding is not None
+
 
 class EncodingConverter(BaseConverter):
     """文字コード変換Converter
