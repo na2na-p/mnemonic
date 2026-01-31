@@ -100,6 +100,7 @@ jobs:
           # Copy full Android project structure (expected by mnemonic pipeline)
           # Root gradle files
           cp krkrsdl2/android-project/build.gradle template-output/
+
           cp krkrsdl2/android-project/settings.gradle template-output/ 2>/dev/null || \
             cp krkrsdl2/external/SDL/android-project/settings.gradle template-output/
           cp krkrsdl2/android-project/gradle.properties template-output/ 2>/dev/null || \
@@ -113,8 +114,15 @@ jobs:
           # App module structure
           mkdir -p template-output/app/src/main/jniLibs
 
-          # Copy app build.gradle
+          # Copy app build.gradle and remove CMake/externalNativeBuild settings
+          # These settings are for native compilation, not needed for pre-built .so files
           cp krkrsdl2/android-project/app/build.gradle template-output/app/
+
+          # Remove externalNativeBuild block inside defaultConfig (cmake arguments, abiFilters)
+          perl -i -0pe 's/(\s+externalNativeBuild\s*\{\s*cmake\s*\{[^}]*\}\s*\})//gs' template-output/app/build.gradle
+
+          # Remove top-level externalNativeBuild block (cmake path, version)
+          perl -i -0pe 's/\n\s+externalNativeBuild\s*\{\s*cmake\s*\{[^}]*\}\s*\}//gs' template-output/app/build.gradle
 
           # Copy source files
           cp -r krkrsdl2/android-project/app/src/main/java template-output/app/src/main/

@@ -6,25 +6,30 @@
 from __future__ import annotations
 
 import platform
+import stat
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
 
 class GradleBuildError(Exception):
     """Gradleビルドに関する基本例外クラス"""
 
     pass
 
+
 class GradleTimeoutError(GradleBuildError):
     """Gradleビルドがタイムアウトした場合の例外"""
 
     pass
 
+
 class GradleNotFoundError(GradleBuildError):
     """Gradle wrapperが見つからない場合の例外"""
 
     pass
+
 
 @dataclass(frozen=True)
 class GradleBuildResult:
@@ -41,6 +46,7 @@ class GradleBuildResult:
     apk_path: Path | None
     build_time: float
     output_log: str
+
 
 class GradleBuilder:
     """Gradleビルドを実行するクラス
@@ -77,6 +83,13 @@ class GradleBuilder:
 
         if not gradlew.exists():
             raise GradleNotFoundError(f"Gradle wrapper not found at {gradlew}")
+
+        # ZIPから展開した場合に実行権限がないことがあるため付与
+        if platform.system() != "Windows":
+            current_mode = gradlew.stat().st_mode
+            if not (current_mode & stat.S_IXUSR):
+                gradlew.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
         return gradlew
 
     def _run_gradle(self, *args: str) -> subprocess.CompletedProcess[str]:
