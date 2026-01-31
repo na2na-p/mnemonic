@@ -36,6 +36,63 @@ from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, K
 if TYPE_CHECKING:
     from mnemonic.cache import CacheInfo
 
+# Java予約語リスト（パッケージ名生成時のフォールバック用）
+JAVA_RESERVED_WORDS = {
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "false",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "true",
+    "try",
+    "void",
+    "volatile",
+    "while",
+}
+
 
 class DefaultCacheManager:
     """デフォルトのキャッシュマネージャー実装
@@ -452,10 +509,18 @@ class BuildPipeline:
         if template_path is None:
             raise ValueError("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-        # パッケージ名とアプリ名の決定
-        input_name = self._config.input_path.stem
-        package_name = self._config.package_name or f"com.krkr.{self._sanitize_name(input_name)}"
-        app_name = self._config.app_name or input_name
+        # タイトルからパッケージ名を生成（フォールバック: ファイル名）
+        if self._game_structure and self._game_structure.title:
+            base_name = self._game_structure.title
+        else:
+            base_name = self._config.input_path.stem
+
+        package_name = self._config.package_name or f"com.krkr.{self._sanitize_name(base_name)}"
+        app_name = self._config.app_name or (
+            self._game_structure.title
+            if self._game_structure and self._game_structure.title
+            else base_name
+        )
 
         # プロジェクト生成
         project_config = ProjectConfig(
@@ -526,16 +591,27 @@ class BuildPipeline:
     def _sanitize_name(self, name: str) -> str:
         """パッケージ名に使用できる形式に変換
 
+        空白は単語区切りとして保持するためアンダースコアに変換し、
+        その他の特殊文字（ハイフン、記号等）はパッケージ名に使用できないため削除する。
+
         Args:
             name: 変換対象の名前
 
         Returns:
             パッケージ名として使用可能な文字列
         """
-        sanitized = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+        sanitized = name.replace(" ", "_")
+        sanitized = re.sub(r"[^a-zA-Z0-9_]", "", sanitized)
+        # 先頭が数字の場合はプレフィックス追加
         if sanitized and sanitized[0].isdigit():
             sanitized = "_" + sanitized
-        return sanitized.lower()
+        sanitized = sanitized.lower()
+
+        # Java予約語の場合はプレフィックス追加（フォールバック用）
+        if sanitized in JAVA_RESERVED_WORDS:
+            sanitized = f"game_{sanitized}"
+
+        return sanitized
 
     def _cleanup_temp_dirs(self) -> None:
         """一時ディレクトリをクリーンアップする"""

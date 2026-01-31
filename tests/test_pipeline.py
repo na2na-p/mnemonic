@@ -575,6 +575,65 @@ class TestPipelineProgress:
         assert progress.message == message
 
 
+class TestBuildPipelineSanitizeName:
+    """BuildPipeline._sanitize_name メソッドのテスト"""
+
+    @pytest.mark.parametrize(
+        "input_name, expected",
+        [
+            pytest.param(
+                "TRUE REMEMBRANCE",
+                "true_remembrance",
+                id="正常系: スペースをアンダースコアに変換",
+            ),
+            pytest.param(
+                "true",
+                "game_true",
+                id="正常系: Java予約語にプレフィックス追加",
+            ),
+            pytest.param(
+                "false",
+                "game_false",
+                id="正常系: Java予約語falseにプレフィックス追加",
+            ),
+            pytest.param(
+                "null",
+                "game_null",
+                id="正常系: Java予約語nullにプレフィックス追加",
+            ),
+            pytest.param(
+                "123game",
+                "_123game",
+                id="正常系: 数字始まりにプレフィックス追加",
+            ),
+            pytest.param(
+                "game!@#$%",
+                "game",
+                id="正常系: 特殊文字を削除",
+            ),
+            pytest.param(
+                "My Game 2",
+                "my_game_2",
+                id="正常系: スペースと数字の組み合わせ",
+            ),
+        ],
+    )
+    def test_sanitize_name(self, input_name: str, expected: str, tmp_path: Path) -> None:
+        """_sanitize_nameが正しくパッケージ名を生成する"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        result = pipeline._sanitize_name(input_name)
+
+        assert result == expected
+
+
 class TestBuildPipelineInit:
     """BuildPipeline初期化のテスト"""
 

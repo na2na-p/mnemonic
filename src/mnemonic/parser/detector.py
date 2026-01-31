@@ -4,9 +4,11 @@
 ゲーム内のスクリプト、画像、音声などのリソースを特定する。
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+
 
 class EngineType(Enum):
     """検出可能なエンジン種別
@@ -18,6 +20,7 @@ class EngineType(Enum):
     KIRIKIRI2_KAG3 = "kirikiri2_kag3"
     UNKNOWN = "unknown"
 
+
 @dataclass(frozen=True)
 class GameStructure:
     """ゲーム構成情報
@@ -26,6 +29,7 @@ class GameStructure:
 
     Attributes:
         engine: 検出されたゲームエンジンの種別
+        title: ゲームタイトル（Config.tjsから取得、取得できない場合はNone）
         scripts: 検出されたスクリプトファイルのパス一覧
         script_encoding: スクリプトファイルのエンコーディング（検出できない場合はNone）
         images: 検出された画像ファイルのパス一覧
@@ -35,12 +39,14 @@ class GameStructure:
     """
 
     engine: EngineType
+    title: str | None
     scripts: list[str]
     script_encoding: str | None
     images: list[str]
     audio: list[str]
     video: list[str]
     plugins: list[str]
+
 
 class GameDetector:
     """ゲーム構成を検出するクラス
@@ -101,11 +107,15 @@ class GameDetector:
         # エンジンタイプを検出
         engine = self._detect_engine(all_files, scripts)
 
+        # ゲームタイトルを取得
+        title = self._detect_title()
+
         # スクリプトの文字コードを推定
         script_encoding = self._detect_script_encoding(scripts)
 
         self._structure = GameStructure(
             engine=engine,
+            title=title,
             scripts=scripts,
             script_encoding=script_encoding,
             images=images,
@@ -223,6 +233,33 @@ class GameDetector:
                         result = chardet.detect(raw_data)
                         if result["encoding"]:
                             return result["encoding"].lower()
+
+        return None
+
+    def _detect_title(self) -> str | None:
+        """Config.tjsからゲームタイトルを取得する
+
+        Returns:
+            ゲームタイトル、取得できない場合はNone
+        """
+        config_paths = [
+            self._game_dir / "system" / "Config.tjs",
+            self._game_dir / "Config.tjs",
+        ]
+
+        for config_path in config_paths:
+            if config_path.exists():
+                try:
+                    for encoding in ["cp932", "utf-8"]:
+                        try:
+                            content = config_path.read_text(encoding=encoding)
+                            match = re.search(r';System\.title\s*=\s*"([^"]+)"', content)
+                            if match:
+                                return match.group(1)
+                        except UnicodeDecodeError:
+                            continue
+                except OSError:
+                    continue
 
         return None
 
