@@ -62,6 +62,30 @@ class ScriptAdjuster(BaseConverter):
             replacement=r"\1\2.ogg\3",
             description="MIDI参照をOGGに変換（.midi → .midi.ogg）",
         ),
+        # loadpluginタグのDLL参照をSO参照に変換（extrans.dll → extrans.so）
+        AdjustmentRule(
+            pattern=r'\[loadplugin\s+module="extrans\.dll"\]',
+            replacement='[loadplugin module="extrans.so"]',
+            description="extrans.dllをextrans.soに変換（Android対応）",
+        ),
+        # wuvorbis.dllはkrkrsdl2にビルトインのため不要
+        AdjustmentRule(
+            pattern=r'(\[loadplugin\s+module="wuvorbis\.dll"\])',
+            replacement=r";# \1 # Disabled: built-in krkrsdl2",
+            description="wuvorbis.dllをコメントアウト（krkrsdl2ビルトイン）",
+        ),
+        # krmovie.dllはkrkrsdl2にビルトインのため不要
+        AdjustmentRule(
+            pattern=r'(\[loadplugin\s+module="krmovie\.dll"\])',
+            replacement=r";# \1 # Disabled: built-in krkrsdl2",
+            description="krmovie.dllをコメントアウト（krkrsdl2ビルトイン）",
+        ),
+        # その他のDLLプラグインをコメントアウト（extrans以外）
+        AdjustmentRule(
+            pattern=r'(\[loadplugin\s+module="(?!extrans\.so)[^"]*\.dll"\])',
+            replacement=r";# \1 # Disabled for Android",
+            description="その他のDLLプラグインをコメントアウト",
+        ),
     ]
 
     def __init__(

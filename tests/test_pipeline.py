@@ -986,6 +986,45 @@ class TestBuildPipelineAdjustScripts:
         # ScriptAdjuster.convertが呼ばれたことを確認
         mock_adjuster_instance.convert.assert_called_once_with(startup_file, startup_file)
 
+    def test_adjusts_all_ks_files_recursively(self, tmp_path: Path, mocker) -> None:
+        """全ての.ksファイルを再帰的に処理する"""
+        input_file = tmp_path / "game.exe"
+        input_file.write_bytes(b"\x00" * 100)
+
+        config = PipelineConfig(
+            input_path=input_file,
+            output_path=tmp_path / "output.apk",
+        )
+        pipeline = BuildPipeline(config)
+
+        # テスト用ディレクトリを作成
+        test_dir = tmp_path / "test_dir"
+        test_dir.mkdir()
+
+        # ネストされたディレクトリに.ksファイルを作成
+        scenario_dir = test_dir / "scenario"
+        scenario_dir.mkdir()
+        first_ks = scenario_dir / "first.ks"
+        first_ks.write_text('[loadplugin module="wuvorbis.dll"]')
+
+        # startup.tjsも作成
+        startup_tjs = test_dir / "startup.tjs"
+        startup_tjs.write_text("// startup")
+
+        # ScriptAdjusterをモック
+        mock_adjuster = mocker.patch("mnemonic.pipeline.ScriptAdjuster")
+        mock_adjuster_instance = mock_adjuster.return_value
+
+        # スクリプト調整を実行
+        pipeline._adjust_scripts(test_dir)
+
+        # first.ksとstartup.tjsの両方に対してconvertが呼ばれたことを確認
+        assert mock_adjuster_instance.convert.call_count == 2
+        call_args_list = mock_adjuster_instance.convert.call_args_list
+        called_files = {call.args[0] for call in call_args_list}
+        assert first_ks in called_files
+        assert startup_tjs in called_files
+
 
 class TestBuildPipelineCopyPolyfillFiles:
     """BuildPipeline._copy_polyfill_files メソッドのテスト"""

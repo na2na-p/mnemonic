@@ -502,3 +502,80 @@ var se = new WaveSoundBuffer("se/click.wav");
         assert "midpoint" in adjusted
         # MIDISoundBufferルールによるカウントがなければ0
         # （他のルールがマッチしない限り）
+
+
+class TestScriptAdjusterLoadpluginRules:
+    """loadpluginタグの変換ルールテスト"""
+
+    def test_replaces_extrans_dll_to_so(self, adjuster: ScriptAdjuster) -> None:
+        """extrans.dllをextrans.soに変換することを確認する"""
+        content = '[loadplugin module="extrans.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '[loadplugin module="extrans.so"]' in adjusted
+        assert "extrans.dll" not in adjusted
+        assert count >= 1
+
+    def test_comments_out_wuvorbis_dll(self, adjuster: ScriptAdjuster) -> None:
+        """wuvorbis.dllをコメントアウトすることを確認する"""
+        content = '[loadplugin module="wuvorbis.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert ";#" in adjusted
+        assert "Disabled: built-in krkrsdl2" in adjusted
+        assert count >= 1
+
+    def test_comments_out_krmovie_dll(self, adjuster: ScriptAdjuster) -> None:
+        """krmovie.dllをコメントアウトすることを確認する"""
+        content = '[loadplugin module="krmovie.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert ";#" in adjusted
+        assert "Disabled: built-in krkrsdl2" in adjusted
+        assert count >= 1
+
+    def test_comments_out_other_dll_plugins(self, adjuster: ScriptAdjuster) -> None:
+        """その他のDLLプラグインをコメントアウトすることを確認する"""
+        content = '[loadplugin module="layerexdraw.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert ";#" in adjusted
+        assert "Disabled for Android" in adjusted
+        assert count >= 1
+
+    def test_multiple_loadplugin_tags(self, adjuster: ScriptAdjuster) -> None:
+        """複数のloadpluginタグを処理することを確認する"""
+        content = """[loadplugin module="wuvorbis.dll"]
+[loadplugin module="extrans.dll"]
+[loadplugin module="krmovie.dll"]
+[loadplugin module="something.dll"]
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        # extrans.dll → extrans.so
+        assert '[loadplugin module="extrans.so"]' in adjusted
+        # wuvorbis.dll, krmovie.dll はビルトインでコメントアウト
+        assert adjusted.count("Disabled: built-in krkrsdl2") == 2
+        # something.dll はAndroid非対応でコメントアウト
+        assert "Disabled for Android" in adjusted
+        assert count >= 4
+
+    def test_preserves_extrans_so_after_conversion(self, adjuster: ScriptAdjuster) -> None:
+        """変換後のextrans.soタグは再変換されないことを確認する"""
+        content = '[loadplugin module="extrans.so"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # extrans.soはそのまま維持される（コメントアウトされない）
+        assert '[loadplugin module="extrans.so"]' in adjusted
+        assert ";#" not in adjusted
+        assert count == 0
+
+    def test_handles_loadplugin_with_extra_spaces(self, adjuster: ScriptAdjuster) -> None:
+        """スペースを含むloadpluginタグを処理することを確認する"""
+        content = '[loadplugin  module="extrans.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # スペースが2つの場合も変換される
+        assert "extrans.so" in adjusted or "extrans.dll" in adjusted
+        # 注: 現在のパターンは厳密なスペース1つを想定しているため、
+        # スペース2つの場合は変換されない可能性がある

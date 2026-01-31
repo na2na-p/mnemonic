@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import mnemonic.cache as cache_module
 from mnemonic.builder.font_fetcher import FontDownloadError, FontFetcher
 from mnemonic.builder.gradle import GradleBuilder
+from mnemonic.builder.plugin_fetcher import PluginDownloadError, PluginFetcher
 from mnemonic.builder.template import (
     TemplateCache,
     TemplateDownloader,
@@ -557,31 +558,21 @@ class BuildPipeline:
                 shutil.rmtree(plugin_dir)
 
     def _adjust_scripts(self, directory: Path) -> None:
-        """スクリプトファイルを調整する
+        """全スクリプトファイルを調整する
 
-        startup.tjs に Android 互換性のためのスタブ（MenuItem クラス等）を追加し、
-        mainwindow.tjs のセーブデータパスを修正する。
+        ディレクトリ内の全ての .ks/.tjs ファイルに対して ScriptAdjuster を適用する。
+        loadplugin タグの置換やセーブデータパスの修正などを行う。
 
         Args:
             directory: 処理対象のディレクトリ
         """
         adjuster = ScriptAdjuster()
 
-        # startup.tjs を検索・調整（大文字小文字のバリエーション対応）
-        for variant in ["startup.tjs", "Startup.tjs", "STARTUP.TJS", "StartUp.tjs"]:
-            candidate = directory / variant
-            if candidate.exists():
-                adjuster.convert(candidate, candidate)
-                break
-
-        # mainwindow.tjs を検索・調整（セーブデータパス修正）
-        system_dir = directory / "system"
-        if system_dir.exists():
-            for variant in ["mainwindow.tjs", "MainWindow.tjs", "MAINWINDOW.TJS"]:
-                candidate = system_dir / variant
-                if candidate.exists():
-                    adjuster.convert(candidate, candidate)
-                    break
+        # 全ての.ks/.tjsファイルを再帰的に処理（大文字小文字のバリエーション対応）
+        extensions = [".ks", ".KS", ".Ks", ".tjs", ".TJS", ".Tjs"]
+        for ext in extensions:
+            for script_file in directory.rglob(f"*{ext}"):
+                adjuster.convert(script_file, script_file)
 
     def _copy_polyfill_files(self, directory: Path) -> None:
         """krkrsdl2 polyfill ファイルをコピーする
@@ -620,6 +611,51 @@ class BuildPipeline:
 
         # Koruriフォントをsystem/font.ttfとしてコピー
         self._copy_font_file(system_dir)
+
+        # extransプラグインをpluginディレクトリにコピー
+        self._copy_plugin_files(directory)
+
+    def _copy_plugin_files(self, directory: Path) -> None:
+        """extransプラグインをpluginディレクトリにコピーする
+
+        krkrsdl2/SamplePluginからextrans.soをダウンロードして
+        plugin/ディレクトリにコピーする。これによりripple等のトランジション効果が使用可能になる。
+
+        Args:
+            directory: コピー先のディレクトリ（ゲームデータのルート）
+        """
+        import asyncio
+        import logging
+
+        logger = logging.getLogger(__name__)
+        plugin_dir = directory / "plugin"
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            fetcher = PluginFetcher()
+
+            # 同期コンテキストで非同期メソッドを実行
+            loop = asyncio.new_event_loop()
+            try:
+                plugin_info = loop.run_until_complete(fetcher.get_plugin())
+            finally:
+                loop.close()
+
+            # 各ABI用のプラグインファイルをコピー
+            for _abi, src_path in plugin_info.paths.items():
+                dest_path = plugin_dir / "extrans.so"
+                # 最初のABI（arm64-v8a）のプラグインをコピー
+                # krkrsdl2はassets内のpluginディレクトリからネイティブプラグインをロードする
+                if not dest_path.exists():
+                    shutil.copy2(src_path, dest_path)
+                    logger.info(f"extransプラグインをコピーしました: {dest_path}")
+                    break
+
+        except PluginDownloadError as e:
+            # プラグインダウンロードに失敗してもビルドは継続
+            logger.warning(f"プラグインのダウンロードに失敗しました: {e}")
+        except OSError as e:
+            logger.warning(f"プラグインファイルのコピーに失敗しました: {e}")
 
     def _copy_font_file(self, system_dir: Path) -> None:
         """Koruriフォントをsystem/font.ttfとしてコピーする
