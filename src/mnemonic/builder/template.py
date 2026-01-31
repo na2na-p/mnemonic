@@ -16,30 +16,36 @@ import httpx
 if TYPE_CHECKING:
     from mnemonic.cache import CacheManager
 
+
 class TemplateDownloadError(Exception):
     """テンプレートダウンロードに関する基本例外クラス"""
 
     pass
+
 
 class TemplateCacheError(Exception):
     """テンプレートキャッシュに関する基本例外クラス"""
 
     pass
 
+
 class TemplateNotFoundError(TemplateDownloadError):
     """指定されたバージョンのテンプレートが存在しない場合の例外"""
 
     pass
+
 
 class NetworkError(TemplateDownloadError):
     """ネットワークエラー発生時の例外"""
 
     pass
 
+
 class FileIntegrityError(TemplateDownloadError):
     """ファイル整合性チェックに失敗した場合の例外"""
 
     pass
+
 
 @dataclass(frozen=True)
 class TemplateInfo:
@@ -49,6 +55,7 @@ class TemplateInfo:
     download_url: str
     file_size: int
     file_name: str
+
 
 @dataclass(frozen=True)
 class ProjectConfig:
@@ -66,15 +73,18 @@ class ProjectConfig:
     version_code: int
     version_name: str
 
+
 class ProjectGenerationError(Exception):
     """プロジェクト生成に関する基本例外クラス"""
 
     pass
 
+
 class InvalidTemplateError(ProjectGenerationError):
     """テンプレートの整合性検証に失敗した場合の例外"""
 
     pass
+
 
 class ProjectGenerator:
     """テンプレートからAndroidプロジェクトを生成するクラス
@@ -386,6 +396,7 @@ class ProjectGenerator:
         except OSError as e:
             raise ProjectGenerationError(f"Failed to update build.gradle: {e}") from e
 
+
 class TemplateCache:
     """テンプレートキャッシュを管理するクラス
 
@@ -598,16 +609,19 @@ class TemplateCache:
         except OSError as e:
             raise TemplateCacheError(f"Failed to clear cache: {e}") from e
 
+
 # GitHub APIとダウンロードURL構築に使用する定数
-GITHUB_API_BASE = "https://api.github.com/repos/krkrz/krkrsdl2"
+# mnemonicリポジトリでビルドしたAndroidテンプレートをダウンロード
+GITHUB_API_BASE = "https://api.github.com/repos/na2na-p/mnemonic"
 GITHUB_RELEASES_URL = f"{GITHUB_API_BASE}/releases"
 GITHUB_LATEST_RELEASE_URL = f"{GITHUB_RELEASES_URL}/latest"
 
 # テンプレートアセットのファイル名パターン
-TEMPLATE_ASSET_PATTERN = re.compile(r"krkrsdl2_android.*\.zip$", re.IGNORECASE)
+TEMPLATE_ASSET_PATTERN = re.compile(r"android-template\.zip$", re.IGNORECASE)
 
-# バージョン文字列の検証パターン
-VERSION_PATTERN = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+# バージョン文字列の検証パターン（template-vX.X.X形式）
+VERSION_PATTERN = re.compile(r"^template-v\d+\.\d+(\.\d+)?$")
+
 
 class TemplateDownloader:
     """GitHub Releasesからkrkrsdl2テンプレートをダウンロードするクラス
@@ -685,6 +699,9 @@ class TemplateDownloader:
     async def get_latest_version(self) -> str:
         """最新バージョンを取得する
 
+        /releases/latestを試み、404の場合は/releasesから最初のリリースを取得する。
+        これにより、pre-releaseのみのリポジトリにも対応できる。
+
         Returns:
             最新のテンプレートバージョン文字列
 
@@ -697,6 +714,20 @@ class TemplateDownloader:
                 GITHUB_LATEST_RELEASE_URL,
                 headers={"Accept": "application/vnd.github+json"},
             )
+
+            if response.status_code == 404:
+                # /releases/latestが404の場合（pre-releaseのみの場合）
+                # /releasesから最初のリリースを取得
+                response = await client.get(
+                    GITHUB_RELEASES_URL,
+                    headers={"Accept": "application/vnd.github+json"},
+                )
+                response.raise_for_status()
+                releases = response.json()
+                if not releases:
+                    raise NetworkError("リリースが見つかりません")
+                return str(releases[0]["tag_name"])
+
             response.raise_for_status()
             data = response.json()
             return str(data["tag_name"])
@@ -706,7 +737,7 @@ class TemplateDownloader:
             raise NetworkError(f"HTTP error occurred: {e.response.status_code}") from e
         except httpx.RequestError as e:
             raise NetworkError(f"Network error occurred: {e}") from e
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError, IndexError) as e:
             raise NetworkError(f"Invalid API response format: {e}") from e
         finally:
             if self._owns_client:
@@ -726,12 +757,9 @@ class TemplateDownloader:
         """
         self._validate_version(version)
 
-        # バージョンがvプレフィックスで始まらない場合は追加
-        normalized_version = version if version.startswith("v") else f"v{version}"
-
+        # template-vX.X.X形式のバージョンをそのまま使用
         return (
-            f"https://github.com/krkrz/krkrsdl2/releases/download/"
-            f"{normalized_version}/krkrsdl2_android_{normalized_version}.zip"
+            f"https://github.com/na2na-p/mnemonic/releases/download/{version}/android-template.zip"
         )
 
     def _validate_version(self, version: str) -> None:
@@ -763,8 +791,8 @@ class TemplateDownloader:
             TemplateNotFoundError: 指定されたバージョンが存在しない場合
             NetworkError: ネットワークエラーが発生した場合
         """
-        normalized_version = version if version.startswith("v") else f"v{version}"
-        release_url = f"{GITHUB_RELEASES_URL}/tags/{normalized_version}"
+        # template-vX.X.X形式のバージョンをそのまま使用
+        release_url = f"{GITHUB_RELEASES_URL}/tags/{version}"
 
         client = await self._get_client()
         try:
@@ -867,10 +895,12 @@ class TemplateDownloader:
                 f"File size mismatch: expected {expected_size} bytes, got {actual_size} bytes"
             )
 
+
 class AssetPlacementError(Exception):
     """アセット配置に関する基本例外クラス"""
 
     pass
+
 
 @dataclass(frozen=True)
 class AssetConfig:
@@ -883,6 +913,7 @@ class AssetConfig:
 
     no_compress_extensions: list[str]
     exclude_patterns: list[str]
+
 
 @dataclass(frozen=True)
 class AssetPlacementResult:
@@ -897,6 +928,7 @@ class AssetPlacementResult:
     total_files: int
     total_size: int
     placed_files: list[Path]
+
 
 class AssetPlacer:
     """変換済みアセットをAndroidプロジェクトに配置するクラス

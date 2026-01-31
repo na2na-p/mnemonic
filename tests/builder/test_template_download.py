@@ -15,9 +15,11 @@ from mnemonic.builder.template import (
     TemplateNotFoundError,
 )
 
+
 async def async_byte_iterator(data: bytes) -> AsyncIterator[bytes]:
     """バイトデータを非同期イテレータとして返すヘルパー関数"""
     yield data
+
 
 class TestTemplateInfo:
     """TemplateInfoデータクラスのテスト"""
@@ -48,6 +50,7 @@ class TestTemplateInfo:
         with pytest.raises(AttributeError):
             info.version = "v2.0.0"  # type: ignore[misc]
 
+
 class TestTemplateDownloaderInit:
     """TemplateDownloader初期化のテスト"""
 
@@ -69,6 +72,7 @@ class TestTemplateDownloaderInit:
         assert downloader._http_client is mock_client
         assert downloader._owns_client is False
 
+
 class TestTemplateDownloaderGetLatestVersion:
     """TemplateDownloader.get_latest_versionのテスト"""
 
@@ -77,7 +81,7 @@ class TestTemplateDownloaderGetLatestVersion:
         """正常系: GitHub APIから最新バージョンを取得"""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"tag_name": "v1.0.0"}
+        mock_response.json.return_value = {"tag_name": "template-v1.0.0"}
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -86,7 +90,7 @@ class TestTemplateDownloaderGetLatestVersion:
         downloader = TemplateDownloader(http_client=mock_client)
         version = await downloader.get_latest_version()
 
-        assert version == "v1.0.0"
+        assert version == "template-v1.0.0"
         mock_client.get.assert_called_once()
 
     @pytest.mark.asyncio
@@ -94,19 +98,14 @@ class TestTemplateDownloaderGetLatestVersion:
         "api_response,expected_version",
         [
             pytest.param(
-                {"tag_name": "v1.0.0"},
-                "v1.0.0",
-                id="正常系: v1.0.0形式のバージョン",
+                {"tag_name": "template-v1.0.0"},
+                "template-v1.0.0",
+                id="正常系: template-v1.0.0形式のバージョン",
             ),
             pytest.param(
-                {"tag_name": "v2.1.3"},
-                "v2.1.3",
-                id="正常系: v2.1.3形式のバージョン",
-            ),
-            pytest.param(
-                {"tag_name": "1.0.0"},
-                "1.0.0",
-                id="正常系: vプレフィックスなしのバージョン",
+                {"tag_name": "template-v2.1.3"},
+                "template-v2.1.3",
+                id="正常系: template-v2.1.3形式のバージョン",
             ),
         ],
     )
@@ -153,6 +152,58 @@ class TestTemplateDownloaderGetLatestVersion:
 
         assert "timed out" in str(exc_info.value)
 
+    @pytest.mark.asyncio
+    async def test_get_latest_version_fallback_to_releases_on_404(self) -> None:
+        """正常系: /releases/latestが404の場合、/releasesにフォールバック"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+        # 最初の呼び出し: /releases/latest が404を返す
+        latest_response = MagicMock()
+        latest_response.status_code = 404
+
+        # 2回目の呼び出し: /releases がリリース一覧を返す
+        releases_response = MagicMock()
+        releases_response.status_code = 200
+        releases_response.json.return_value = [
+            {"tag_name": "template-v1.2.0"},
+            {"tag_name": "template-v1.1.0"},
+            {"tag_name": "template-v1.0.0"},
+        ]
+        releases_response.raise_for_status = MagicMock()
+
+        mock_client.get.side_effect = [latest_response, releases_response]
+
+        downloader = TemplateDownloader(http_client=mock_client)
+        version = await downloader.get_latest_version()
+
+        assert version == "template-v1.2.0"
+        assert mock_client.get.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_latest_version_fallback_with_empty_releases(self) -> None:
+        """異常系: フォールバック先でリリースが空の場合、NetworkErrorが発生"""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+
+        # /releases/latest が404を返す
+        latest_response = MagicMock()
+        latest_response.status_code = 404
+
+        # /releases が空のリストを返す
+        releases_response = MagicMock()
+        releases_response.status_code = 200
+        releases_response.json.return_value = []
+        releases_response.raise_for_status = MagicMock()
+
+        mock_client.get.side_effect = [latest_response, releases_response]
+
+        downloader = TemplateDownloader(http_client=mock_client)
+
+        with pytest.raises(NetworkError) as exc_info:
+            await downloader.get_latest_version()
+
+        assert "リリースが見つかりません" in str(exc_info.value)
+
+
 class TestTemplateDownloaderGetDownloadUrl:
     """TemplateDownloader.get_download_urlのテスト"""
 
@@ -160,19 +211,14 @@ class TestTemplateDownloaderGetDownloadUrl:
         "version,expected_url_contains",
         [
             pytest.param(
-                "v1.0.0",
-                "v1.0.0",
-                id="正常系: v1.0.0でURL生成",
+                "template-v1.0.0",
+                "template-v1.0.0",
+                id="正常系: template-v1.0.0でURL生成",
             ),
             pytest.param(
-                "v2.1.3",
-                "v2.1.3",
-                id="正常系: v2.1.3でURL生成",
-            ),
-            pytest.param(
-                "1.0.0",
-                "v1.0.0",
-                id="正常系: vプレフィックスなしでもURL生成可能",
+                "template-v2.1.3",
+                "template-v2.1.3",
+                id="正常系: template-v2.1.3でURL生成",
             ),
         ],
     )
@@ -183,7 +229,7 @@ class TestTemplateDownloaderGetDownloadUrl:
         url = downloader.get_download_url(version)
 
         assert expected_url_contains in url
-        assert "krkrsdl2" in url
+        assert "mnemonic" in url
         assert "github.com" in url
 
     @pytest.mark.parametrize(
@@ -203,6 +249,7 @@ class TestTemplateDownloaderGetDownloadUrl:
 
         assert "Invalid version format" in str(exc_info.value)
 
+
 def create_mock_stream_response(data: bytes) -> MagicMock:
     """ダウンロードストリームレスポンスのモックを作成する"""
     mock_stream_response = MagicMock()
@@ -210,6 +257,7 @@ def create_mock_stream_response(data: bytes) -> MagicMock:
     mock_stream_response.raise_for_status = MagicMock()
     mock_stream_response.aiter_bytes = lambda chunk_size=8192: async_byte_iterator(data)
     return mock_stream_response
+
 
 class TestTemplateDownloaderDownload:
     """TemplateDownloader.downloadのテスト"""
@@ -223,10 +271,10 @@ class TestTemplateDownloaderDownload:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "v1.0.0",
+            "tag_name": "template-v1.0.0",
             "assets": [
                 {
-                    "name": "krkrsdl2_android_v1.0.0.zip",
+                    "name": "android-template.zip",
                     "browser_download_url": "https://example.com/template.zip",
                     "size": 100,
                 }
@@ -248,7 +296,7 @@ class TestTemplateDownloaderDownload:
 
         # ファイルサイズを一致させるためにモック
         with patch.object(downloader, "_verify_file_integrity"):
-            result = await downloader.download(version="v1.0.0")
+            result = await downloader.download(version="template-v1.0.0")
 
         assert result.parent.parent == tmp_path
 
@@ -260,17 +308,17 @@ class TestTemplateDownloaderDownload:
         # 最新バージョン取得のモック
         latest_response = MagicMock()
         latest_response.status_code = 200
-        latest_response.json.return_value = {"tag_name": "v2.0.0"}
+        latest_response.json.return_value = {"tag_name": "template-v2.0.0"}
         latest_response.raise_for_status = MagicMock()
 
         # リリース情報取得のモック
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "v2.0.0",
+            "tag_name": "template-v2.0.0",
             "assets": [
                 {
-                    "name": "krkrsdl2_android_v2.0.0.zip",
+                    "name": "android-template.zip",
                     "browser_download_url": "https://example.com/template.zip",
                     "size": 100,
                 }
@@ -293,7 +341,7 @@ class TestTemplateDownloaderDownload:
         with patch.object(downloader, "_verify_file_integrity"):
             result = await downloader.download()
 
-        assert "v2.0.0" in str(result)
+        assert "template-v2.0.0" in str(result)
 
     @pytest.mark.asyncio
     async def test_download_returns_path_to_template(self, tmp_path: Path) -> None:
@@ -303,10 +351,10 @@ class TestTemplateDownloaderDownload:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "v1.0.0",
+            "tag_name": "template-v1.0.0",
             "assets": [
                 {
-                    "name": "krkrsdl2_android_v1.0.0.zip",
+                    "name": "android-template.zip",
                     "browser_download_url": "https://example.com/template.zip",
                     "size": 100,
                 }
@@ -325,10 +373,10 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with patch.object(downloader, "_verify_file_integrity"):
-            result = await downloader.download(version="v1.0.0")
+            result = await downloader.download(version="template-v1.0.0")
 
         assert isinstance(result, Path)
-        assert result.name == "krkrsdl2_android_v1.0.0.zip"
+        assert result.name == "android-template.zip"
 
     @pytest.mark.asyncio
     async def test_download_template_not_found_error(self, tmp_path: Path) -> None:
@@ -342,7 +390,7 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(TemplateNotFoundError) as exc_info:
-            await downloader.download(version="v999.999.999")
+            await downloader.download(version="template-v999.999.999")
 
         assert "not found" in str(exc_info.value).lower()
 
@@ -355,9 +403,10 @@ class TestTemplateDownloaderDownload:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(NetworkError) as exc_info:
-            await downloader.download(version="v1.0.0")
+            await downloader.download(version="template-v1.0.0")
 
         assert "Network error" in str(exc_info.value)
+
 
 class TestTemplateDownloaderIntegrityCheck:
     """ダウンロードファイルの整合性チェックのテスト"""
@@ -371,10 +420,10 @@ class TestTemplateDownloaderIntegrityCheck:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "v1.0.0",
+            "tag_name": "template-v1.0.0",
             "assets": [
                 {
-                    "name": "krkrsdl2_android_v1.0.0.zip",
+                    "name": "android-template.zip",
                     "browser_download_url": "https://example.com/template.zip",
                     "size": len(test_content),  # 実際のコンテンツサイズ
                 }
@@ -392,7 +441,7 @@ class TestTemplateDownloaderIntegrityCheck:
 
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
-        result = await downloader.download(version="v1.0.0")
+        result = await downloader.download(version="template-v1.0.0")
 
         assert result.exists()
         assert result.stat().st_size == len(test_content)
@@ -406,10 +455,10 @@ class TestTemplateDownloaderIntegrityCheck:
         release_response = MagicMock()
         release_response.status_code = 200
         release_response.json.return_value = {
-            "tag_name": "v1.0.0",
+            "tag_name": "template-v1.0.0",
             "assets": [
                 {
-                    "name": "krkrsdl2_android_v1.0.0.zip",
+                    "name": "android-template.zip",
                     "browser_download_url": "https://example.com/template.zip",
                     "size": 1000,  # ファイルサイズ不一致を起こす
                 }
@@ -428,9 +477,10 @@ class TestTemplateDownloaderIntegrityCheck:
         downloader = TemplateDownloader(cache_dir=tmp_path, http_client=mock_client)
 
         with pytest.raises(FileIntegrityError) as exc_info:
-            await downloader.download(version="v1.0.0")
+            await downloader.download(version="template-v1.0.0")
 
         assert "mismatch" in str(exc_info.value).lower()
+
 
 class TestExceptionClasses:
     """例外クラスのテスト"""

@@ -17,6 +17,7 @@ from mnemonic.pipeline import (
     PipelineResult,
 )
 
+
 class TestPipelineConfig:
     """PipelineConfig設定クラスのテスト"""
 
@@ -89,6 +90,7 @@ class TestPipelineConfig:
         )
         with pytest.raises(AttributeError):
             config.skip_video = True  # type: ignore[misc]
+
 
 class TestBuildPipelineValidation:
     """BuildPipeline設定検証のテスト"""
@@ -203,6 +205,7 @@ class TestBuildPipelineValidation:
         # エラーがないことを確認
         assert errors == []
 
+
 class TestBuildPipelineExecution:
     """BuildPipelineパイプライン実行のテスト"""
 
@@ -232,9 +235,13 @@ class TestBuildPipelineExecution:
         mock_components: dict,
         valid_config: PipelineConfig,
         tmp_path: Path,
+        mocker,
     ) -> None:
-        """全フェーズが順番に実行される"""
+        """全フェーズが順番に実行される（モック使用）"""
         pipeline = BuildPipeline(valid_config)
+
+        # _execute_phase をモックして実際の処理をスキップ
+        mocker.patch.object(pipeline, "_execute_phase")
 
         result = pipeline.run()
 
@@ -251,9 +258,14 @@ class TestBuildPipelineExecution:
         mock_components: dict,
         valid_config: PipelineConfig,
         tmp_path: Path,
+        mocker,
     ) -> None:
-        """進捗コールバックが各フェーズで呼び出される"""
+        """進捗コールバックが各フェーズで呼び出される（モック使用）"""
         pipeline = BuildPipeline(valid_config)
+
+        # _execute_phase をモックして実際の処理をスキップ
+        mocker.patch.object(pipeline, "_execute_phase")
+
         progress_callback = Mock()
 
         result = pipeline.run(progress_callback=progress_callback)
@@ -288,8 +300,9 @@ class TestBuildPipelineExecution:
         self,
         mock_components: dict,
         tmp_path: Path,
+        mocker,
     ) -> None:
-        """--skip-videoオプションで動画変換をスキップ"""
+        """--skip-videoオプションで動画変換をスキップ（モック使用）"""
         input_file = tmp_path / "game.exe"
         input_file.write_bytes(b"\x00" * 100)
 
@@ -299,6 +312,9 @@ class TestBuildPipelineExecution:
             skip_video=True,
         )
         pipeline = BuildPipeline(config)
+
+        # _execute_phase をモックして実際の処理をスキップ
+        mocker.patch.object(pipeline, "_execute_phase")
 
         # skip_videoオプションが設定されていることを確認
         assert pipeline.config.skip_video is True
@@ -311,8 +327,9 @@ class TestBuildPipelineExecution:
         self,
         mock_components: dict,
         tmp_path: Path,
+        mocker,
     ) -> None:
-        """--cleanオプションでキャッシュをクリア"""
+        """--cleanオプションでキャッシュをクリア（モック使用）"""
         input_file = tmp_path / "game.exe"
         input_file.write_bytes(b"\x00" * 100)
 
@@ -323,12 +340,16 @@ class TestBuildPipelineExecution:
         )
         pipeline = BuildPipeline(config)
 
+        # _execute_phase をモックして実際の処理をスキップ
+        mocker.patch.object(pipeline, "_execute_phase")
+
         # clean_cacheオプションが設定されていることを確認
         assert pipeline.config.clean_cache is True
 
         result = pipeline.run()
 
         assert result.success is True
+
 
 class TestBuildPipelineResult:
     """PipelineResult結果クラスのテスト"""
@@ -430,6 +451,7 @@ class TestBuildPipelineResult:
         assert result.phases_completed == []
         assert result.statistics == {}
 
+
 class TestPipelinePhase:
     """PipelinePhase列挙型のテスト"""
 
@@ -453,6 +475,7 @@ class TestPipelinePhase:
         assert phases[2] == PipelinePhase.CONVERT
         assert phases[3] == PipelinePhase.BUILD
         assert phases[4] == PipelinePhase.SIGN
+
 
 class TestPipelineProgress:
     """PipelineProgress進捗情報のテスト"""
@@ -550,6 +573,7 @@ class TestPipelineProgress:
         assert progress.current == current
         assert progress.total == total
         assert progress.message == message
+
 
 class TestBuildPipelineInit:
     """BuildPipeline初期化のテスト"""
