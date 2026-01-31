@@ -66,6 +66,12 @@ jobs:
           [ -d "$ANDROID_SDK_ROOT/cmake/3.22.1" ] || sdkmanager --install "cmake;3.22.1"
           sdkmanager --install "platforms;android-26" "build-tools;30.0.3"
 
+      # Setup Gradle before krkrsdl2 cache restore to avoid wrapper validation on SDL's old gradle-wrapper.jar
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
       - name: Cache krkrsdl2 repository
         uses: actions/cache@v4
         id: cache-krkrsdl2
@@ -80,11 +86,6 @@ jobs:
             https://github.com/${{ env.KRKRSDL2_REPO }}.git krkrsdl2
           cd krkrsdl2
           git submodule update --init --recursive
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: false
 
       - name: Build Android project
         working-directory: krkrsdl2/android-project
