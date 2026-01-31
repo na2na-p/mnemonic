@@ -16,6 +16,7 @@ from mnemonic.cache import (
     is_cache_valid,
 )
 
+
 class TestCacheInfo:
     """CacheInfo型のテスト"""
 
@@ -42,6 +43,7 @@ class TestCacheInfo:
         )
         with pytest.raises(AttributeError):
             info.size_bytes = 999  # type: ignore
+
 
 class TestGetCacheDir:
     """get_cache_dir関数のテスト"""
@@ -104,6 +106,7 @@ class TestGetCacheDir:
             assert "mnemonic" in str(result)
             assert "cache" in str(result)
 
+
 class TestGetTemplateCachePath:
     """get_template_cache_path関数のテスト"""
 
@@ -121,6 +124,7 @@ class TestGetTemplateCachePath:
         assert v1 != v2
         assert "1.0.0" in str(v1)
         assert "2.0.0" in str(v2)
+
 
 class TestIsCacheValid:
     """is_cache_valid関数のテスト"""
@@ -152,6 +156,7 @@ class TestIsCacheValid:
         os.utime(test_file, (old_time, old_time))
         result = is_cache_valid(test_file, max_age_days=7)
         assert result is False
+
 
 class TestClearCache:
     """clear_cache関数のテスト"""
@@ -188,6 +193,7 @@ class TestClearCache:
         nonexistent = tmp_path / "nonexistent"
         with patch("mnemonic.cache.get_cache_dir", return_value=nonexistent):
             clear_cache()
+
 
 class TestGetCacheInfo:
     """get_cache_info関数のテスト"""

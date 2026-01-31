@@ -18,6 +18,7 @@ from mnemonic.converter.image import (
 TLG5_MAGIC = b"TLG5.0\x00raw\x1a"
 TLG6_MAGIC = b"TLG6.0\x00raw\x1a"
 
+
 class TestIsTlgFile:
     """is_tlg_fileメソッドのテスト"""
 
@@ -78,6 +79,7 @@ class TestIsTlgFile:
         result = decoder.is_tlg_file(nonexistent_path)
         assert result is False
 
+
 class TestGetInfo:
     """get_infoメソッドのテスト"""
 
@@ -95,6 +97,7 @@ class TestGetInfo:
         finally:
             temp_path.unlink()
 
+
 class TestDecode:
     """decodeメソッドのテスト"""
 
@@ -111,6 +114,7 @@ class TestDecode:
                 decoder.decode(temp_path)
         finally:
             temp_path.unlink()
+
 
 class TestDecodeToFile:
     """decode_to_fileメソッドのテスト"""
@@ -130,6 +134,7 @@ class TestDecodeToFile:
         finally:
             temp_path.unlink()
 
+
 class TestTLGVersion:
     """TLGVersionのテスト"""
 
@@ -138,6 +143,7 @@ class TestTLGVersion:
         assert TLGVersion.TLG5.value == "TLG5"
         assert TLGVersion.TLG6.value == "TLG6"
         assert TLGVersion.UNKNOWN.value == "UNKNOWN"
+
 
 class TestQualityPreset:
     """QualityPreset列挙型のテスト"""
@@ -153,6 +159,7 @@ class TestQualityPreset:
     def test_quality_preset_values(self, preset: QualityPreset, expected_value: int) -> None:
         """QualityPresetの値が正しいことを確認"""
         assert preset.value == expected_value
+
 
 class TestImageConverter:
     """ImageConverterクラスのテスト"""

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TextIO
 if TYPE_CHECKING:
     from mnemonic.pipeline import PipelinePhase
 
+
 class VerboseLevel(IntEnum):
     """詳細ログレベル
 
@@ -32,6 +33,7 @@ class VerboseLevel(IntEnum):
     NORMAL = 0
     VERBOSE = 1
     DEBUG = 2
+
 
 class ProgressDisplay(Protocol):
     """進捗表示のプロトコル
@@ -67,6 +69,7 @@ class ProgressDisplay(Protocol):
         """
         ...
 
+
 @dataclass
 class LogConfig:
     """ログ設定
@@ -85,6 +88,7 @@ class LogConfig:
     log_file: Path | None = None
     use_color: bool = True
     use_emoji: bool = True
+
 
 class BuildLogger:
     """ビルドログ出力クラス
@@ -264,6 +268,7 @@ class BuildLogger:
             self.info(f"   Output: {statistics['output_path']} ({size_mb:.1f} MB)")
         if "package_name" in statistics:
             self.info(f"   Package: {statistics['package_name']}")
+
 
 class ConsoleProgressDisplay:
     """コンソール進捗表示

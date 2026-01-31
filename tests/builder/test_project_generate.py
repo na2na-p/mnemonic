@@ -12,6 +12,7 @@ from mnemonic.builder.template import (
     ProjectGenerator,
 )
 
+
 class TestProjectConfig:
     """ProjectConfig初期化のテスト"""
 
@@ -87,6 +88,7 @@ class TestProjectConfig:
         assert config.version_code == version_code
         assert config.version_name == version_name
 
+
 class TestProjectGeneratorInit:
     """ProjectGenerator初期化のテスト"""
 
@@ -98,6 +100,7 @@ class TestProjectGeneratorInit:
         generator = ProjectGenerator(template_path=template_path)
 
         assert generator._template_path == template_path
+
 
 class TestProjectGeneratorValidateTemplate:
     """ProjectGenerator.validate_templateのテスト"""
@@ -180,6 +183,7 @@ class TestProjectGeneratorValidateTemplate:
         else:
             with pytest.raises(InvalidTemplateError):
                 generator.validate_template()
+
 
 class TestProjectGeneratorGenerate:
     """ProjectGenerator.generateのテスト"""
@@ -414,6 +418,7 @@ class TestProjectGeneratorGenerate:
         assert f"versionCode {version_code}" in gradle_content
         assert f'versionName "{version_name}"' in gradle_content
 
+
 class TestProjectGeneratorErrorCases:
     """ProjectGenerator エラーケースのテスト"""
 
@@ -540,6 +545,7 @@ class TestProjectGeneratorErrorCases:
 
         with pytest.raises(ProjectGenerationError):
             generator.generate(output_dir=output_dir, config=config)
+
 
 class TestProjectGenerationExceptions:
     """プロジェクト生成例外のテスト"""

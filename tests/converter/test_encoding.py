@@ -12,15 +12,18 @@ from mnemonic.converter.encoding import (
     EncodingDetector,
 )
 
+
 @pytest.fixture
 def detector() -> EncodingDetector:
     """EncodingDetectorインスタンスを返すフィクスチャ"""
     return EncodingDetector()
 
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     """テストフィクスチャディレクトリのパスを返すフィクスチャ"""
     return Path(__file__).parent.parent / "fixtures" / "encoding"
+
 
 class TestEncodingDetectionResult:
     """EncodingDetectionResultのテスト"""
@@ -56,6 +59,7 @@ class TestEncodingDetectionResult:
         with pytest.raises(AttributeError):
             result.encoding = "shift_jis"  # type: ignore[misc]
 
+
 class TestSupportedEncodings:
     """SUPPORTED_ENCODINGSのテスト"""
 
@@ -68,6 +72,7 @@ class TestSupportedEncodings:
     def test_is_tuple_type(self) -> None:
         """SUPPORTED_ENCODINGSがタプル型であることを確認する"""
         assert isinstance(SUPPORTED_ENCODINGS, tuple)
+
 
 class TestEncodingDetectorDetect:
     """EncodingDetector.detectメソッドのテスト"""
@@ -127,6 +132,7 @@ class TestEncodingDetectorDetect:
 
         assert isinstance(result, EncodingDetectionResult)
 
+
 class TestEncodingDetectorDetectBytes:
     """EncodingDetector.detect_bytesメソッドのテスト"""
 
@@ -160,6 +166,7 @@ class TestEncodingDetectorDetectBytes:
         result = detector.detect_bytes(b"")
 
         assert isinstance(result, EncodingDetectionResult)
+
 
 class TestEncodingDetectorIsTextFile:
     """EncodingDetector.is_text_fileメソッドのテスト"""
@@ -201,10 +208,12 @@ class TestEncodingDetectorIsTextFile:
 
         assert result is True
 
+
 @pytest.fixture
 def converter() -> EncodingConverter:
     """EncodingConverterインスタンスを返すフィクスチャ"""
     return EncodingConverter()
+
 
 class TestEncodingConverterInit:
     """EncodingConverterの初期化テスト"""
@@ -229,6 +238,7 @@ class TestEncodingConverterInit:
         converter = EncodingConverter(source_encoding="shift_jis")
         assert converter.source_encoding == "shift_jis"
 
+
 class TestEncodingConverterSupportedExtensions:
     """EncodingConverter.supported_extensionsのテスト"""
 
@@ -251,6 +261,7 @@ class TestEncodingConverterSupportedExtensions:
     def test_returns_tuple(self, converter: EncodingConverter) -> None:
         """supported_extensionsがタプルを返すことを確認する"""
         assert isinstance(converter.supported_extensions, tuple)
+
 
 class TestEncodingConverterCanConvert:
     """EncodingConverter.can_convertのテスト"""
@@ -292,6 +303,7 @@ class TestEncodingConverterCanConvert:
             # バイナリファイルは.dat拡張子なのでFalse
             result = converter.can_convert(binary_path)
             assert result is False
+
 
 class TestEncodingConverterConvert:
     """EncodingConverter.convertのテスト"""
@@ -417,6 +429,7 @@ class TestEncodingConverterConvert:
         assert dest.parent.exists()
         assert dest.exists()
 
+
 class TestEncodingConverterConvertBytes:
     """EncodingConverter.convert_bytesのテスト"""
 
@@ -468,6 +481,7 @@ class TestEncodingConverterConvertBytes:
 
         assert not result_bytes.startswith(bom)
         assert result_bytes.decode("utf-8") == test_text
+
 
 class TestEncodingConverterJapanesePreservation:
     """日本語文字の保全テスト"""

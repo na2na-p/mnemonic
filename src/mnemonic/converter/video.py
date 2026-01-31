@@ -8,9 +8,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-import ffmpeg
+import ffmpeg  # type: ignore[import-untyped]
 
 from .base import BaseConverter, ConversionResult, ConversionStatus
+
 
 @dataclass(frozen=True)
 class VideoInfo:
@@ -35,6 +36,7 @@ class VideoInfo:
     video_codec: str
     audio_codec: str | None
     bitrate: int
+
 
 class VideoConverter(BaseConverter):
     """動画ファイルをAndroid互換形式に変換するConverter

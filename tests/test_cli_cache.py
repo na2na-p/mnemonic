@@ -7,6 +7,7 @@ from mnemonic.cli import app
 
 runner = CliRunner()
 
+
 class TestCacheHelpCommand:
     """cache --help コマンドのテスト"""
 
@@ -22,6 +23,7 @@ class TestCacheHelpCommand:
         result = runner.invoke(app, ["cache", "--help"])
         assert result.exit_code == 0
         assert "キャッシュ" in result.stdout
+
 
 class TestCacheCleanCommand:
     """cache clean コマンドのテスト"""
@@ -78,6 +80,7 @@ class TestCacheCleanCommand:
         result = runner.invoke(app, ["cache", "clean"], input="n\n")
         assert result.exit_code == 0
         assert "キャンセル" in result.stdout
+
 
 class TestCacheInfoCommand:
     """cache info コマンドのテスト"""

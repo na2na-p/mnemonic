@@ -7,15 +7,18 @@ import pytest
 from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.script import AdjustmentRule, ScriptAdjuster
 
+
 @pytest.fixture
 def adjuster() -> ScriptAdjuster:
     """ScriptAdjusterインスタンスを返すフィクスチャ"""
     return ScriptAdjuster()
 
+
 @pytest.fixture
 def fixtures_dir() -> Path:
     """テストフィクスチャディレクトリのパスを返すフィクスチャ"""
     return Path(__file__).parent.parent / "fixtures" / "script"
+
 
 class TestAdjustmentRule:
     """AdjustmentRuleデータクラスのテスト"""
@@ -40,6 +43,7 @@ class TestAdjustmentRule:
         )
         with pytest.raises(AttributeError):
             rule.pattern = "new_pattern"  # type: ignore[misc]
+
 
 class TestScriptAdjusterInit:
     """ScriptAdjusterの初期化テスト"""
@@ -73,6 +77,7 @@ class TestScriptAdjusterInit:
         adjuster = ScriptAdjuster(add_encoding_directive=False)
         assert adjuster.add_encoding_directive is False
 
+
 class TestScriptAdjusterDefaultRules:
     """DEFAULT_RULESのテスト"""
 
@@ -84,6 +89,7 @@ class TestScriptAdjusterDefaultRules:
         """DEFAULT_RULESにプラグイン無効化ルールが含まれることを確認する"""
         descriptions = [rule.description for rule in ScriptAdjuster.DEFAULT_RULES]
         assert "プラグインDLL読み込みの無効化" in descriptions
+
 
 class TestScriptAdjusterSupportedExtensions:
     """ScriptAdjuster.supported_extensionsのテスト"""
@@ -117,6 +123,7 @@ class TestScriptAdjusterSupportedExtensions:
         """サポート外の拡張子が含まれていないことを確認する"""
         assert extension not in adjuster.supported_extensions
 
+
 class TestScriptAdjusterCanConvert:
     """ScriptAdjuster.can_convertのテスト"""
 
@@ -143,6 +150,7 @@ class TestScriptAdjusterCanConvert:
         test_file.write_text("test content", encoding="utf-8")
         result = adjuster.can_convert(test_file)
         assert result is expected
+
 
 class TestScriptAdjusterAdjustContent:
     """ScriptAdjuster.adjust_contentのテスト"""
@@ -238,6 +246,7 @@ var x = 1;  // 変数xを初期化
         assert "日本語コメント" in adjusted
         assert count == 0
 
+
 class TestScriptAdjusterAddStartupDirective:
     """ScriptAdjuster.add_startup_directiveのテスト"""
 
@@ -269,6 +278,7 @@ var initialized = false;
         result = adjuster.add_startup_directive(content)
 
         assert content in result
+
 
 class TestScriptAdjusterConvert:
     """ScriptAdjuster.convertのテスト"""

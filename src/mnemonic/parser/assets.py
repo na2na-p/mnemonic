@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+
 class AssetType(Enum):
     """アセットの種別
 
@@ -19,6 +20,7 @@ class AssetType(Enum):
     VIDEO = "video"
     OTHER = "other"
 
+
 class ConversionAction(Enum):
     """変換アクション
 
@@ -31,6 +33,7 @@ class ConversionAction(Enum):
     CONVERT_MP4 = "convert_mp4"
     COPY = "copy"
     SKIP = "skip"
+
 
 # 拡張子からアセット種別へのマッピング
 _EXTENSION_TO_TYPE: dict[str, AssetType] = {
@@ -108,6 +111,7 @@ _CONVERTER_TO_ACTION: dict[str, ConversionAction] = {
     "skip": ConversionAction.SKIP,
 }
 
+
 @dataclass(frozen=True)
 class AssetFile:
     """アセットファイル情報
@@ -127,6 +131,7 @@ class AssetFile:
     action: ConversionAction
     source_format: str
     target_format: str | None
+
 
 @dataclass
 class AssetManifest:
@@ -176,6 +181,7 @@ class AssetManifest:
             if count > 0:
                 summary[asset_type] = count
         return summary
+
 
 class AssetScanner:
     """アセットをスキャンしてマニフェストを生成するクラス

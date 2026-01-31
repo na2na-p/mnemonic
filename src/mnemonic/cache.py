@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
 
+
 @dataclass(frozen=True)
 class CacheInfo:
     """キャッシュ情報"""
@@ -18,6 +19,7 @@ class CacheInfo:
     size_bytes: int
     template_version: str | None
     template_expires_in_days: int | None
+
 
 class CacheManager(Protocol):
     """キャッシュ管理インターフェース"""
@@ -42,6 +44,7 @@ class CacheManager(Protocol):
         """キャッシュ情報を取得する"""
         ...
 
+
 def get_cache_dir() -> Path:
     """OSごとのキャッシュディレクトリを取得する"""
     system = platform.system()
@@ -63,9 +66,11 @@ def get_cache_dir() -> Path:
 
     return base / "mnemonic"
 
+
 def get_template_cache_path(version: str) -> Path:
     """テンプレートキャッシュパスを取得する"""
     return get_cache_dir() / "templates" / version
+
 
 def is_cache_valid(path: Path, max_age_days: int = 7) -> bool:
     """キャッシュの有効性をチェックする"""
@@ -75,6 +80,7 @@ def is_cache_valid(path: Path, max_age_days: int = 7) -> bool:
     mtime = datetime.fromtimestamp(path.stat().st_mtime)
     age = datetime.now() - mtime
     return age < timedelta(days=max_age_days)
+
 
 def clear_cache(template_only: bool = False) -> None:
     """キャッシュをクリアする"""
@@ -87,6 +93,7 @@ def clear_cache(template_only: bool = False) -> None:
     else:
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
+
 
 def get_cache_info() -> CacheInfo:
     """キャッシュ情報を取得する"""

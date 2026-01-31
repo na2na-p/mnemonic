@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO
 
 # XP3マジックナンバー (11バイト)
 XP3_MAGIC = b"XP3\x0d\x0a\x20\x0a\x1a\x8b\x67\x01"
@@ -169,7 +170,7 @@ class XP3Archive:
 
             self._parse_file_index(f, header)
 
-    def _parse_file_index(self, f: BytesIO, header: bytes) -> None:
+    def _parse_file_index(self, f: BinaryIO, header: bytes) -> None:
         """ファイルインデックスをパースする
 
         Args:
@@ -188,7 +189,7 @@ class XP3Archive:
             # テスト用または簡易形式の場合は空のリストを返す
             pass
 
-    def _parse_standard_index(self, f: BytesIO, header: bytes) -> None:
+    def _parse_standard_index(self, f: BinaryIO, header: bytes) -> None:
         """標準的なXP3インデックスをパースする
 
         Args:
@@ -240,7 +241,7 @@ class XP3Archive:
             # パースエラーの場合は空のリストを維持
             pass
 
-    def _read_file_table(self, f: BytesIO, table_size: int) -> None:
+    def _read_file_table(self, f: BinaryIO, table_size: int) -> None:
         """ファイルテーブルを読み取る
 
         Args:
@@ -445,7 +446,7 @@ class XP3Archive:
 
         return None
 
-    def _extract_entry(self, f: BytesIO, entry: XP3FileEntry, output_path: Path) -> None:
+    def _extract_entry(self, f: BinaryIO, entry: XP3FileEntry, output_path: Path) -> None:
         """エントリを展開する
 
         Args:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
 
+
 @dataclass(frozen=True)
 class AdjustmentRule:
     """スクリプト調整ルール
@@ -25,6 +26,7 @@ class AdjustmentRule:
     pattern: str
     replacement: str
     description: str
+
 
 class ScriptAdjuster(BaseConverter):
     """スクリプト調整クラス

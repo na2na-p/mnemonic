@@ -16,6 +16,7 @@ from mnemonic.parser import (
     XP3EncryptionError,
 )
 
+
 class TestEncryptionType:
     """EncryptionType列挙型のテスト"""
 
@@ -49,6 +50,7 @@ class TestEncryptionType:
     ) -> None:
         """EncryptionTypeの各値が正しい文字列値を持つ"""
         assert encryption_type.value == expected_value
+
 
 class TestEncryptionInfo:
     """EncryptionInfoデータクラスのテスト"""
@@ -118,6 +120,7 @@ class TestEncryptionInfo:
         with pytest.raises(AttributeError):
             info.is_encrypted = True  # type: ignore[misc]
 
+
 class TestXP3EncryptionError:
     """XP3EncryptionError例外のテスト"""
 
@@ -146,6 +149,7 @@ class TestXP3EncryptionError:
         error = XP3EncryptionError(encryption_info)
 
         assert "特殊な暗号化方式" in str(error)
+
 
 class TestXP3Archive:
     """XP3アーカイブ操作クラスのテスト"""
@@ -216,6 +220,7 @@ class TestXP3Archive:
         assert isinstance(result, bool)
         assert result is False  # テスト用ファイルは暗号化されていない
 
+
 class TestXP3EncryptionChecker:
     """XP3暗号化チェッカーのテスト"""
 
@@ -274,6 +279,7 @@ class TestXP3EncryptionChecker:
         # 実際の暗号化XP3ファイルがないため、このテストはスキップ
         # 将来的に実際の暗号化XP3ファイルでテストする
         pytest.skip("暗号化されたXP3ファイルのテストは統合テストで実施")
+
 
 class TestXP3ArchiveIntegration:
     """XP3アーカイブの統合テスト

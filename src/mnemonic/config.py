@@ -8,10 +8,12 @@ from typing import Any, Protocol
 
 import yaml
 
+
 class ConfigError(Exception):
     """設定ファイル読み込みエラー"""
 
     pass
+
 
 @dataclass(frozen=True)
 class ImageConfig:
@@ -21,6 +23,7 @@ class ImageConfig:
     quality: int | str = "high"
     lossless_alpha: bool = True
 
+
 @dataclass(frozen=True)
 class VideoConfig:
     """動画変換設定"""
@@ -29,12 +32,14 @@ class VideoConfig:
     profile: str = "baseline"
     audio_codec: str = "aac"
 
+
 @dataclass(frozen=True)
 class EncodingConfig:
     """文字コード設定"""
 
     source: str | None = None
     target: str = "utf-8"
+
 
 @dataclass(frozen=True)
 class ConversionRule:
@@ -43,12 +48,14 @@ class ConversionRule:
     pattern: str
     converter: str
 
+
 @dataclass(frozen=True)
 class TimeoutConfig:
     """タイムアウト設定"""
 
     ffmpeg: int = 300
     gradle: int = 1800
+
 
 @dataclass(frozen=True)
 class MnemonicConfig:
@@ -65,6 +72,7 @@ class MnemonicConfig:
     exclude: list[str] = field(default_factory=list)
     timeouts: TimeoutConfig = field(default_factory=TimeoutConfig)
 
+
 class ConfigLoader(Protocol):
     """設定読み込みインターフェース"""
 
@@ -75,6 +83,7 @@ class ConfigLoader(Protocol):
     def get_default_config(self) -> MnemonicConfig:
         """デフォルト設定を取得する"""
         ...
+
 
 def load_config(path: Path) -> MnemonicConfig:
     """設定ファイルを読み込む
@@ -115,9 +124,11 @@ def load_config(path: Path) -> MnemonicConfig:
         timeouts=_merge_timeout_config(data.get("timeouts", {}), default.timeouts),
     )
 
+
 def get_default_config() -> MnemonicConfig:
     """デフォルト設定を取得する"""
     return MnemonicConfig()
+
 
 def _merge_image_config(data: dict[str, Any], default: ImageConfig) -> ImageConfig:
     """画像設定をマージする"""
@@ -129,6 +140,7 @@ def _merge_image_config(data: dict[str, Any], default: ImageConfig) -> ImageConf
         lossless_alpha=data.get("lossless_alpha", default.lossless_alpha),
     )
 
+
 def _merge_video_config(data: dict[str, Any], default: VideoConfig) -> VideoConfig:
     """動画設定をマージする"""
     if not isinstance(data, dict):
@@ -139,6 +151,7 @@ def _merge_video_config(data: dict[str, Any], default: VideoConfig) -> VideoConf
         audio_codec=data.get("audio_codec", default.audio_codec),
     )
 
+
 def _merge_encoding_config(data: dict[str, Any], default: EncodingConfig) -> EncodingConfig:
     """エンコーディング設定をマージする"""
     if not isinstance(data, dict):
@@ -148,6 +161,7 @@ def _merge_encoding_config(data: dict[str, Any], default: EncodingConfig) -> Enc
         target=data.get("target", default.target),
     )
 
+
 def _merge_timeout_config(data: dict[str, Any], default: TimeoutConfig) -> TimeoutConfig:
     """タイムアウト設定をマージする"""
     if not isinstance(data, dict):
@@ -156,6 +170,7 @@ def _merge_timeout_config(data: dict[str, Any], default: TimeoutConfig) -> Timeo
         ffmpeg=data.get("ffmpeg", default.ffmpeg),
         gradle=data.get("gradle", default.gradle),
     )
+
 
 def _parse_conversion_rules(data: list[dict[str, Any]]) -> list[ConversionRule]:
     """変換ルールをパースする"""

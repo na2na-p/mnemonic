@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+
 class ZipalignError(Exception):
     """zipalign実行に関する基本例外クラス
 
@@ -21,6 +22,7 @@ class ZipalignError(Exception):
     """
 
     pass
+
 
 class ZipalignRunner(Protocol):
     """zipalignコマンドを実行するためのインターフェース
@@ -74,6 +76,7 @@ class ZipalignRunner(Protocol):
             ZipalignError: 確認処理に失敗した場合
         """
         ...
+
 
 class DefaultZipalignRunner:
     """zipalignコマンドを実行するデフォルト実装
@@ -185,6 +188,7 @@ class DefaultZipalignRunner:
         except subprocess.SubprocessError as e:
             raise ZipalignError(f"zipalign verification failed: {e}") from e
 
+
 class ApkSignerError(Exception):
     """apksigner実行に関する基本例外クラス
 
@@ -193,6 +197,7 @@ class ApkSignerError(Exception):
     """
 
     pass
+
 
 @dataclass(frozen=True)
 class KeystoreConfig:
@@ -212,6 +217,7 @@ class KeystoreConfig:
     key_alias: str
     keystore_password: str
     key_password: str | None = None
+
 
 class ApkSignerRunner(Protocol):
     """apksignerコマンドを実行するためのインターフェース
@@ -264,6 +270,7 @@ class ApkSignerRunner(Protocol):
             apksignerコマンドのパス。見つからない場合はNone。
         """
         ...
+
 
 class DefaultApkSignerRunner:
     """apksignerコマンドを実行するデフォルト実装
@@ -396,6 +403,7 @@ class DefaultApkSignerRunner:
 
         return None
 
+
 class PasswordError(Exception):
     """パスワード取得に関する基本例外クラス
 
@@ -404,6 +412,7 @@ class PasswordError(Exception):
     """
 
     pass
+
 
 class PasswordProvider(Protocol):
     """キーストアパスワードを取得するためのインターフェース
@@ -443,6 +452,7 @@ class PasswordProvider(Protocol):
             環境変数に設定されたパスワード。未設定の場合はNone。
         """
         ...
+
 
 class DefaultPasswordProvider:
     """キーストアパスワードを取得するデフォルト実装

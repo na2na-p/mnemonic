@@ -17,6 +17,7 @@ from mnemonic.pipeline import BuildPipeline, PipelineConfig, PipelineProgress
 app = typer.Typer(help="吉里吉里ゲームをAndroid APKに変換するCLIツール")
 console = Console()
 
+
 def _format_size(size_bytes: int) -> str:
     """バイト数を人間が読みやすい形式に変換する"""
     if size_bytes < 1024:
@@ -27,6 +28,7 @@ def _format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
     else:
         return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
 
 @app.command()
 def build(
@@ -96,6 +98,7 @@ def build(
         console.print(f"[red]ビルド失敗: {result.error_message}[/red]")
         raise typer.Exit(1)
 
+
 @app.command()
 def doctor() -> None:
     """依存ツールをチェックする"""
@@ -133,6 +136,7 @@ def doctor() -> None:
     else:
         console.print("\n[green]すべての必須ツールが利用可能です[/green]")
         raise typer.Exit(0)
+
 
 @app.command()
 def info(
@@ -185,9 +189,11 @@ def info(
     console.print(table)
     raise typer.Exit(0)
 
+
 # cache サブコマンドグループ
 cache_app = typer.Typer(help="キャッシュ管理")
 app.add_typer(cache_app, name="cache")
+
 
 @cache_app.command("clean")
 def cache_clean(
@@ -210,6 +216,7 @@ def cache_clean(
     clear_cache(template_only=template_only)
     console.print(f"[green]{target}を削除しました[/green]")
     raise typer.Exit(0)
+
 
 @cache_app.command("info")
 def cache_info() -> None:
@@ -237,11 +244,13 @@ def cache_info() -> None:
     console.print(Panel(table, border_style="blue"))
     raise typer.Exit(0)
 
+
 def version_callback(value: bool) -> None:
     """バージョン表示コールバック"""
     if value:
         typer.echo(f"mnemonic {__version__}")
         raise typer.Exit(0)
+
 
 @app.callback()
 def main(

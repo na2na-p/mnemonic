@@ -15,6 +15,7 @@ from mnemonic.parser import (
     ConversionAction,
 )
 
+
 class TestAssetType:
     """AssetType 列挙型のテスト"""
 
@@ -39,6 +40,7 @@ class TestAssetType:
     def test_asset_type_count(self) -> None:
         """AssetTypeは5種類存在する"""
         assert len(AssetType) == 5
+
 
 class TestConversionAction:
     """ConversionAction 列挙型のテスト"""
@@ -90,6 +92,7 @@ class TestConversionAction:
         """ConversionActionは6種類存在する"""
         assert len(ConversionAction) == 6
 
+
 class TestAssetFile:
     """AssetFile データクラスのテスト"""
 
@@ -133,6 +136,7 @@ class TestAssetFile:
 
         with pytest.raises(AttributeError):
             asset.path = Path("modified.ks")  # type: ignore[misc]
+
 
 class TestAssetManifest:
     """AssetManifest データクラスのテスト"""
@@ -353,6 +357,7 @@ class TestAssetManifest:
         assert summary[AssetType.VIDEO] == 1
         assert summary[AssetType.OTHER] == 1
 
+
 class TestAssetScanner:
     """AssetScanner クラスのテスト"""
 
@@ -366,6 +371,7 @@ class TestAssetScanner:
         config = {"exclude": ["*.bak"]}
         scanner = AssetScanner(game_dir=tmp_path, config=config)
         assert scanner is not None
+
 
 class TestAssetScannerFileClassification:
     """AssetScannerのファイル分類テスト"""
@@ -538,6 +544,7 @@ class TestAssetScannerFileClassification:
         assert summary[AssetType.VIDEO] == 2
         assert summary[AssetType.OTHER] == 2
 
+
 class TestAssetScannerConversionAction:
     """AssetScannerの変換アクション設定テスト"""
 
@@ -661,6 +668,7 @@ class TestAssetScannerConversionAction:
         assert len(manifest.files) == 1
         assert manifest.files[0].action == expected_action
 
+
 class TestAssetScannerErrorHandling:
     """AssetScannerの異常系テスト"""
 
@@ -678,6 +686,7 @@ class TestAssetScannerErrorHandling:
 
         assert len(manifest.files) == 0
         assert manifest.game_dir == tmp_path
+
 
 class TestAssetScannerWithConfig:
     """AssetScannerの設定ベーステスト"""

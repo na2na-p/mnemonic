@@ -21,6 +21,7 @@ from mnemonic.pipeline import PipelinePhase
 if TYPE_CHECKING:
     from pytest import CaptureFixture
 
+
 class TestLogConfig:
     """LogConfig設定クラスのテスト"""
 
@@ -62,6 +63,7 @@ class TestLogConfig:
         config = LogConfig(use_emoji=False)
         assert config.use_emoji is False
 
+
 class TestVerboseLevel:
     """VerboseLevelのテスト"""
 
@@ -74,6 +76,7 @@ class TestVerboseLevel:
     def test_level_ordering(self) -> None:
         """レベルの順序が正しい"""
         assert VerboseLevel.QUIET < VerboseLevel.NORMAL < VerboseLevel.VERBOSE < VerboseLevel.DEBUG
+
 
 class TestBuildLogger:
     """BuildLoggerクラスのテスト"""
@@ -339,6 +342,7 @@ class TestBuildLogger:
         assert "DEBUG: DEBUG message" in content
         assert "WARNING: WARNING message" in content
         assert "ERROR: ERROR message" in content
+
 
 class TestConsoleProgressDisplay:
     """ConsoleProgressDisplayのテスト"""
