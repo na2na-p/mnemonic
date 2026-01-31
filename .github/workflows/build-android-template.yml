@@ -26,8 +26,12 @@ on:
     tags:
       - 'template-20*'
 
+permissions:
+  contents: write
+
 env:
   KRKRSDL2_REPO: krkrsdl2/krkrsdl2
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
   build:
@@ -47,19 +51,40 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Cache Android SDK components
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_SDK_ROOT }}/ndk/21.4.7075529
+            ${{ env.ANDROID_SDK_ROOT }}/cmake/3.22.1
+          key: android-sdk-ndk21.4-cmake3.22
+
       - name: Install Android SDK components
         run: |
-          sdkmanager --install "ndk;21.4.7075529"
-          sdkmanager --install "cmake;3.22.1"
-          sdkmanager --install "platforms;android-26"
-          sdkmanager --install "build-tools;30.0.3"
+          # Only install if not cached
+          [ -d "$ANDROID_SDK_ROOT/ndk/21.4.7075529" ] || sdkmanager --install "ndk;21.4.7075529"
+          [ -d "$ANDROID_SDK_ROOT/cmake/3.22.1" ] || sdkmanager --install "cmake;3.22.1"
+          sdkmanager --install "platforms;android-26" "build-tools;30.0.3"
+
+      - name: Cache krkrsdl2 repository
+        uses: actions/cache@v4
+        id: cache-krkrsdl2
+        with:
+          path: krkrsdl2
+          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}
 
       - name: Clone krkrsdl2
+        if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch ${{ github.event.inputs.krkrsdl2_ref || 'main' }} \
             https://github.com/${{ env.KRKRSDL2_REPO }}.git krkrsdl2
           cd krkrsdl2
           git submodule update --init --recursive
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Build Android project
         working-directory: krkrsdl2/android-project
