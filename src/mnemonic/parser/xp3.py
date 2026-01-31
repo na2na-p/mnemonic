@@ -19,6 +19,7 @@ XP3_MAGIC = b"XP3\x0d\x0a\x20\x0a\x1a\x8b\x67\x01"
 # テスト用の簡易マジックナンバー (テストフィクスチャで使用される形式)
 XP3_MAGIC_TEST = b"XP3\x0d\x0a\x1a\x0a"
 
+
 class EncryptionType(Enum):
     """検出可能な暗号化タイプ
 
@@ -37,6 +38,7 @@ class EncryptionType(Enum):
     UNKNOWN = "unknown"
     """未知の暗号化方式"""
 
+
 @dataclass(frozen=True)
 class EncryptionInfo:
     """暗号化情報を保持するデータクラス
@@ -52,6 +54,7 @@ class EncryptionInfo:
     is_encrypted: bool
     encryption_type: EncryptionType
     details: str | None = None
+
 
 class XP3EncryptionError(Exception):
     """XP3が暗号化されている場合に発生する例外
@@ -89,6 +92,7 @@ class XP3EncryptionError(Exception):
             return f"{base_message}: {encryption_info.details}"
         return base_message
 
+
 @dataclass(frozen=True)
 class XP3FileEntry:
     """XP3アーカイブ内のファイルエントリ情報
@@ -108,6 +112,7 @@ class XP3FileEntry:
     original_size: int
     is_compressed: bool
     is_encrypted: bool
+
 
 class XP3Archive:
     """XP3アーカイブを操作するクラス
@@ -217,12 +222,19 @@ class XP3Archive:
                 f.seek(table_offset)
                 self._read_file_table(f, table_size)
             else:
-                # バージョン1: フラグの後に直接テーブルがある
-                table_size_data = f.read(8)
-                if len(table_size_data) < 8:
+                # バージョン1: フラグの後にcompressed_size, original_size, zlib_dataがある
+                compressed_size_data = f.read(8)
+                if len(compressed_size_data) < 8:
                     return
-                table_size = struct.unpack("<Q", table_size_data)[0]
-                self._read_file_table(f, table_size)
+                compressed_size = struct.unpack("<Q", compressed_size_data)[0]
+
+                # original_size (解凍後サイズ) を読み飛ばす
+                original_size_data = f.read(8)
+                if len(original_size_data) < 8:
+                    return
+                # original_sizeは解凍後に検証用として使える可能性があるが、現時点では不要
+
+                self._read_file_table(f, compressed_size)
 
         except (struct.error, OSError):
             # パースエラーの場合は空のリストを維持
@@ -268,21 +280,33 @@ class XP3Archive:
             if chunk_name != b"File":
                 # 不明なチャンクはスキップ
                 try:
-                    chunk_size = struct.unpack("<Q", stream.read(8))[0]
+                    chunk_size_data = stream.read(8)
+                    if len(chunk_size_data) < 8:
+                        break
+                    chunk_size = struct.unpack("<Q", chunk_size_data)[0]
+                    # サイズが大きすぎる場合はパース終了
+                    if chunk_size > len(table_data):
+                        break
                     stream.seek(chunk_size, 1)
-                except (struct.error, OSError):
+                except (struct.error, OSError, OverflowError):
                     break
                 continue
 
             try:
-                chunk_size = struct.unpack("<Q", stream.read(8))[0]
+                chunk_size_data = stream.read(8)
+                if len(chunk_size_data) < 8:
+                    break
+                chunk_size = struct.unpack("<Q", chunk_size_data)[0]
+                # サイズが大きすぎる場合はパース終了
+                if chunk_size > len(table_data):
+                    break
                 entry_data = stream.read(chunk_size)
                 entry = self._parse_single_entry(entry_data)
                 if entry:
                     self._file_entries.append(entry)
                     if entry.is_encrypted:
                         self._is_encrypted = True
-            except (struct.error, OSError):
+            except (struct.error, OSError, OverflowError):
                 break
 
     def _parse_single_entry(self, entry_data: bytes) -> XP3FileEntry | None:
@@ -447,6 +471,7 @@ class XP3Archive:
             暗号化されている場合はTrue、そうでない場合はFalse
         """
         return self._is_encrypted
+
 
 class XP3EncryptionChecker:
     """XP3ファイルの暗号化をチェックするクラス
