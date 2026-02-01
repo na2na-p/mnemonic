@@ -66,6 +66,12 @@ with(global.Window)
 		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "midisoundbuffer_stub.tjs");
 	}
 
+	// Load VideoOverlay stub if not available (Video not supported on Android/krkrsdl2)
+	if (typeof(global.VideoOverlay) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "videooverlay_stub.tjs");
+	}
+
 	// Load font and set it as default
 	if (typeof(global.Font) === "Object" && typeof(global.Font.addFont) === "Object")
 	{

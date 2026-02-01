@@ -1078,6 +1078,7 @@ class TestBuildPipelineCopyPolyfillFiles:
             "MenuItem_stub.tjs",
             "KAGParser.tjs",
             "MIDISoundBuffer_stub.tjs",
+            "VideoOverlay_stub.tjs",
         ]
 
         # importlib.resourcesをモックしてファイル内容を返す

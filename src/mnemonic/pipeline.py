@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import mnemonic.cache as cache_module
 from mnemonic.builder.font_fetcher import FontDownloadError, FontFetcher
 from mnemonic.builder.gradle import GradleBuilder
-from mnemonic.builder.plugin_fetcher import PluginDownloadError, PluginFetcher
+from mnemonic.builder.plugin_fetcher import PluginDownloadError, PluginFetcher, PluginsInfo
 from mnemonic.builder.template import (
     TemplateCache,
     TemplateDownloader,
@@ -596,6 +596,7 @@ class BuildPipeline:
             "MenuItem_stub.tjs",
             "KAGParser.tjs",
             "MIDISoundBuffer_stub.tjs",
+            "VideoOverlay_stub.tjs",
         ]
 
         resources_package = "mnemonic.resources.system_polyfill"
@@ -611,51 +612,6 @@ class BuildPipeline:
 
         # Koruriフォントをsystem/font.ttfとしてコピー
         self._copy_font_file(system_dir)
-
-        # extransプラグインをpluginディレクトリにコピー
-        self._copy_plugin_files(directory)
-
-    def _copy_plugin_files(self, directory: Path) -> None:
-        """extransプラグインをpluginディレクトリにコピーする
-
-        krkrsdl2/SamplePluginからextrans.soをダウンロードして
-        plugin/ディレクトリにコピーする。これによりripple等のトランジション効果が使用可能になる。
-
-        Args:
-            directory: コピー先のディレクトリ（ゲームデータのルート）
-        """
-        import asyncio
-        import logging
-
-        logger = logging.getLogger(__name__)
-        plugin_dir = directory / "plugin"
-        plugin_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            fetcher = PluginFetcher()
-
-            # 同期コンテキストで非同期メソッドを実行
-            loop = asyncio.new_event_loop()
-            try:
-                plugin_info = loop.run_until_complete(fetcher.get_plugin())
-            finally:
-                loop.close()
-
-            # 各ABI用のプラグインファイルをコピー
-            for _abi, src_path in plugin_info.paths.items():
-                dest_path = plugin_dir / "extrans.so"
-                # 最初のABI（arm64-v8a）のプラグインをコピー
-                # krkrsdl2はassets内のpluginディレクトリからネイティブプラグインをロードする
-                if not dest_path.exists():
-                    shutil.copy2(src_path, dest_path)
-                    logger.info(f"extransプラグインをコピーしました: {dest_path}")
-                    break
-
-        except PluginDownloadError as e:
-            # プラグインダウンロードに失敗してもビルドは継続
-            logger.warning(f"プラグインのダウンロードに失敗しました: {e}")
-        except OSError as e:
-            logger.warning(f"プラグインファイルのコピーに失敗しました: {e}")
 
     def _copy_font_file(self, system_dir: Path) -> None:
         """Koruriフォントをsystem/font.ttfとしてコピーする
@@ -759,13 +715,17 @@ class BuildPipeline:
         # ゲームアイコンを検索
         icon_path = self._find_game_icon()
 
-        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー、アイコン設定）
+        # プラグインを取得（jniLibsに配置するため）
+        plugins_info = self._fetch_plugins()
+
+        # テンプレートを準備（jniLibs抽出、プラグイン配置、Java/Gradle/Manifest更新等）
         preparer = TemplatePreparer(self._project_dir)
         preparer.prepare(
             package_name=package_name,
             app_name=app_name,
             assets_dir=self._convert_dir,
             icon_path=icon_path,
+            plugins_info=plugins_info,
         )
 
         # Gradleビルド実行
@@ -831,6 +791,36 @@ class BuildPipeline:
                 return extracted_icon
 
         return None
+
+    def _fetch_plugins(self) -> PluginsInfo | None:
+        """krkrsdl2プラグインを取得する
+
+        PluginFetcherを使用してextransとwuvorbisプラグインを取得する。
+        失敗してもビルドは継続する。
+
+        Returns:
+            プラグイン情報。取得に失敗した場合はNone。
+        """
+        import asyncio
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            fetcher = PluginFetcher()
+
+            loop = asyncio.new_event_loop()
+            try:
+                plugins_info = loop.run_until_complete(fetcher.get_plugins())
+            finally:
+                loop.close()
+
+            logger.info(f"プラグインを取得しました: {', '.join(plugins_info.plugins.keys())}")
+            return plugins_info
+
+        except PluginDownloadError as e:
+            logger.warning(f"プラグインの取得に失敗しました: {e}")
+            return None
 
     def _execute_sign(self) -> None:
         """SIGNフェーズ: APK署名
