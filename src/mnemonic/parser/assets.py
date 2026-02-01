@@ -63,11 +63,13 @@ _EXTENSION_TO_ACTION: dict[str, ConversionAction] = {
     # スクリプト -> UTF-8エンコード
     ".ks": ConversionAction.ENCODE_UTF8,
     ".tjs": ConversionAction.ENCODE_UTF8,
-    # 画像 -> PNG変換（krkrsdl2がWebP未対応のため）
+    # 画像
+    # TLGのみ変換（krkrsdl2がTLG未対応のため）
+    # JPEG/PNG/BMPはkrkrsdl2でネイティブサポート
     ".tlg": ConversionAction.CONVERT_PNG,
-    ".bmp": ConversionAction.CONVERT_PNG,
-    ".jpg": ConversionAction.CONVERT_PNG,
-    ".jpeg": ConversionAction.CONVERT_PNG,
+    ".bmp": ConversionAction.COPY,
+    ".jpg": ConversionAction.COPY,
+    ".jpeg": ConversionAction.COPY,
     ".png": ConversionAction.COPY,
     # 音声
     ".wav": ConversionAction.CONVERT_OGG,
@@ -85,11 +87,13 @@ _EXTENSION_TO_TARGET: dict[str, str | None] = {
     # スクリプトはフォーマット変換なし
     ".ks": None,
     ".tjs": None,
-    # 画像 -> PNG（krkrsdl2がWebP未対応のため）
+    # 画像
+    # TLGのみPNGに変換（krkrsdl2がTLG未対応のため）
+    # JPEG/PNG/BMPは変換不要（krkrsdl2でネイティブサポート）
     ".tlg": ".png",
-    ".bmp": ".png",
-    ".jpg": ".png",
-    ".jpeg": ".png",
+    ".bmp": None,
+    ".jpg": None,
+    ".jpeg": None,
     ".png": None,
     # 音声
     ".wav": ".ogg",

@@ -174,9 +174,9 @@ class TestAssetManifest:
             AssetFile(
                 path=Path("image/chara.bmp"),
                 asset_type=AssetType.IMAGE,
-                action=ConversionAction.CONVERT_PNG,
+                action=ConversionAction.COPY,
                 source_format=".bmp",
-                target_format=".png",
+                target_format=None,
             ),
             AssetFile(
                 path=Path("bgm/title.wav"),
@@ -308,7 +308,8 @@ class TestAssetManifest:
 
         result = manifest.filter_by_action(ConversionAction.CONVERT_PNG)
 
-        assert len(result) == 2
+        # TLGのみがCONVERT_PNG（JPEG/BMPはkrkrsdl2でネイティブサポートのためCOPY）
+        assert len(result) == 1
         assert all(f.action == ConversionAction.CONVERT_PNG for f in result)
 
     def test_filter_by_action_convert_ogg(self, sample_files: list[AssetFile]) -> None:
@@ -344,7 +345,8 @@ class TestAssetManifest:
 
         result = manifest.filter_by_action(ConversionAction.COPY)
 
-        assert len(result) == 2
+        # ogg, txt, bmp がCOPY（JPEG/BMPはkrkrsdl2でネイティブサポート）
+        assert len(result) == 3
         assert all(f.action == ConversionAction.COPY for f in result)
 
     def test_get_summary(self, sample_files: list[AssetFile]) -> None:
@@ -584,33 +586,28 @@ class TestAssetScannerConversionAction:
         assert len(manifest.files) == 1
         assert manifest.files[0].action == expected_action
 
+    def test_tlg_conversion_action(self, tmp_path: Path) -> None:
+        """TLGファイルにCONVERT_PNGが設定される（krkrsdl2がTLG未対応のため）"""
+        test_file = tmp_path / "test.tlg"
+        test_file.write_bytes(b"\x00TLG5")
+
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.CONVERT_PNG
+        assert manifest.files[0].target_format == ".png"
+
     @pytest.mark.parametrize(
-        "extension,expected_action",
+        "extension",
         [
-            pytest.param(
-                ".tlg",
-                ConversionAction.CONVERT_PNG,
-                id="正常系: .tlgはCONVERT_PNG",
-            ),
-            pytest.param(
-                ".bmp",
-                ConversionAction.CONVERT_PNG,
-                id="正常系: .bmpはCONVERT_PNG",
-            ),
-            pytest.param(
-                ".jpg",
-                ConversionAction.CONVERT_PNG,
-                id="正常系: .jpgはCONVERT_PNG",
-            ),
+            pytest.param(".bmp", id="正常系: .bmpはCOPY"),
+            pytest.param(".jpg", id="正常系: .jpgはCOPY"),
+            pytest.param(".jpeg", id="正常系: .jpegはCOPY"),
         ],
     )
-    def test_image_conversion_action(
-        self,
-        tmp_path: Path,
-        extension: str,
-        expected_action: ConversionAction,
-    ) -> None:
-        """画像ファイルにCONVERT_PNGが設定される"""
+    def test_native_image_copy_action(self, tmp_path: Path, extension: str) -> None:
+        """JPEG/BMPファイルにCOPYが設定される（krkrsdl2でネイティブサポート）"""
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
@@ -618,7 +615,8 @@ class TestAssetScannerConversionAction:
         manifest = scanner.scan()
 
         assert len(manifest.files) == 1
-        assert manifest.files[0].action == expected_action
+        assert manifest.files[0].action == ConversionAction.COPY
+        assert manifest.files[0].target_format is None
 
     def test_wav_conversion_action(self, tmp_path: Path) -> None:
         """WAVファイルにCONVERT_OGGが設定される"""
