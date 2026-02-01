@@ -440,6 +440,35 @@ class TestTemplatePreparerUpdateJavaSource:
         # -holdalpha=yes がgetArguments内に含まれていることを確認
         assert '"-holdalpha=yes"' in content
 
+    def test_update_java_source_includes_simd_disable_arguments(self, tmp_path: Path) -> None:
+        """正常系: getArguments に SIMD無効化フラグが含まれる（C実装を使用）"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._update_java_source("com.example.game")
+
+        java_file = (
+            project_dir
+            / "app"
+            / "src"
+            / "main"
+            / "java"
+            / "com"
+            / "example"
+            / "game"
+            / "KirikiriSDL2Activity.java"
+        )
+        content = java_file.read_text(encoding="utf-8")
+
+        # SIMD無効化フラグがgetArguments内に含まれていることを確認
+        # ARMデバイスではSIMDeエミュレーションに問題があるため、
+        # 純粋なC実装のブレンド関数を使用することでアルファブレンディングの互換性を確保
+        assert '"-cpummx=no"' in content
+        assert '"-cpusse=no"' in content
+        assert '"-cpusse2=no"' in content
+
 
 class TestTemplatePreparerUpdateBuildGradle:
     """TemplatePreparer._update_build_gradleのテスト"""

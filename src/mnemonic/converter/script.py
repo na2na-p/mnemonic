@@ -98,6 +98,13 @@ class ScriptAdjuster(BaseConverter):
             replacement=r";# \1 # Disabled for Android",
             description="その他のDLLプラグインをコメントアウト",
         ),
+        # レイヤー透過修正: [layopt layer=N] に type=alpha を自動追加
+        # krkrsdl2のSIMDeエミュレーション問題により、明示的なtype指定が必要
+        AdjustmentRule(
+            pattern=r"\[layopt\b(?![^\]]*\btype=)([^\]]*\blayer=[0-9]+[^\]]*)\]",
+            replacement=r"[layopt\1 type=alpha]",
+            description="レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
+        ),
     ]
 
     def __init__(

@@ -645,3 +645,87 @@ class TestScriptAdjusterLoadpluginRules:
         assert "extrans" in adjusted
         # 注: 現在のパターンは厳密なスペース1つを想定しているため、
         # スペース2つの場合は変換されない可能性がある
+
+
+class TestScriptAdjusterLayerAlphaRules:
+    """レイヤー透過修正ルールテスト（krkrsdl2対応）"""
+
+    def test_adds_type_alpha_to_layopt_without_type(self, adjuster: ScriptAdjuster) -> None:
+        """type=が未指定の[layopt layer=N]にtype=alphaを追加することを確認する"""
+        content = "[layopt layer=0 page=back visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "type=alpha" in adjusted
+        assert adjusted == "[layopt layer=0 page=back visible=true type=alpha]"
+        assert count >= 1
+
+    def test_does_not_modify_layopt_with_existing_type(self, adjuster: ScriptAdjuster) -> None:
+        """既にtype=が指定されている[layopt]は変更しないことを確認する"""
+        content = "[layopt layer=0 type=opaque visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # type=opaqueはそのまま維持される
+        assert "type=opaque" in adjusted
+        assert adjusted.count("type=") == 1
+        # このルールによるカウントは0（他のルールがマッチしない限り）
+
+    def test_does_not_modify_layopt_with_type_alpha(self, adjuster: ScriptAdjuster) -> None:
+        """既にtype=alphaが指定されている[layopt]は変更しないことを確認する"""
+        content = "[layopt layer=0 type=alpha visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("type=alpha") == 1
+
+    def test_does_not_modify_base_layer(self, adjuster: ScriptAdjuster) -> None:
+        """layer=base（背景レイヤー）は変更しないことを確認する"""
+        content = "[layopt layer=base visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # baseはtype=alphaを追加しない（数字ではないため）
+        assert "type=alpha" not in adjusted
+        assert adjusted == content
+
+    def test_does_not_modify_message_layer(self, adjuster: ScriptAdjuster) -> None:
+        """layer=message（メッセージレイヤー）は変更しないことを確認する"""
+        content = "[layopt layer=message visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # messageはtype=alphaを追加しない（数字ではないため）
+        assert "type=alpha" not in adjusted
+        assert adjusted == content
+
+    def test_adds_type_alpha_to_multiple_numbered_layers(self, adjuster: ScriptAdjuster) -> None:
+        """複数の数字レイヤーにtype=alphaを追加することを確認する"""
+        content = """[layopt layer=0 visible=true]
+[layopt layer=1 visible=true]
+[layopt layer=2 page=back visible=true]"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("type=alpha") == 3
+        assert count >= 3
+
+    def test_handles_layopt_in_kag_script(self, adjuster: ScriptAdjuster) -> None:
+        """実際のKAGスクリプトパターンを処理できることを確認する"""
+        content = """[backlay]
+[image storage="title-base" layer=base page=back]
+[layopt layer=0 page=back visible=true]
+[image storage="title-fore" layer=0 page=back top=0 left=0]
+[trans method=crossfade time=2000]
+[wt]"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        # layer=0のlayoptにtype=alphaが追加される
+        assert "[layopt layer=0 page=back visible=true type=alpha]" in adjusted
+        # 他のタグは変更されない
+        assert '[image storage="title-base" layer=base page=back]' in adjusted
+        assert "[trans method=crossfade time=2000]" in adjusted
+        assert count >= 1
+
+    def test_layopt_with_quoted_layer_value(self, adjuster: ScriptAdjuster) -> None:
+        """クォート付きlayer値を処理しないことを確認する（数字パターンのため）"""
+        content = '[layopt layer="0" visible=true]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # layer="0"は数字パターン layer=[0-9]+ にマッチしないため変更されない
+        # これは想定通りの動作（KAGでは通常クォートなしで数字を指定）
+        assert adjusted == content
