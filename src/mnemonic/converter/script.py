@@ -53,6 +53,11 @@ class ScriptAdjuster(BaseConverter):
             description="MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
         ),
         AdjustmentRule(
+            pattern=r"^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)",
+            replacement=r"\1// \2 // Disabled: midiOut not available in WaveSoundBuffer",
+            description="WaveSoundBuffer.midiOut呼び出しをコメントアウト（krkrsdl2対応）",
+        ),
+        AdjustmentRule(
             pattern=r'(["\'])([^"\']*\.mid)(["\'])',
             replacement=r"\1\2.ogg\3",
             description="MIDI参照をOGGに変換（.mid → .mid.ogg）",

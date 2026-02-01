@@ -504,6 +504,63 @@ var se = new WaveSoundBuffer("se/click.wav");
         # （他のルールがマッチしない限り）
 
 
+class TestScriptAdjusterMidiOutRule:
+    """WaveSoundBuffer.midiOut呼び出しのコメントアウトルールテスト"""
+
+    def test_comments_out_midi_out_call(self, adjuster: ScriptAdjuster) -> None:
+        """WaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+        content = "WaveSoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "// WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_comments_out_midi_out_with_indentation(self, adjuster: ScriptAdjuster) -> None:
+        """インデント付きのWaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+        content = "    WaveSoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.startswith("    // ")
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_comments_out_midi_out_with_different_arguments(self, adjuster: ScriptAdjuster) -> None:
+        """異なる引数のWaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+        content = 'WaveSoundBuffer.midiOut("some_message");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "// " in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_midi_out_converted_from_midi_sound_buffer(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBuffer.midiOutが変換後にコメントアウトされることを確認する
+
+        MIDISoundBuffer → WaveSoundBuffer 変換後に midiOut がコメントアウトされるべき
+        """
+        content = "MIDISoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # MIDISoundBuffer → WaveSoundBuffer に変換される
+        assert "MIDISoundBuffer" not in adjusted
+        # 変換後の WaveSoundBuffer.midiOut がコメントアウトされる
+        assert "// WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 2  # MIDISoundBuffer変換 + midiOutコメントアウト
+
+    def test_multiple_midi_out_calls(self, adjuster: ScriptAdjuster) -> None:
+        """複数のmidiOut呼び出しをコメントアウトすることを確認する"""
+        content = """WaveSoundBuffer.midiOut(msg1);
+    WaveSoundBuffer.midiOut(msg2);
+WaveSoundBuffer.midiOut(msg3);
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("Disabled: midiOut not available in WaveSoundBuffer") == 3
+        assert count >= 3
+
+
 class TestScriptAdjusterLoadpluginRules:
     """loadpluginタグの変換ルールテスト"""
 
