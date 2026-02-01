@@ -27,6 +27,7 @@ from mnemonic.builder.template import (
 from mnemonic.builder.template_preparer import TemplatePreparer
 from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.encoding import EncodingConverter
+from mnemonic.converter.image import ImageConverter, OutputFormat
 from mnemonic.converter.manager import ConversionManager
 from mnemonic.converter.midi import MidiConverter
 from mnemonic.converter.script import ScriptAdjuster
@@ -464,10 +465,10 @@ class BuildPipeline:
         shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
 
         # コンバーターを設定
-        # 注意: ImageConverterは無効（krkrsdl2がWebP未対応のため）
         # 注意: MidiConverterは別途処理（出力ファイル名を.mid.oggにするため）
         converters: list[Any] = [
             EncodingConverter(),
+            ImageConverter(output_format=OutputFormat.PNG),
         ]
 
         if not self._config.skip_video:

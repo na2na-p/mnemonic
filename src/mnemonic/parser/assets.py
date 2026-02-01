@@ -28,6 +28,7 @@ class ConversionAction(Enum):
     """
 
     ENCODE_UTF8 = "encode_utf8"
+    CONVERT_PNG = "convert_png"
     CONVERT_WEBP = "convert_webp"
     CONVERT_OGG = "convert_ogg"
     CONVERT_MP4 = "convert_mp4"
@@ -62,12 +63,12 @@ _EXTENSION_TO_ACTION: dict[str, ConversionAction] = {
     # スクリプト -> UTF-8エンコード
     ".ks": ConversionAction.ENCODE_UTF8,
     ".tjs": ConversionAction.ENCODE_UTF8,
-    # 画像 -> WebP変換
-    ".tlg": ConversionAction.CONVERT_WEBP,
-    ".bmp": ConversionAction.CONVERT_WEBP,
-    ".jpg": ConversionAction.CONVERT_WEBP,
-    ".jpeg": ConversionAction.CONVERT_WEBP,
-    ".png": ConversionAction.CONVERT_WEBP,
+    # 画像 -> PNG変換（krkrsdl2がWebP未対応のため）
+    ".tlg": ConversionAction.CONVERT_PNG,
+    ".bmp": ConversionAction.CONVERT_PNG,
+    ".jpg": ConversionAction.CONVERT_PNG,
+    ".jpeg": ConversionAction.CONVERT_PNG,
+    ".png": ConversionAction.COPY,
     # 音声
     ".wav": ConversionAction.CONVERT_OGG,
     ".ogg": ConversionAction.COPY,
@@ -84,12 +85,12 @@ _EXTENSION_TO_TARGET: dict[str, str | None] = {
     # スクリプトはフォーマット変換なし
     ".ks": None,
     ".tjs": None,
-    # 画像 -> WebP
-    ".tlg": ".webp",
-    ".bmp": ".webp",
-    ".jpg": ".webp",
-    ".jpeg": ".webp",
-    ".png": ".webp",
+    # 画像 -> PNG（krkrsdl2がWebP未対応のため）
+    ".tlg": ".png",
+    ".bmp": ".png",
+    ".jpg": ".png",
+    ".jpeg": ".png",
+    ".png": None,
     # 音声
     ".wav": ".ogg",
     ".ogg": None,
@@ -104,6 +105,7 @@ _EXTENSION_TO_TARGET: dict[str, str | None] = {
 # コンバータ名からConversionActionへのマッピング
 _CONVERTER_TO_ACTION: dict[str, ConversionAction] = {
     "encode_utf8": ConversionAction.ENCODE_UTF8,
+    "convert_png": ConversionAction.CONVERT_PNG,
     "convert_webp": ConversionAction.CONVERT_WEBP,
     "convert_ogg": ConversionAction.CONVERT_OGG,
     "convert_mp4": ConversionAction.CONVERT_MP4,
