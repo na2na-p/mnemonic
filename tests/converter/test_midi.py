@@ -10,13 +10,48 @@ from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.midi import MidiConverter
 
 
+class TestMidiConverterGetDefaultSoundfontPath:
+    """MidiConverter.get_default_soundfont_pathのテスト"""
+
+    def test_returns_musescore_when_exists(self, tmp_path: Path) -> None:
+        """正常系: MuseScore Generalが存在する場合はそれを返すことをテスト"""
+        musescore_path = tmp_path / "MuseScore_General.sf3"
+        musescore_path.touch()
+
+        original_path = MidiConverter.MUSESCORE_SOUNDFONT_PATH
+        MidiConverter.MUSESCORE_SOUNDFONT_PATH = musescore_path
+        try:
+            result = MidiConverter.get_default_soundfont_path()
+            assert result == musescore_path
+        finally:
+            MidiConverter.MUSESCORE_SOUNDFONT_PATH = original_path
+
+    def test_returns_fluidr3_when_musescore_not_exists(self, tmp_path: Path) -> None:
+        """正常系: MuseScore Generalが存在しない場合はFluidR3を返すことをテスト"""
+        # 存在しないパスを設定
+        non_existent_path = tmp_path / "non_existent.sf3"
+        fluidr3_path = tmp_path / "FluidR3_GM.sf2"
+
+        original_musescore = MidiConverter.MUSESCORE_SOUNDFONT_PATH
+        original_fluidr3 = MidiConverter.FLUIDR3_SOUNDFONT_PATH
+        MidiConverter.MUSESCORE_SOUNDFONT_PATH = non_existent_path
+        MidiConverter.FLUIDR3_SOUNDFONT_PATH = fluidr3_path
+        try:
+            result = MidiConverter.get_default_soundfont_path()
+            assert result == fluidr3_path
+        finally:
+            MidiConverter.MUSESCORE_SOUNDFONT_PATH = original_musescore
+            MidiConverter.FLUIDR3_SOUNDFONT_PATH = original_fluidr3
+
+
 class TestMidiConverterInit:
     """MidiConverterの初期化テスト"""
 
     def test_default_initialization(self) -> None:
         """正常系: デフォルト値での初期化をテスト"""
         converter = MidiConverter()
-        assert converter._soundfont_path == Path("/usr/share/sounds/sf2/FluidR3_GM.sf2")
+        # get_default_soundfont_path()が返すパスと一致することを確認
+        assert converter._soundfont_path == MidiConverter.get_default_soundfont_path()
         assert converter._sample_rate == 44100
         assert converter._audio_codec == "libvorbis"
         assert converter._audio_quality == 4
@@ -280,7 +315,7 @@ class TestMidiConverterIntegration:
         assert converter.is_fluidsynth_available() is True
 
     @pytest.mark.skipif(
-        not Path("/usr/share/sounds/sf2/FluidR3_GM.sf2").exists(),
+        not MidiConverter.get_default_soundfont_path().exists(),
         reason="サウンドフォントが利用不可能",
     )
     def test_default_soundfont_exists(self) -> None:

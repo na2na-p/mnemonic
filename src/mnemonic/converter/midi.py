@@ -42,7 +42,24 @@ class MidiConverter(BaseConverter):
     2. FFmpeg で WAV → OGG Vorbis
     """
 
-    DEFAULT_SOUNDFONT_PATH = Path("/usr/share/sounds/sf2/FluidR3_GM.sf2")
+    # 高品質サウンドフォント（MuseScore General）をデフォルトとして使用
+    MUSESCORE_SOUNDFONT_PATH = Path("/usr/share/sounds/sf3/MuseScore_General.sf3")
+    # フォールバック用の標準サウンドフォント
+    FLUIDR3_SOUNDFONT_PATH = Path("/usr/share/sounds/sf2/FluidR3_GM.sf2")
+
+    @classmethod
+    def get_default_soundfont_path(cls) -> Path:
+        """デフォルトのサウンドフォントパスを取得する
+
+        MuseScore Generalが利用可能な場合はそれを、
+        そうでない場合はFluidR3にフォールバックする。
+
+        Returns:
+            利用可能なサウンドフォントのパス
+        """
+        if cls.MUSESCORE_SOUNDFONT_PATH.exists():
+            return cls.MUSESCORE_SOUNDFONT_PATH
+        return cls.FLUIDR3_SOUNDFONT_PATH
 
     def __init__(
         self,
@@ -55,13 +72,13 @@ class MidiConverter(BaseConverter):
         """MidiConverterを初期化する
 
         Args:
-            soundfont_path: サウンドフォントファイルのパス（デフォルト: FluidR3_GM.sf2）
+            soundfont_path: サウンドフォントファイルのパス（デフォルト: MuseScore_General.sf3）
             sample_rate: 出力サンプルレート（デフォルト: 44100 Hz）
             audio_codec: 使用する音声コーデック（デフォルト: libvorbis）
             audio_quality: 音声品質（デフォルト: 4、VBR用）
             timeout: 変換処理のタイムアウト秒数（デフォルト: 300秒）
         """
-        self._soundfont_path = soundfont_path or self.DEFAULT_SOUNDFONT_PATH
+        self._soundfont_path = soundfont_path or self.get_default_soundfont_path()
         self._sample_rate = sample_rate
         self._audio_codec = audio_codec
         self._audio_quality = audio_quality

@@ -718,22 +718,23 @@ class TestImageConverter:
         """supported_extensionsが正しい拡張子を返すことを確認"""
         converter = ImageConverter()
 
-        expected = (".tlg", ".bmp", ".jpg", ".jpeg", ".png")
+        # TLGのみ変換対象（JPEG/PNG/BMPはkrkrsdl2でネイティブサポート）
+        expected = (".tlg",)
         assert converter.supported_extensions == expected
 
     @pytest.mark.parametrize(
         "file_path, expected",
         [
-            pytest.param(Path("test.bmp"), True, id="正常系: BMPファイルは変換可能"),
-            pytest.param(Path("test.jpg"), True, id="正常系: JPGファイルは変換可能"),
-            pytest.param(Path("test.jpeg"), True, id="正常系: JPEGファイルは変換可能"),
-            pytest.param(Path("test.png"), True, id="正常系: PNGファイルは変換可能"),
             pytest.param(Path("test.tlg"), True, id="正常系: TLGファイルは変換可能"),
+            pytest.param(Path("TEST.TLG"), True, id="正常系: 大文字拡張子TLGも変換可能"),
+            # JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため変換不可（変換不要）
+            pytest.param(Path("test.bmp"), False, id="正常系: BMPファイルは変換不可"),
+            pytest.param(Path("test.jpg"), False, id="正常系: JPGファイルは変換不可"),
+            pytest.param(Path("test.jpeg"), False, id="正常系: JPEGファイルは変換不可"),
+            pytest.param(Path("test.png"), False, id="正常系: PNGファイルは変換不可"),
             pytest.param(Path("test.gif"), False, id="異常系: GIFファイルは変換不可"),
             pytest.param(Path("test.webp"), False, id="異常系: WebPファイルは変換不可"),
             pytest.param(Path("test.txt"), False, id="異常系: TXTファイルは変換不可"),
-            pytest.param(Path("TEST.BMP"), True, id="正常系: 大文字拡張子BMPも変換可能"),
-            pytest.param(Path("TEST.PNG"), True, id="正常系: 大文字拡張子PNGも変換可能"),
         ],
     )
     def test_can_convert(self, file_path: Path, expected: bool) -> None:

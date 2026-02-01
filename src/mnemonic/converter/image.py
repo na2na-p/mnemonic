@@ -262,9 +262,10 @@ class ImageConverter(BaseConverter):
         """対応する拡張子のタプルを返す
 
         Returns:
-            対応する拡張子のタプル（.tlg, .bmp, .jpg, .jpeg, .png）
+            対応する拡張子のタプル（.tlgのみ）
+            JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため変換不要
         """
-        return (".tlg", ".bmp", ".jpg", ".jpeg", ".png")
+        return (".tlg",)
 
     def can_convert(self, file_path: Path) -> bool:
         """このConverterで変換可能なファイルかを判定する
