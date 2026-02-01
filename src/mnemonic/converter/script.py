@@ -62,27 +62,29 @@ class ScriptAdjuster(BaseConverter):
             replacement=r"\1\2.ogg\3",
             description="MIDI参照をOGGに変換（.midi → .midi.ogg）",
         ),
-        # loadpluginタグのDLL参照をSO参照に変換（extrans.dll → extrans.so）
+        # loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）
+        # krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない
+        # Androidのネイティブライブラリ規約でlibプレフィックスが必要なため、フルネームを指定する
         AdjustmentRule(
             pattern=r'\[loadplugin\s+module="extrans\.dll"\]',
-            replacement='[loadplugin module="extrans.so"]',
-            description="extrans.dllをextrans.soに変換（Android対応）",
+            replacement='[loadplugin module="libextrans.so"]',
+            description="extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
         ),
-        # wuvorbis.dllはkrkrsdl2にビルトインのため不要
+        # wuvorbis.dllはkrkrsdl2にOgg Vorbisがビルトインのため不要
         AdjustmentRule(
             pattern=r'(\[loadplugin\s+module="wuvorbis\.dll"\])',
-            replacement=r";# \1 # Disabled: built-in krkrsdl2",
+            replacement=r";# \1 # Disabled: Ogg Vorbis built-in krkrsdl2",
             description="wuvorbis.dllをコメントアウト（krkrsdl2ビルトイン）",
         ),
-        # krmovie.dllはkrkrsdl2にビルトインのため不要
+        # krmovie.dllはkrkrsdl2で未実装のためコメントアウト
         AdjustmentRule(
             pattern=r'(\[loadplugin\s+module="krmovie\.dll"\])',
-            replacement=r";# \1 # Disabled: built-in krkrsdl2",
-            description="krmovie.dllをコメントアウト（krkrsdl2ビルトイン）",
+            replacement=r";# \1 # Disabled: not supported on krkrsdl2",
+            description="krmovie.dllをコメントアウト（krkrsdl2未対応）",
         ),
         # その他のDLLプラグインをコメントアウト（extrans以外）
         AdjustmentRule(
-            pattern=r'(\[loadplugin\s+module="(?!extrans\.so)[^"]*\.dll"\])',
+            pattern=r'(\[loadplugin\s+module="(?!extrans")[^"]*\.dll"\])',
             replacement=r";# \1 # Disabled for Android",
             description="その他のDLLプラグインをコメントアウト",
         ),

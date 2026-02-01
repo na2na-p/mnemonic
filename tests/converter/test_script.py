@@ -507,22 +507,22 @@ var se = new WaveSoundBuffer("se/click.wav");
 class TestScriptAdjusterLoadpluginRules:
     """loadpluginタグの変換ルールテスト"""
 
-    def test_replaces_extrans_dll_to_so(self, adjuster: ScriptAdjuster) -> None:
-        """extrans.dllをextrans.soに変換することを確認する"""
+    def test_replaces_extrans_dll_to_libextrans_so(self, adjuster: ScriptAdjuster) -> None:
+        """extrans.dllをlibextrans.soに変換することを確認する（Android krkrsdl2対応）"""
         content = '[loadplugin module="extrans.dll"]'
         adjusted, count = adjuster.adjust_content(content)
 
-        assert '[loadplugin module="extrans.so"]' in adjusted
+        assert '[loadplugin module="libextrans.so"]' in adjusted
         assert "extrans.dll" not in adjusted
         assert count >= 1
 
     def test_comments_out_wuvorbis_dll(self, adjuster: ScriptAdjuster) -> None:
-        """wuvorbis.dllをコメントアウトすることを確認する"""
+        """wuvorbis.dllをコメントアウトすることを確認する（krkrsdl2ビルトイン）"""
         content = '[loadplugin module="wuvorbis.dll"]'
         adjusted, count = adjuster.adjust_content(content)
 
         assert ";#" in adjusted
-        assert "Disabled: built-in krkrsdl2" in adjusted
+        assert "Ogg Vorbis built-in krkrsdl2" in adjusted
         assert count >= 1
 
     def test_comments_out_krmovie_dll(self, adjuster: ScriptAdjuster) -> None:
@@ -531,7 +531,7 @@ class TestScriptAdjusterLoadpluginRules:
         adjusted, count = adjuster.adjust_content(content)
 
         assert ";#" in adjusted
-        assert "Disabled: built-in krkrsdl2" in adjusted
+        assert "not supported on krkrsdl2" in adjusted
         assert count >= 1
 
     def test_comments_out_other_dll_plugins(self, adjuster: ScriptAdjuster) -> None:
@@ -552,21 +552,23 @@ class TestScriptAdjusterLoadpluginRules:
 """
         adjusted, count = adjuster.adjust_content(content)
 
-        # extrans.dll → extrans.so
-        assert '[loadplugin module="extrans.so"]' in adjusted
-        # wuvorbis.dll, krmovie.dll はビルトインでコメントアウト
-        assert adjusted.count("Disabled: built-in krkrsdl2") == 2
+        # extrans.dll → libextrans.so
+        assert '[loadplugin module="libextrans.so"]' in adjusted
+        # wuvorbis.dll はkrkrsdl2ビルトインでコメントアウト
+        assert "Ogg Vorbis built-in krkrsdl2" in adjusted
+        # krmovie.dll はkrkrsdl2未対応でコメントアウト
+        assert "not supported on krkrsdl2" in adjusted
         # something.dll はAndroid非対応でコメントアウト
         assert "Disabled for Android" in adjusted
         assert count >= 4
 
-    def test_preserves_extrans_so_after_conversion(self, adjuster: ScriptAdjuster) -> None:
-        """変換後のextrans.soタグは再変換されないことを確認する"""
-        content = '[loadplugin module="extrans.so"]'
+    def test_preserves_libextrans_so(self, adjuster: ScriptAdjuster) -> None:
+        """変換後のlibextrans.soタグは再変換されないことを確認する"""
+        content = '[loadplugin module="libextrans.so"]'
         adjusted, count = adjuster.adjust_content(content)
 
-        # extrans.soはそのまま維持される（コメントアウトされない）
-        assert '[loadplugin module="extrans.so"]' in adjusted
+        # libextrans.soはそのまま維持される（コメントアウトされない）
+        assert '[loadplugin module="libextrans.so"]' in adjusted
         assert ";#" not in adjusted
         assert count == 0
 
@@ -576,6 +578,6 @@ class TestScriptAdjusterLoadpluginRules:
         adjusted, count = adjuster.adjust_content(content)
 
         # スペースが2つの場合も変換される
-        assert "extrans.so" in adjusted or "extrans.dll" in adjusted
+        assert "extrans" in adjusted
         # 注: 現在のパターンは厳密なスペース1つを想定しているため、
         # スペース2つの場合は変換されない可能性がある

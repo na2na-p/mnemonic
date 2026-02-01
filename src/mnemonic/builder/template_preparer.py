@@ -17,6 +17,12 @@ from typing import Final
 
 from PIL import Image
 
+from mnemonic.builder.plugin_fetcher import (
+    SUPPORTED_ABIS,
+    PluginDownloadError,
+    PluginFetcher,
+    PluginsInfo,
+)
 from mnemonic.builder.sdl2_sources import (
     SDL2SourceCache,
     SDL2SourceFetcher,
@@ -42,6 +48,12 @@ class SDL2SourceFetchError(TemplatePreparerError):
     pass
 
 
+class PluginFetchError(TemplatePreparerError):
+    """プラグインの取得に失敗した場合の例外"""
+
+    pass
+
+
 class TemplatePreparer:
     """Androidプロジェクトテンプレートを準備するクラス
 
@@ -49,10 +61,11 @@ class TemplatePreparer:
     以下の処理を行います：
     1. krkrsdl2_universal.apkから.soファイルを抽出してjniLibsに配置
     2. SDL2 Java ソースをダウンロードして配置
-    3. KirikiriSDL2Activity.javaをassets コピー機能付きに置き換え
-    4. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
-    5. AndroidManifest.xmlを更新（android:exported="true"追加）
-    6. res/values/strings.xmlを作成（app_name設定）
+    3. krkrsdl2プラグイン(.so)をjniLibsに配置
+    4. KirikiriSDL2Activity.javaをassets コピー機能付きに置き換え
+    5. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
+    6. AndroidManifest.xmlを更新（android:exported="true"追加）
+    7. res/values/strings.xmlを作成（app_name設定）
     """
 
     # 推奨ターゲット/コンパイルSDKバージョン
@@ -88,6 +101,7 @@ class TemplatePreparer:
         app_name: str,
         assets_dir: Path | None = None,
         icon_path: Path | None = None,
+        plugins_info: PluginsInfo | None = None,
     ) -> None:
         """テンプレートを準備する
 
@@ -96,6 +110,7 @@ class TemplatePreparer:
             app_name: アプリケーション表示名
             assets_dir: ゲームファイルを含むディレクトリ（オプション）
             icon_path: アプリアイコンのパス（オプション）
+            plugins_info: プラグイン情報（オプション、指定時はjniLibsに配置）
 
         Raises:
             TemplatePreparerError: テンプレート準備に失敗した場合
@@ -106,23 +121,26 @@ class TemplatePreparer:
         # 2. SDL2 Java ソースを取得
         self._fetch_sdl2_sources()
 
-        # 3. Javaソースを置き換え
+        # 3. krkrsdl2プラグインをjniLibsに配置
+        self._copy_plugins_to_jnilibs(plugins_info)
+
+        # 4. Javaソースを置き換え
         self._update_java_source(package_name)
 
-        # 4. build.gradleを更新
+        # 5. build.gradleを更新
         self._update_build_gradle(package_name)
 
-        # 5. AndroidManifest.xmlを更新
+        # 6. AndroidManifest.xmlを更新
         self._update_manifest()
 
-        # 6. strings.xmlを作成/更新
+        # 7. strings.xmlを作成/更新
         self._update_strings_xml(app_name)
 
-        # 7. assetsをコピー（指定されている場合）
+        # 8. assetsをコピー（指定されている場合）
         if assets_dir is not None:
             self._copy_assets(assets_dir)
 
-        # 8. アイコンを更新（指定されている場合）、またはデフォルトアイコンを生成
+        # 9. アイコンを更新（指定されている場合）、またはデフォルトアイコンを生成
         if icon_path is not None and icon_path.exists():
             self._update_icon(icon_path)
         else:
@@ -188,6 +206,52 @@ class TemplatePreparer:
         except SDL2SourceFetcherError as e:
             raise SDL2SourceFetchError(f"SDL2 Java ソースの取得に失敗しました: {e}") from e
 
+    def _copy_plugins_to_jnilibs(self, plugins_info: PluginsInfo | None) -> None:
+        """krkrsdl2プラグインをjniLibsディレクトリにコピーする
+
+        プラグイン(.so)を各ABI用のjniLibsディレクトリに配置する。
+        jniLibsに配置されたプラグインはAPKビルド時に自動的に
+        lib/{abi}/配下に含まれ、System.loadLibraryで読み込み可能になる。
+
+        スクリプト変換時にlibプレフィックス付きのフルファイル名を指定するため、
+        libプレフィックス付きのファイルのみ配置すれば良い。
+
+        Args:
+            plugins_info: プラグイン情報。Noneの場合はダウンロードを試みる。
+
+        Note:
+            プラグインの取得に失敗してもビルドは継続する（警告のみ）。
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        jni_libs_dir = self._project_dir / "app" / "src" / "main" / "jniLibs"
+
+        # plugins_infoが指定されていない場合はダウンロードを試みる
+        if plugins_info is None:
+            try:
+                fetcher = PluginFetcher()
+                plugins_info = asyncio.run(fetcher.get_plugins())
+            except PluginDownloadError as e:
+                logger.warning(f"プラグインのダウンロードに失敗しました: {e}")
+                return
+
+        # 各ABIのディレクトリにプラグインをコピー
+        for abi in SUPPORTED_ABIS:
+            abi_dir = jni_libs_dir / abi
+            abi_dir.mkdir(parents=True, exist_ok=True)
+
+            # このABIの全プラグインパスを取得
+            plugin_paths = plugins_info.get_all_paths_for_abi(abi)
+            for plugin_name, src_path in plugin_paths.items():
+                if src_path.exists():
+                    dest_path = abi_dir / src_path.name
+                    shutil.copy2(src_path, dest_path)
+                    logger.debug(f"プラグインをコピーしました: {plugin_name} -> {dest_path}")
+                else:
+                    logger.warning(f"プラグインファイルが見つかりません: {src_path}")
+
     def _update_java_source(self, package_name: str) -> None:
         """KirikiriSDL2Activity.javaを拡張版に置き換える
 
@@ -225,6 +289,7 @@ class TemplatePreparer:
         return f"""package {package_name};
 
 import android.os.Bundle;
+import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.util.Log;
 import java.io.File;
@@ -243,11 +308,31 @@ import org.libsdl.app.SDLActivity;
 public class KirikiriSDL2Activity extends SDLActivity {{
     private static final String TAG = "KirikiriSDL2";
     private static final String ASSETS_DATA_DIR = "data";
+    private static String sNativeLibDir = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {{
+        // ネイティブライブラリのディレクトリを保存
+        sNativeLibDir = getApplicationInfo().nativeLibraryDir;
+        Log.i(TAG, "Native library directory: " + sNativeLibDir);
+
         copyAssetsToInternal();
         super.onCreate(savedInstanceState);
+    }}
+
+    /**
+     * krkrsdl2に渡すコマンドライン引数を設定する
+     * プラグイン検索パスにネイティブライブラリディレクトリを追加
+     */
+    @Override
+    protected String[] getArguments() {{
+        if (sNativeLibDir != null) {{
+            Log.i(TAG, "Setting plugin search path: " + sNativeLibDir);
+            return new String[]{{
+                "-krkrsdl2_pluginsearchpath=" + sNativeLibDir
+            }};
+        }}
+        return new String[]{{}};
     }}
 
     /**
@@ -421,6 +506,7 @@ public class KirikiriSDL2Activity extends SDLActivity {{
 
         - package属性を削除（namespaceで指定するため）
         - android:exported="true"を追加
+        - android:extractNativeLibs="true"を追加（プラグインロード用）
         """
         manifest_path = self._project_dir / "app" / "src" / "main" / "AndroidManifest.xml"
         if not manifest_path.exists():
@@ -430,6 +516,17 @@ public class KirikiriSDL2Activity extends SDLActivity {{
 
         # package属性を削除（AGP 8.0以降はnamespaceで指定）
         content = re.sub(r'\s*package="[^"]*"', "", content)
+
+        # applicationタグにextractNativeLibs="true"を追加
+        # これによりネイティブライブラリがAPKから展開され、dlopenでアクセス可能になる
+        def add_extract_native_libs(match: re.Match[str]) -> str:
+            tag = match.group(0)
+            if "android:extractNativeLibs" not in tag and tag.endswith(">"):
+                # タグの閉じ部分の直前に属性を挿入
+                return tag[:-1] + ' android:extractNativeLibs="true">'
+            return tag
+
+        content = re.sub(r"<application[^>]*>", add_extract_native_libs, content)
 
         # activity/service/receiverタグにandroid:exported属性を追加
         def add_exported_if_missing(match: re.Match[str]) -> str:
