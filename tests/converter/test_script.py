@@ -446,27 +446,27 @@ class TestScriptAdjusterMidiRules:
         assert count >= 1
 
     def test_replaces_mid_extension_in_double_quotes(self, adjuster: ScriptAdjuster) -> None:
-        """.mid参照を.mid.oggに変換することを確認する（ダブルクォート）"""
+        """.mid参照を.oggに変換することを確認する（ダブルクォート）"""
         content = 'var bgm = new WaveSoundBuffer("bgm/title.mid");'
         adjusted, count = adjuster.adjust_content(content)
 
-        assert '"bgm/title.mid.ogg"' in adjusted
+        assert '"bgm/title.ogg"' in adjusted
         assert count >= 1
 
     def test_replaces_mid_extension_in_single_quotes(self, adjuster: ScriptAdjuster) -> None:
-        """.mid参照を.mid.oggに変換することを確認する（シングルクォート）"""
+        """.mid参照を.oggに変換することを確認する（シングルクォート）"""
         content = "var bgm = new WaveSoundBuffer('bgm/title.mid');"
         adjusted, count = adjuster.adjust_content(content)
 
-        assert "'bgm/title.mid.ogg'" in adjusted
+        assert "'bgm/title.ogg'" in adjusted
         assert count >= 1
 
     def test_replaces_midi_extension(self, adjuster: ScriptAdjuster) -> None:
-        """.midi参照を.midi.oggに変換することを確認する"""
+        """.midi参照を.oggに変換することを確認する"""
         content = 'var bgm = new WaveSoundBuffer("bgm/title.midi");'
         adjusted, count = adjuster.adjust_content(content)
 
-        assert '"bgm/title.midi.ogg"' in adjusted
+        assert '"bgm/title.ogg"' in adjusted
         assert count >= 1
 
     def test_combined_midi_sound_buffer_and_extension(self, adjuster: ScriptAdjuster) -> None:
@@ -476,7 +476,7 @@ class TestScriptAdjusterMidiRules:
 
         assert "WaveSoundBuffer" in adjusted
         assert "MIDISoundBuffer" not in adjusted
-        assert ".mid.ogg" in adjusted
+        assert '"bgm/title.ogg"' in adjusted
         assert count >= 2
 
     def test_multiple_midi_references(self, adjuster: ScriptAdjuster) -> None:
@@ -489,8 +489,8 @@ var se = new WaveSoundBuffer("se/click.wav");
 
         assert adjusted.count("WaveSoundBuffer") == 3
         assert "MIDISoundBuffer" not in adjusted
-        assert '"bgm/title.mid.ogg"' in adjusted
-        assert '"bgm/battle.midi.ogg"' in adjusted
+        assert '"bgm/title.ogg"' in adjusted
+        assert '"bgm/battle.ogg"' in adjusted
         assert '"se/click.wav"' in adjusted  # WAVはそのまま
 
     def test_does_not_replace_mid_in_unquoted_context(self, adjuster: ScriptAdjuster) -> None:
@@ -507,50 +507,53 @@ var se = new WaveSoundBuffer("se/click.wav");
 class TestScriptAdjusterMidiOutRule:
     """WaveSoundBuffer.midiOut呼び出しのコメントアウトルールテスト"""
 
-    def test_comments_out_midi_out_call(self, adjuster: ScriptAdjuster) -> None:
-        """WaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+    def test_replaces_midi_out_with_empty_statement(self, adjuster: ScriptAdjuster) -> None:
+        """WaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
         content = "WaveSoundBuffer.midiOut(midiInitialMessage);"
         adjusted, count = adjuster.adjust_content(content)
 
+        # 空文（;）で置換され、元のコードはコメントとして残る
+        assert adjusted.startswith("; // ")
         assert "// WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
         assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
         assert count >= 1
 
-    def test_comments_out_midi_out_with_indentation(self, adjuster: ScriptAdjuster) -> None:
-        """インデント付きのWaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+    def test_replaces_midi_out_with_indentation(self, adjuster: ScriptAdjuster) -> None:
+        """インデント付きのWaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
         content = "    WaveSoundBuffer.midiOut(midiInitialMessage);"
         adjusted, count = adjuster.adjust_content(content)
 
-        assert adjusted.startswith("    // ")
+        # インデントが保持され、空文で置換される
+        assert adjusted.startswith("    ; // ")
         assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
         assert count >= 1
 
-    def test_comments_out_midi_out_with_different_arguments(self, adjuster: ScriptAdjuster) -> None:
-        """異なる引数のWaveSoundBuffer.midiOut呼び出しをコメントアウトすることを確認する"""
+    def test_replaces_midi_out_with_different_arguments(self, adjuster: ScriptAdjuster) -> None:
+        """異なる引数のWaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
         content = 'WaveSoundBuffer.midiOut("some_message");'
         adjusted, count = adjuster.adjust_content(content)
 
-        assert "// " in adjusted
+        assert "; // " in adjusted
         assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
         assert count >= 1
 
     def test_midi_out_converted_from_midi_sound_buffer(self, adjuster: ScriptAdjuster) -> None:
-        """MIDISoundBuffer.midiOutが変換後にコメントアウトされることを確認する
+        """MIDISoundBuffer.midiOutが変換後に空文に置換されることを確認する
 
-        MIDISoundBuffer → WaveSoundBuffer 変換後に midiOut がコメントアウトされるべき
+        MIDISoundBuffer → WaveSoundBuffer 変換後に midiOut が空文に置換されるべき
         """
         content = "MIDISoundBuffer.midiOut(midiInitialMessage);"
         adjusted, count = adjuster.adjust_content(content)
 
         # MIDISoundBuffer → WaveSoundBuffer に変換される
         assert "MIDISoundBuffer" not in adjusted
-        # 変換後の WaveSoundBuffer.midiOut がコメントアウトされる
-        assert "// WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
+        # 変換後の WaveSoundBuffer.midiOut が空文に置換される
+        assert "; // WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
         assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
-        assert count >= 2  # MIDISoundBuffer変換 + midiOutコメントアウト
+        assert count >= 2  # MIDISoundBuffer変換 + midiOut置換
 
     def test_multiple_midi_out_calls(self, adjuster: ScriptAdjuster) -> None:
-        """複数のmidiOut呼び出しをコメントアウトすることを確認する"""
+        """複数のmidiOut呼び出しを空文に置換することを確認する"""
         content = """WaveSoundBuffer.midiOut(msg1);
     WaveSoundBuffer.midiOut(msg2);
 WaveSoundBuffer.midiOut(msg3);
@@ -558,6 +561,10 @@ WaveSoundBuffer.midiOut(msg3);
         adjusted, count = adjuster.adjust_content(content)
 
         assert adjusted.count("Disabled: midiOut not available in WaveSoundBuffer") == 3
+        # 各行が "; // WaveSoundBuffer.midiOut" で始まることを確認
+        lines = [line for line in adjusted.split("\n") if line.strip()]
+        for line in lines:
+            assert line.lstrip().startswith("; // WaveSoundBuffer.midiOut")
         assert count >= 3
 
 
@@ -573,13 +580,13 @@ class TestScriptAdjusterLoadpluginRules:
         assert "extrans.dll" not in adjusted
         assert count >= 1
 
-    def test_comments_out_wuvorbis_dll(self, adjuster: ScriptAdjuster) -> None:
-        """wuvorbis.dllをコメントアウトすることを確認する（krkrsdl2ビルトイン）"""
+    def test_replaces_wuvorbis_dll_to_libwuvorbis_so(self, adjuster: ScriptAdjuster) -> None:
+        """wuvorbis.dllをlibwuvorbis.soに変換することを確認する"""
         content = '[loadplugin module="wuvorbis.dll"]'
         adjusted, count = adjuster.adjust_content(content)
 
-        assert ";#" in adjusted
-        assert "Ogg Vorbis built-in krkrsdl2" in adjusted
+        assert '[loadplugin module="libwuvorbis.so"]' in adjusted
+        assert "wuvorbis.dll" not in adjusted
         assert count >= 1
 
     def test_comments_out_krmovie_dll(self, adjuster: ScriptAdjuster) -> None:
@@ -611,8 +618,8 @@ class TestScriptAdjusterLoadpluginRules:
 
         # extrans.dll → libextrans.so
         assert '[loadplugin module="libextrans.so"]' in adjusted
-        # wuvorbis.dll はkrkrsdl2ビルトインでコメントアウト
-        assert "Ogg Vorbis built-in krkrsdl2" in adjusted
+        # wuvorbis.dll → libwuvorbis.so
+        assert '[loadplugin module="libwuvorbis.so"]' in adjusted
         # krmovie.dll はkrkrsdl2未対応でコメントアウト
         assert "not supported on krkrsdl2" in adjusted
         # something.dll はAndroid非対応でコメントアウト

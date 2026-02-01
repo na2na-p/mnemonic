@@ -25,6 +25,7 @@ from mnemonic.builder.template import (
     TemplateDownloader,
 )
 from mnemonic.builder.template_preparer import TemplatePreparer
+from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.encoding import EncodingConverter
 from mnemonic.converter.manager import ConversionManager
 from mnemonic.converter.midi import MidiConverter
@@ -464,6 +465,7 @@ class BuildPipeline:
 
         # コンバーターを設定
         # 注意: ImageConverterは無効（krkrsdl2がWebP未対応のため）
+        # 注意: MidiConverterは別途処理（出力ファイル名を.mid.oggにするため）
         converters: list[Any] = [
             EncodingConverter(),
         ]
@@ -471,17 +473,12 @@ class BuildPipeline:
         if not self._config.skip_video:
             converters.append(VideoConverter(timeout=self._config.ffmpeg_timeout))
 
-        # MidiConverterを追加（krkrsdl2はMIDI再生未対応のため、OGGに変換）
-        midi_converter = MidiConverter(timeout=self._config.ffmpeg_timeout)
-        if midi_converter.is_fluidsynth_available():
-            converters.append(midi_converter)
-
         # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
 
-        # MIDI変換後、元のMIDIファイルを削除（.mid.oggに変換されているため）
-        self._remove_converted_midi_files(self._convert_dir)
+        # MIDI変換（.mid → .mid.ogg として出力）
+        self._convert_midi_files(self._convert_dir)
 
         # プラグインディレクトリを削除（Windows DLLはAndroidで使用不可）
         self._remove_plugin_directory(self._convert_dir)
@@ -519,24 +516,36 @@ class BuildPipeline:
                     if not new_path.exists():
                         path.rename(new_path)
 
-    def _remove_converted_midi_files(self, directory: Path) -> None:
-        """変換済みMIDIファイルの元ファイルを削除する
+    def _convert_midi_files(self, directory: Path) -> None:
+        """MIDIファイルをOGG Vorbis形式に変換する
 
-        MIDIファイルはOGGに変換された後、元のMIDIファイルは不要になるため削除する。
-        対応する.mid.oggファイルが存在する場合のみ削除する。
+        krkrsdl2はMIDI再生未対応のため、MIDIファイルをOGG Vorbisに変換する。
+        スクリプト書き換えで参照が.oggに変更されるため、
+        出力ファイル名は.mid/.midiを.oggに置換した形式にする。
+        例: bgm/sinone.mid → bgm/sinone.ogg
+
+        変換成功後、元のMIDIファイルは削除する。
 
         Args:
             directory: 処理対象のディレクトリ
         """
+        midi_converter = MidiConverter(timeout=self._config.ffmpeg_timeout)
+        if not midi_converter.is_fluidsynth_available():
+            return
+
         midi_extensions = (".mid", ".midi")
         for midi_file in directory.rglob("*"):
             if not midi_file.is_file():
                 continue
             if midi_file.suffix.lower() not in midi_extensions:
                 continue
-            # 対応する.mid.oggファイルが存在するか確認
-            ogg_file = midi_file.with_suffix(midi_file.suffix + ".ogg")
-            if ogg_file.exists():
+
+            # 出力ファイル名: .mid/.midiを.oggに置換 (例: sinone.mid → sinone.ogg)
+            ogg_file = midi_file.with_suffix(".ogg")
+
+            result = midi_converter.convert(midi_file, ogg_file)
+            if result.status == ConversionStatus.SUCCESS:
+                # 変換成功時、元のMIDIファイルを削除
                 midi_file.unlink()
 
     def _remove_plugin_directory(self, directory: Path) -> None:

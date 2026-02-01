@@ -54,18 +54,23 @@ class ScriptAdjuster(BaseConverter):
         ),
         AdjustmentRule(
             pattern=r"^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)",
-            replacement=r"\1// \2 // Disabled: midiOut not available in WaveSoundBuffer",
-            description="WaveSoundBuffer.midiOut呼び出しをコメントアウト（krkrsdl2対応）",
+            replacement=r"\1; // \2 // Disabled: midiOut not available in WaveSoundBuffer",
+            description="WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
         ),
         AdjustmentRule(
-            pattern=r'(["\'])([^"\']*\.mid)(["\'])',
+            pattern=r'(["\'])([^"\']*?)\.mid(["\'])',
             replacement=r"\1\2.ogg\3",
-            description="MIDI参照をOGGに変換（.mid → .mid.ogg）",
+            description="MIDI参照をOGGに変換（.mid → .ogg）",
         ),
         AdjustmentRule(
-            pattern=r'(["\'])([^"\']*\.midi)(["\'])',
+            pattern=r'(["\'])([^"\']*?)\.midi(["\'])',
             replacement=r"\1\2.ogg\3",
-            description="MIDI参照をOGGに変換（.midi → .midi.ogg）",
+            description="MIDI参照をOGGに変換（.midi → .ogg）",
+        ),
+        AdjustmentRule(
+            pattern=r'storage \+ "\.mid\.ogg"',
+            replacement='storage + ".ogg"',
+            description="MIDI検索パターンを修正（.mid.ogg → .ogg）",
         ),
         # loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）
         # krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない
@@ -75,11 +80,11 @@ class ScriptAdjuster(BaseConverter):
             replacement='[loadplugin module="libextrans.so"]',
             description="extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
         ),
-        # wuvorbis.dllはkrkrsdl2にOgg Vorbisがビルトインのため不要
+        # wuvorbis.dllをlibwuvorbis.soに変換（Ogg Vorbis再生に必要）
         AdjustmentRule(
-            pattern=r'(\[loadplugin\s+module="wuvorbis\.dll"\])',
-            replacement=r";# \1 # Disabled: Ogg Vorbis built-in krkrsdl2",
-            description="wuvorbis.dllをコメントアウト（krkrsdl2ビルトイン）",
+            pattern=r'\[loadplugin\s+module="wuvorbis\.dll"\]',
+            replacement='[loadplugin module="libwuvorbis.so"]',
+            description="wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
         ),
         # krmovie.dllはkrkrsdl2で未実装のためコメントアウト
         AdjustmentRule(
