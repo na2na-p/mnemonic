@@ -117,6 +117,20 @@ class BaseConverter(ABC):
         """
         ...
 
+    def get_output_extension(self, source_path: Path) -> str | None:
+        """変換後のファイル拡張子を返す
+
+        入力ファイルに対する出力ファイルの拡張子を返す。
+        拡張子を変更しない場合はNoneを返す。
+
+        Args:
+            source_path: 変換元ファイルのパス
+
+        Returns:
+            出力ファイルの拡張子（ドット付き小文字形式）、変更しない場合はNone
+        """
+        return None
+
     def _validate_source(self, source: Path) -> None:
         """変換元ファイルの検証を行う
 

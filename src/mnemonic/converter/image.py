@@ -74,12 +74,13 @@ class TLGImageDecoder:
     """TLG画像デコーダー
 
     TLG形式の画像ファイルを読み込み、PIL.Imageオブジェクトに変換する。
-    TLG5およびTLG6形式に対応。
+    TLG5およびTLG6形式に対応。SDSコンテナ形式もサポート。
     """
 
     # TLGマジックバイト
     TLG5_MAGIC = b"TLG5.0\x00raw\x1a"
     TLG6_MAGIC = b"TLG6.0\x00raw\x1a"
+    SDS_MAGIC = b"TLG0.0\x00sds\x1a"
 
     def __init__(self) -> None:
         """TLGImageDecoderを初期化する"""
@@ -89,7 +90,7 @@ class TLGImageDecoder:
     def is_tlg_file(self, file_path: Path) -> bool:
         """指定されたファイルがTLG形式かどうかを判定する
 
-        ファイルのマジックバイトを読み取り、TLG5またはTLG6形式かを判定する。
+        ファイルのマジックバイトを読み取り、TLG5/TLG6/SDS形式かを判定する。
 
         Args:
             file_path: 判定対象のファイルパス
@@ -103,12 +104,38 @@ class TLGImageDecoder:
         try:
             with open(file_path, "rb") as f:
                 header = f.read(len(self.TLG5_MAGIC))
-                return header == self.TLG5_MAGIC or header == self.TLG6_MAGIC
+                return (
+                    header == self.TLG5_MAGIC
+                    or header == self.TLG6_MAGIC
+                    or header == self.SDS_MAGIC
+                )
         except OSError:
             return False
 
+    def _unwrap_sds(self, data: bytes) -> bytes:
+        """SDSコンテナから内部のTLGデータを抽出する
+
+        SDSコンテナ構造:
+        - マジック: TLG0.0\\x00sds\\x1a (11バイト)
+        - チャンクサイズ: 4バイト (リトルエンディアン)
+        - 内部TLGデータ: TLG5またはTLG6
+
+        Args:
+            data: SDSコンテナ形式のバイト列
+
+        Returns:
+            内部のTLGデータ
+        """
+        if not data.startswith(self.SDS_MAGIC):
+            return data
+
+        # SDSヘッダーをスキップ（11バイトマジック + 4バイトサイズ）
+        return data[15:]
+
     def _detect_version(self, data: bytes) -> TLGVersion:
         """TLGデータのバージョンを判別する
+
+        SDSコンテナの場合は内部データのバージョンを返す。
 
         Args:
             data: TLG画像データ
@@ -116,6 +143,10 @@ class TLGImageDecoder:
         Returns:
             TLGバージョン
         """
+        # SDSコンテナの場合は内部データを確認
+        if data.startswith(self.SDS_MAGIC):
+            data = self._unwrap_sds(data)
+
         if data.startswith(self.TLG5_MAGIC):
             return TLGVersion.TLG5
         elif data.startswith(self.TLG6_MAGIC):
@@ -140,6 +171,8 @@ class TLGImageDecoder:
             raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
 
         data = file_path.read_bytes()
+        # SDSコンテナの場合は内部データを抽出
+        data = self._unwrap_sds(data)
         version = self._detect_version(data)
 
         if version == TLGVersion.TLG5:
@@ -179,6 +212,8 @@ class TLGImageDecoder:
             raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
 
         data = file_path.read_bytes()
+        # SDSコンテナの場合は内部データを抽出
+        data = self._unwrap_sds(data)
         version = self._detect_version(data)
 
         if version == TLGVersion.TLG5:
@@ -266,6 +301,22 @@ class ImageConverter(BaseConverter):
             JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため変換不要
         """
         return (".tlg",)
+
+    def get_output_extension(self, source_path: Path) -> str | None:
+        """変換後のファイル拡張子を返す
+
+        出力形式に応じた拡張子を返す。TLGファイルはPNG/WebPに変換される。
+
+        Args:
+            source_path: 変換元ファイルのパス
+
+        Returns:
+            出力ファイルの拡張子（.pngまたは.webp）
+        """
+        if self._output_format == OutputFormat.PNG:
+            return ".png"
+        else:
+            return ".webp"
 
     def can_convert(self, file_path: Path) -> bool:
         """このConverterで変換可能なファイルかを判定する

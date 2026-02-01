@@ -252,12 +252,18 @@ class ConversionManager:
                 continue
 
             # 対応するConverterがあるファイルのみ収集
-            if self.get_converter_for_file(source_file) is None:
+            converter = self.get_converter_for_file(source_file)
+            if converter is None:
                 continue
 
             # 変換先パスを計算（ディレクトリ構造を保持）
             relative_path = source_file.relative_to(source_dir)
             dest_file = dest_dir / relative_path
+
+            # 出力拡張子が指定されている場合は拡張子を変更
+            output_ext = converter.get_output_extension(source_file)
+            if output_ext is not None:
+                dest_file = dest_file.with_suffix(output_ext)
 
             files.append((source_file, dest_file))
 

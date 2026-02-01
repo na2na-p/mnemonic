@@ -47,6 +47,8 @@ class LZSSDecoder:
     def decode(self, data: bytes, output_size: int) -> bytes:
         """LZSS圧縮データを解凍する
 
+        TLG5形式のLZSS解凍を行う。4096バイトのスライドバッファを使用。
+
         Args:
             data: LZSS圧縮されたバイト列
             output_size: 解凍後の期待サイズ（バイト）
@@ -61,6 +63,10 @@ class LZSSDecoder:
             return b""
 
         output = bytearray(output_size)
+        # スライドバッファ（0で初期化）
+        slide = bytearray(self.WINDOW_SIZE)
+        slide_pos = 0
+
         output_pos = 0
         input_pos = 0
         data_len = len(data)
@@ -77,38 +83,44 @@ class LZSSDecoder:
                     break
 
                 if flags & (1 << bit):
-                    # リテラルバイト
-                    if input_pos >= data_len:
-                        raise ValueError("不完全な圧縮データ: リテラルバイトが不足しています")
-                    output[output_pos] = data[input_pos]
-                    output_pos += 1
-                    input_pos += 1
-                else:
-                    # マッチ（2バイト）
+                    # TLG5: ビット1 = マッチ（バックリファレンス）
                     if input_pos + 2 > data_len:
                         raise ValueError("不完全な圧縮データ: マッチ情報が不足しています")
 
-                    # 2バイトからオフセットと長さを抽出
-                    # offset[7:0] = 下位バイト
-                    # offset[11:8] | length[3:0] = 上位バイト
+                    # 2バイトからマッチ位置と長さを抽出
                     low_byte = data[input_pos]
                     high_byte = data[input_pos + 1]
                     input_pos += 2
 
-                    offset = low_byte | ((high_byte & 0xF0) << 4)
-                    length = (high_byte & 0x0F) + self.MATCH_MIN_LENGTH
+                    mpos = low_byte | ((high_byte & 0x0F) << 8)
+                    mlen = ((high_byte >> 4) & 0x0F) + self.MATCH_MIN_LENGTH
 
-                    # スライディングウィンドウからコピー
-                    for _ in range(length):
+                    # mlen == 18の場合は追加バイトを読む
+                    if mlen == 18:
+                        if input_pos >= data_len:
+                            raise ValueError("不完全な圧縮データ: 追加長バイトが不足しています")
+                        mlen += data[input_pos]
+                        input_pos += 1
+
+                    # スライドバッファからコピー
+                    for _ in range(mlen):
                         if output_pos >= output_size:
                             break
-                        # オフセットは現在位置からの相対位置
-                        src_pos = output_pos - offset
-                        if src_pos < 0:
-                            # ウィンドウ初期化領域（ゼロで埋められている想定）
-                            output[output_pos] = 0
-                        else:
-                            output[output_pos] = output[src_pos]
+                        byte_val = slide[mpos]
+                        output[output_pos] = byte_val
+                        slide[slide_pos] = byte_val
                         output_pos += 1
+                        mpos = (mpos + 1) & (self.WINDOW_SIZE - 1)
+                        slide_pos = (slide_pos + 1) & (self.WINDOW_SIZE - 1)
+                else:
+                    # TLG5: ビット0 = リテラルバイト
+                    if input_pos >= data_len:
+                        raise ValueError("不完全な圧縮データ: リテラルバイトが不足しています")
+                    byte_val = data[input_pos]
+                    input_pos += 1
+                    output[output_pos] = byte_val
+                    slide[slide_pos] = byte_val
+                    output_pos += 1
+                    slide_pos = (slide_pos + 1) & (self.WINDOW_SIZE - 1)
 
         return bytes(output)

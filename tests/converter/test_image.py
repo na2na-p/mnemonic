@@ -20,6 +20,98 @@ TLG5_MAGIC = b"TLG5.0\x00raw\x1a"
 TLG6_MAGIC = b"TLG6.0\x00raw\x1a"
 
 
+def create_tlg5_test_data(
+    *,
+    width: int = 2,
+    height: int = 2,
+    color_depth: int = 32,
+    block_height: int = 2,
+    r: int = 255,
+    g: int = 128,
+    b: int = 64,
+    a: int = 255,
+) -> bytes:
+    """テスト用のTLG5データを生成する
+
+    単色の画像データを生成する。
+
+    TLG5フォーマット:
+    1. ヘッダー (24バイト)
+    2. ブロックサイズ配列 (block_count * 4バイト)
+    3. ブロックデータ (各ブロック内に colors個の mark+size+data)
+
+    Args:
+        width: 画像の幅
+        height: 画像の高さ
+        color_depth: 色深度（24=RGB、32=RGBA）
+        block_height: ブロックの高さ
+        r, g, b, a: 画素値
+
+    Returns:
+        TLG5形式のバイト列
+    """
+    import struct
+
+    # ヘッダー作成
+    header = TLG5_MAGIC
+    header += struct.pack("B", color_depth)
+    header += struct.pack("<I", width)
+    header += struct.pack("<I", height)
+    header += struct.pack("<I", block_height)
+
+    # チャンネルデータ作成（デルタエンコーディング済み）
+    # 全ピクセル同じ色: 最初のピクセルのみ値、残りは0
+    def create_channel_data(value: int, size: int) -> bytes:
+        data = bytearray(size)
+        data[0] = value
+        return bytes(data)
+
+    def create_channel_block(channel_data: bytes) -> bytes:
+        # LZSS非圧縮形式（全リテラル）: フラグビット0=リテラル
+        compressed = bytearray()
+        pos = 0
+        while pos < len(channel_data):
+            chunk_size = min(8, len(channel_data) - pos)
+            # 全ビット0 = 全てリテラル
+            flag = 0
+            compressed.append(flag)
+            compressed.extend(channel_data[pos : pos + chunk_size])
+            pos += chunk_size
+
+        mark = 0
+        block_size = len(compressed)
+        return bytes([mark]) + struct.pack("<I", block_size) + bytes(compressed)
+
+    block_count = (height + block_height - 1) // block_height
+    channels = 4 if color_depth == 32 else 3
+    channel_values = [b, g, r, a] if channels == 4 else [b, g, r]
+
+    # 各ブロックのデータを先に生成
+    block_data_list: list[bytes] = []
+    for block_idx in range(block_count):
+        block_rows = min(block_height, height - block_idx * block_height)
+        pixel_count = width * block_rows
+
+        block_bytes = bytearray()
+        for _i, value in enumerate(channel_values):
+            if block_idx == 0:
+                channel = create_channel_data(value, pixel_count)
+            else:
+                # 2番目以降のブロックは差分0
+                channel = bytes(pixel_count)
+            block_bytes.extend(create_channel_block(channel))
+        block_data_list.append(bytes(block_bytes))
+
+    # ブロックサイズ配列を作成
+    block_sizes = bytearray()
+    for block_bytes in block_data_list:
+        block_sizes.extend(struct.pack("<I", len(block_bytes)))
+
+    # すべてを結合
+    block_data = b"".join(block_data_list)
+    return header + bytes(block_sizes) + block_data
+
+
 class TestIsTlgFile:
     """is_tlg_fileメソッドのテスト"""
 
@@ -179,86 +271,10 @@ class TestGetInfo:
 class TestDecode:
     """decodeメソッドのテスト"""
 
-    def _create_tlg5_data(
-        self,
-        *,
-        width: int = 2,
-        height: int = 2,
-        color_depth: int = 32,
-        block_height: int = 2,
-        r: int = 255,
-        g: int = 128,
-        b: int = 64,
-        a: int = 255,
-    ) -> bytes:
-        """テスト用のTLG5データを生成する
-
-        単色の画像データを生成する。
-
-        Args:
-            width: 画像の幅
-            height: 画像の高さ
-            color_depth: 色深度（24=RGB、32=RGBA）
-            block_height: ブロックの高さ
-            r, g, b, a: 画素値
-
-        Returns:
-            TLG5形式のバイト列
-        """
-        import struct
-
-        # ヘッダー作成
-        header = TLG5_MAGIC
-        header += struct.pack("B", color_depth)
-        header += struct.pack("<I", width)
-        header += struct.pack("<I", height)
-        header += struct.pack("<I", block_height)
-
-        # チャンネルデータ作成（デルタエンコーディング済み）
-        # 全ピクセル同じ色: 最初のピクセルのみ値、残りは0
-        def create_channel_data(value: int, size: int) -> bytes:
-            data = bytearray(size)
-            data[0] = value
-            return bytes(data)
-
-        def create_block(channel_data: bytes) -> bytes:
-            # LZSS非圧縮形式（全リテラル）
-            compressed = bytearray()
-            pos = 0
-            while pos < len(channel_data):
-                chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
-                compressed.extend(channel_data[pos : pos + chunk_size])
-                pos += chunk_size
-
-            mark = 0
-            block_size = len(compressed)
-            return bytes([mark]) + struct.pack("<I", block_size) + bytes(compressed)
-
-        block_data = bytearray()
-        block_count = (height + block_height - 1) // block_height
-        channels = 4 if color_depth == 32 else 3
-        channel_values = [b, g, r, a] if channels == 4 else [b, g, r]
-
-        for block_idx in range(block_count):
-            block_rows = min(block_height, height - block_idx * block_height)
-            block_size = width * block_rows
-
-            for _i, value in enumerate(channel_values):
-                if block_idx == 0:
-                    channel = create_channel_data(value, block_size)
-                else:
-                    # 2番目以降のブロックは差分0
-                    channel = bytes(block_size)
-                block_data.extend(create_block(channel))
-
-        return header + bytes(block_data)
-
     def test_decode_tlg5(self) -> None:
         """TLG5ファイルをデコードできることを確認"""
         decoder = TLGImageDecoder()
-        tlg5_data = self._create_tlg5_data(r=255, g=128, b=64, a=255)
+        tlg5_data = create_tlg5_test_data(r=255, g=128, b=64, a=255)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".tlg") as f:
             f.write(tlg5_data)
@@ -329,68 +345,10 @@ class TestDecode:
 class TestDecodeToFile:
     """decode_to_fileメソッドのテスト"""
 
-    def _create_tlg5_data(
-        self,
-        *,
-        width: int = 2,
-        height: int = 2,
-        color_depth: int = 32,
-        block_height: int = 2,
-        r: int = 255,
-        g: int = 128,
-        b: int = 64,
-        a: int = 255,
-    ) -> bytes:
-        """テスト用のTLG5データを生成する"""
-        import struct
-
-        header = TLG5_MAGIC
-        header += struct.pack("B", color_depth)
-        header += struct.pack("<I", width)
-        header += struct.pack("<I", height)
-        header += struct.pack("<I", block_height)
-
-        def create_channel_data(value: int, size: int) -> bytes:
-            data = bytearray(size)
-            data[0] = value
-            return bytes(data)
-
-        def create_block(channel_data: bytes) -> bytes:
-            compressed = bytearray()
-            pos = 0
-            while pos < len(channel_data):
-                chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
-                compressed.extend(channel_data[pos : pos + chunk_size])
-                pos += chunk_size
-
-            mark = 0
-            block_size = len(compressed)
-            return bytes([mark]) + struct.pack("<I", block_size) + bytes(compressed)
-
-        block_data = bytearray()
-        block_count = (height + block_height - 1) // block_height
-        channels = 4 if color_depth == 32 else 3
-        channel_values = [b, g, r, a] if channels == 4 else [b, g, r]
-
-        for block_idx in range(block_count):
-            block_rows = min(block_height, height - block_idx * block_height)
-            block_size = width * block_rows
-
-            for _i, value in enumerate(channel_values):
-                if block_idx == 0:
-                    channel = create_channel_data(value, block_size)
-                else:
-                    channel = bytes(block_size)
-                block_data.extend(create_block(channel))
-
-        return header + bytes(block_data)
-
     def test_decode_to_file_png(self) -> None:
         """decode_to_fileでPNGファイルに保存できることを確認"""
         decoder = TLGImageDecoder()
-        tlg5_data = self._create_tlg5_data(r=255, g=128, b=64, a=255)
+        tlg5_data = create_tlg5_test_data(r=255, g=128, b=64, a=255)
 
         with tempfile.TemporaryDirectory() as td:
             temp_dir = Path(td)
@@ -409,7 +367,7 @@ class TestDecodeToFile:
     def test_decode_to_file_creates_parent_directories(self) -> None:
         """decode_to_fileで親ディレクトリが作成されることを確認"""
         decoder = TLGImageDecoder()
-        tlg5_data = self._create_tlg5_data()
+        tlg5_data = create_tlg5_test_data()
 
         with tempfile.TemporaryDirectory() as td:
             temp_dir = Path(td)
@@ -508,64 +466,6 @@ class TestImageConverter:
         img.save(path, "PNG")
         return path
 
-    def _create_tlg5_data(
-        self,
-        *,
-        width: int = 2,
-        height: int = 2,
-        color_depth: int = 32,
-        block_height: int = 2,
-        r: int = 255,
-        g: int = 128,
-        b: int = 64,
-        a: int = 255,
-    ) -> bytes:
-        """テスト用のTLG5データを生成する"""
-        import struct
-
-        header = TLG5_MAGIC
-        header += struct.pack("B", color_depth)
-        header += struct.pack("<I", width)
-        header += struct.pack("<I", height)
-        header += struct.pack("<I", block_height)
-
-        def create_channel_data(value: int, size: int) -> bytes:
-            data = bytearray(size)
-            data[0] = value
-            return bytes(data)
-
-        def create_block(channel_data: bytes) -> bytes:
-            compressed = bytearray()
-            pos = 0
-            while pos < len(channel_data):
-                chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
-                compressed.extend(channel_data[pos : pos + chunk_size])
-                pos += chunk_size
-
-            mark = 0
-            block_size = len(compressed)
-            return bytes([mark]) + struct.pack("<I", block_size) + bytes(compressed)
-
-        block_data = bytearray()
-        block_count = (height + block_height - 1) // block_height
-        channels = 4 if color_depth == 32 else 3
-        channel_values = [b, g, r, a] if channels == 4 else [b, g, r]
-
-        for block_idx in range(block_count):
-            block_rows = min(block_height, height - block_idx * block_height)
-            block_size = width * block_rows
-
-            for _i, value in enumerate(channel_values):
-                if block_idx == 0:
-                    channel = create_channel_data(value, block_size)
-                else:
-                    channel = bytes(block_size)
-                block_data.extend(create_block(channel))
-
-        return header + bytes(block_data)
-
     def test_default_output_format_is_png(self) -> None:
         """デフォルトの出力形式がPNGであることを確認"""
         converter = ImageConverter()
@@ -575,6 +475,19 @@ class TestImageConverter:
         """WebP出力形式を指定できることを確認"""
         converter = ImageConverter(output_format=OutputFormat.WEBP)
         assert converter.output_format == OutputFormat.WEBP
+
+    @pytest.mark.parametrize(
+        "output_format, expected_ext",
+        [
+            pytest.param(OutputFormat.PNG, ".png", id="正常系: PNG出力形式は.pngを返す"),
+            pytest.param(OutputFormat.WEBP, ".webp", id="正常系: WebP出力形式は.webpを返す"),
+        ],
+    )
+    def test_get_output_extension(self, output_format: OutputFormat, expected_ext: str) -> None:
+        """出力形式に応じた拡張子を返すことを確認"""
+        converter = ImageConverter(output_format=output_format)
+        result = converter.get_output_extension(Path("test.tlg"))
+        assert result == expected_ext
 
     def test_convert_bmp_to_png(self, bmp_image: Path, temp_dir: Path) -> None:
         """BMPファイルをPNGに変換できることを確認（デフォルト）"""
@@ -805,7 +718,7 @@ class TestImageConverter:
 
     def test_convert_tlg_to_png(self, temp_dir: Path) -> None:
         """TLGファイルをPNGに変換できることを確認"""
-        tlg5_data = self._create_tlg5_data(r=255, g=128, b=64, a=255)
+        tlg5_data = create_tlg5_test_data(r=255, g=128, b=64, a=255)
         tlg_path = temp_dir / "test.tlg"
         tlg_path.write_bytes(tlg5_data)
 
@@ -822,7 +735,7 @@ class TestImageConverter:
 
     def test_convert_tlg_to_webp(self, temp_dir: Path) -> None:
         """TLGファイルをWebPに変換できることを確認"""
-        tlg5_data = self._create_tlg5_data(r=255, g=128, b=64, a=255)
+        tlg5_data = create_tlg5_test_data(r=255, g=128, b=64, a=255)
         tlg_path = temp_dir / "test.tlg"
         tlg_path.write_bytes(tlg5_data)
 

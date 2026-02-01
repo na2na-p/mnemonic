@@ -230,16 +230,16 @@ class TestTLG5DecoderDecode:
         a_channel = bytes([255, 0, 0, 0])
 
         # 各チャンネルをLZSS非圧縮形式（全リテラル）でエンコード
-        # LZSS: フラグ=0xFF (8リテラル) + リテラルバイト
+        # TLG5 LZSS: ビット0 = リテラル、全リテラルはフラグ0x00
         def create_block(channel_data: bytes) -> bytes:
-            """チャンネルデータをブロック形式にパック"""
+            """チャンネルデータをブロック形式にパック（正しいLZSSフォーマット）"""
             # LZSS圧縮データ作成（全リテラル）
             compressed = bytearray()
             pos = 0
             while pos < len(channel_data):
                 chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1  # 下位chunk_sizeビットを1に
-                compressed.append(flag)
+                # TLG5 LZSS: ビット0 = リテラル、全リテラルはフラグ0x00
+                compressed.append(0x00)  # 8ビット全てリテラル
                 compressed.extend(channel_data[pos : pos + chunk_size])
                 pos += chunk_size
 
@@ -254,8 +254,13 @@ class TestTLG5DecoderDecode:
         block_data.extend(create_block(r_channel))
         block_data.extend(create_block(a_channel))
 
+        # ブロック数を計算
+        block_count = (height + block_height - 1) // block_height
+        # ブロックサイズ配列（各エントリは4バイト、今回はダミー値でOK）
+        block_sizes = struct.pack("<I", 0) * block_count
+
         # 完全なTLG5データ
-        tlg5_data = header + bytes(block_data)
+        tlg5_data = header + block_sizes + bytes(block_data)
 
         # デコード
         image = decoder.decode(tlg5_data)
@@ -292,13 +297,13 @@ class TestTLG5DecoderDecode:
         r_channel = bytes([255, 0, 0, 0])
 
         def create_block(channel_data: bytes) -> bytes:
-            """チャンネルデータをブロック形式にパック"""
+            """チャンネルデータをブロック形式にパック（正しいLZSSフォーマット）"""
             compressed = bytearray()
             pos = 0
             while pos < len(channel_data):
                 chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
+                # TLG5 LZSS: ビット0 = リテラル、全リテラルはフラグ0x00
+                compressed.append(0x00)  # 8ビット全てリテラル
                 compressed.extend(channel_data[pos : pos + chunk_size])
                 pos += chunk_size
 
@@ -311,7 +316,12 @@ class TestTLG5DecoderDecode:
         block_data.extend(create_block(g_channel))
         block_data.extend(create_block(r_channel))
 
-        tlg5_data = header + bytes(block_data)
+        # ブロック数を計算
+        block_count = (height + block_height - 1) // block_height
+        # ブロックサイズ配列（各エントリは4バイト）
+        block_sizes = struct.pack("<I", 0) * block_count
+
+        tlg5_data = header + block_sizes + bytes(block_data)
         image = decoder.decode(tlg5_data)
 
         assert image.width == width
@@ -356,19 +366,22 @@ class TestTLG5DecoderDecode:
             return bytes(data)
 
         def create_block(channel_data: bytes) -> bytes:
-            """チャンネルデータをブロック形式にパック"""
+            """チャンネルデータをブロック形式にパック（正しいLZSSフォーマット）"""
             compressed = bytearray()
             pos = 0
             while pos < len(channel_data):
                 chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
+                # TLG5 LZSS: ビット0 = リテラル、全リテラルはフラグ0x00
+                compressed.append(0x00)  # 8ビット全てリテラル
                 compressed.extend(channel_data[pos : pos + chunk_size])
                 pos += chunk_size
 
             mark = 0
             block_size = len(compressed)
             return bytes([mark]) + struct.pack("<I", block_size) + bytes(compressed)
+
+        # ブロック数を計算
+        block_count = (height + block_height - 1) // block_height
 
         block_data = bytearray()
 
@@ -384,7 +397,10 @@ class TestTLG5DecoderDecode:
             channel = bytes(block2_size)  # 全て0
             block_data.extend(create_block(channel))
 
-        tlg5_data = header + bytes(block_data)
+        # ブロックサイズ配列（各エントリは4バイト）
+        block_sizes = struct.pack("<I", 0) * block_count
+
+        tlg5_data = header + block_sizes + bytes(block_data)
         image = decoder.decode(tlg5_data)
 
         assert image.width == width
@@ -421,19 +437,26 @@ class TestTLG5DecoderEdgeCases:
         """decode()がブロックデータが不完全な場合にValueErrorを発生させることを確認する"""
         decoder = TLG5Decoder()
 
+        width, height, block_height = 2, 2, 2
+
         header = self._create_tlg5_header(
             color_depth=32,
-            width=2,
-            height=2,
-            block_height=2,
+            width=width,
+            height=height,
+            block_height=block_height,
         )
+
+        # ブロック数を計算
+        block_count = (height + block_height - 1) // block_height
+        # ブロックサイズ配列
+        block_sizes = struct.pack("<I", 0) * block_count
 
         # 不完全なブロックデータ（block_sizeは10だが実際は5バイトしかない）
         mark = 0
         block_size = 10
         incomplete_data = bytes([mark]) + struct.pack("<I", block_size) + b"\x00" * 5
 
-        tlg5_data = header + incomplete_data
+        tlg5_data = header + block_sizes + incomplete_data
 
         with pytest.raises(ValueError, match="ブロックデータが不完全|不正なブロックデータ"):
             decoder.decode(tlg5_data)
@@ -445,12 +468,19 @@ class TestTLG5DecoderEdgeCases:
         """
         decoder = TLG5Decoder()
 
+        width, height, block_height = 2, 2, 2
+
         header = self._create_tlg5_header(
             color_depth=32,
-            width=2,
-            height=2,
-            block_height=2,
+            width=width,
+            height=height,
+            block_height=block_height,
         )
+
+        # ブロック数を計算
+        block_count = (height + block_height - 1) // block_height
+        # ブロックサイズ配列
+        block_sizes = struct.pack("<I", 0) * block_count
 
         # mark = 1 のブロック（通常は0）
         # 仕様上、mark != 0 の場合は特別な処理が必要な可能性がある
@@ -461,8 +491,8 @@ class TestTLG5DecoderEdgeCases:
             pos = 0
             while pos < len(channel_data):
                 chunk_size = min(8, len(channel_data) - pos)
-                flag = (1 << chunk_size) - 1
-                compressed.append(flag)
+                # TLG5 LZSS: ビット0 = リテラル、全リテラルはフラグ0x00
+                compressed.append(0x00)  # 8ビット全てリテラル
                 compressed.extend(channel_data[pos : pos + chunk_size])
                 pos += chunk_size
 
@@ -474,7 +504,7 @@ class TestTLG5DecoderEdgeCases:
             channel = bytes([value, 0, 0, 0])
             block_data.extend(create_block_with_mark(channel, mark=1))
 
-        tlg5_data = header + bytes(block_data)
+        tlg5_data = header + block_sizes + bytes(block_data)
 
         # mark != 0 でもエラーにならないことを確認
         # 実際の動作は仕様による

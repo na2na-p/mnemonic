@@ -155,8 +155,8 @@ class TLG5Decoder:
         # TLG5はBGRA順で格納される
         channels: list[bytearray] = [bytearray(width * height) for _ in range(colors)]
 
-        # データ読み取り開始位置
-        offset = self.HEADER_SIZE
+        # ブロックサイズ配列の後からブロックデータが始まる
+        offset = self.HEADER_SIZE + block_count * 4
 
         # 各ブロックを処理
         for block_idx in range(block_count):
@@ -167,22 +167,23 @@ class TLG5Decoder:
 
             # 各チャンネルのブロックデータを読み取り
             for channel_idx in range(colors):
-                # ブロックヘッダーを読み取り: mark(1) + block_size(4)
+                # 各チャンネルデータにはmark(1) + size(4)のヘッダーがある
                 if offset + 5 > len(data):
                     raise ValueError("ブロックデータが不完全です")
 
                 # mark は通常0（未使用フラグ）
                 offset += 1
 
-                block_size = int.from_bytes(data[offset : offset + 4], "little")
+                # チャンネルデータのサイズ
+                channel_size = int.from_bytes(data[offset : offset + 4], "little")
                 offset += 4
 
                 # 圧縮データを読み取り
-                if offset + block_size > len(data):
+                if offset + channel_size > len(data):
                     raise ValueError("ブロックデータが不完全です")
 
-                compressed_data = data[offset : offset + block_size]
-                offset += block_size
+                compressed_data = data[offset : offset + channel_size]
+                offset += channel_size
 
                 # LZSS解凍
                 decompressed = self._lzss.decode(compressed_data, block_pixel_count)
