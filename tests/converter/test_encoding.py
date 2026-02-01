@@ -533,3 +533,85 @@ class TestEncodingConverterJapanesePreservation:
         assert result.status == ConversionStatus.SUCCESS
         converted_text = dest.read_text(encoding="utf-8")
         assert converted_text == test_text
+
+
+class TestEncodingConverterKirikiriScripts:
+    """吉里吉里スクリプトファイルの BOM 処理テスト"""
+
+    @pytest.fixture
+    def converter(self) -> EncodingConverter:
+        """UTF-8変換用のEncodingConverterを返す（ソースエンコーディング指定）"""
+        return EncodingConverter(target_encoding="utf-8", source_encoding="shift_jis")
+
+    @pytest.mark.parametrize(
+        "extension",
+        [
+            pytest.param(".tjs", id="正常系: .tjs ファイルに BOM が追加される"),
+            pytest.param(".ks", id="正常系: .ks ファイルに BOM が追加される"),
+            pytest.param(".asd", id="正常系: .asd ファイルに BOM が追加される"),
+        ],
+    )
+    def test_adds_bom_to_kirikiri_script_files(
+        self,
+        converter: EncodingConverter,
+        tmp_path: Path,
+        extension: str,
+    ) -> None:
+        """吉里吉里スクリプトファイルには UTF-8 BOM が追加される"""
+        source = tmp_path / f"source{extension}"
+        dest = tmp_path / f"dest{extension}"
+        test_text = "テスト文字列です。これは吉里吉里スクリプトファイルのテストです。"
+
+        source.write_bytes(test_text.encode("shift_jis"))
+
+        result = converter.convert(source, dest)
+
+        assert result.status == ConversionStatus.SUCCESS
+        raw_bytes = dest.read_bytes()
+        assert raw_bytes.startswith(b"\xef\xbb\xbf"), "UTF-8 BOM should be present"
+
+    @pytest.mark.parametrize(
+        "extension",
+        [
+            pytest.param(".txt", id="正常系: .txt ファイルには BOM が追加されない"),
+            pytest.param(".csv", id="正常系: .csv ファイルには BOM が追加されない"),
+            pytest.param(".ini", id="正常系: .ini ファイルには BOM が追加されない"),
+        ],
+    )
+    def test_does_not_add_bom_to_non_script_files(
+        self,
+        converter: EncodingConverter,
+        tmp_path: Path,
+        extension: str,
+    ) -> None:
+        """非スクリプトファイルには UTF-8 BOM が追加されない"""
+        source = tmp_path / f"source{extension}"
+        dest = tmp_path / f"dest{extension}"
+        test_text = "テスト文字列です。これは一般的なテキストファイルのテストです。"
+
+        source.write_bytes(test_text.encode("shift_jis"))
+
+        result = converter.convert(source, dest)
+
+        assert result.status == ConversionStatus.SUCCESS
+        raw_bytes = dest.read_bytes()
+        assert not raw_bytes.startswith(b"\xef\xbb\xbf"), "UTF-8 BOM should NOT be present"
+
+    def test_adds_bom_to_ascii_only_script_files(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """ASCII のみの吉里吉里スクリプトファイルにも BOM が追加される"""
+        converter = EncodingConverter(target_encoding="utf-8")
+        source = tmp_path / "source.asd"
+        dest = tmp_path / "dest.asd"
+        # ASCII-only content (common in .asd animation files)
+        ascii_content = b"*start\r\n@wait time=150\r\n@clip left=445 top=0"
+
+        source.write_bytes(ascii_content)
+
+        result = converter.convert(source, dest)
+
+        assert result.status == ConversionStatus.SUCCESS
+        raw_bytes = dest.read_bytes()
+        assert raw_bytes.startswith(b"\xef\xbb\xbf"), "UTF-8 BOM should be present for ASCII script"

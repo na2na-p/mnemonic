@@ -42,6 +42,69 @@ class ScriptAdjuster(BaseConverter):
             replacement=r"\1// \2 // Disabled for Android",
             description="プラグインDLL読み込みの無効化",
         ),
+        AdjustmentRule(
+            pattern=r"saveDataLocation\s*=\s*System\.exePath\s*\+\s*saveDataLocation",
+            replacement="saveDataLocation = System.dataPath",
+            description="セーブデータパスをdataPathに変更（Android対応）",
+        ),
+        AdjustmentRule(
+            pattern=r"MIDISoundBuffer",
+            replacement="WaveSoundBuffer",
+            description="MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+        ),
+        AdjustmentRule(
+            pattern=r"^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)",
+            replacement=r"\1; // \2 // Disabled: midiOut not available in WaveSoundBuffer",
+            description="WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
+        ),
+        AdjustmentRule(
+            pattern=r'(["\'])([^"\']*?)\.mid(["\'])',
+            replacement=r"\1\2.ogg\3",
+            description="MIDI参照をOGGに変換（.mid → .ogg）",
+        ),
+        AdjustmentRule(
+            pattern=r'(["\'])([^"\']*?)\.midi(["\'])',
+            replacement=r"\1\2.ogg\3",
+            description="MIDI参照をOGGに変換（.midi → .ogg）",
+        ),
+        AdjustmentRule(
+            pattern=r'storage \+ "\.mid\.ogg"',
+            replacement='storage + ".ogg"',
+            description="MIDI検索パターンを修正（.mid.ogg → .ogg）",
+        ),
+        # loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）
+        # krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない
+        # Androidのネイティブライブラリ規約でlibプレフィックスが必要なため、フルネームを指定する
+        AdjustmentRule(
+            pattern=r'\[loadplugin\s+module="extrans\.dll"\]',
+            replacement='[loadplugin module="libextrans.so"]',
+            description="extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
+        ),
+        # wuvorbis.dllをlibwuvorbis.soに変換（Ogg Vorbis再生に必要）
+        AdjustmentRule(
+            pattern=r'\[loadplugin\s+module="wuvorbis\.dll"\]',
+            replacement='[loadplugin module="libwuvorbis.so"]',
+            description="wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
+        ),
+        # krmovie.dllはkrkrsdl2で未実装のためコメントアウト
+        AdjustmentRule(
+            pattern=r'(\[loadplugin\s+module="krmovie\.dll"\])',
+            replacement=r";# \1 # Disabled: not supported on krkrsdl2",
+            description="krmovie.dllをコメントアウト（krkrsdl2未対応）",
+        ),
+        # その他のDLLプラグインをコメントアウト（extrans以外）
+        AdjustmentRule(
+            pattern=r'(\[loadplugin\s+module="(?!extrans")[^"]*\.dll"\])',
+            replacement=r";# \1 # Disabled for Android",
+            description="その他のDLLプラグインをコメントアウト",
+        ),
+        # レイヤー透過修正: [layopt layer=N] に type=alpha を自動追加
+        # krkrsdl2のSIMDeエミュレーション問題により、明示的なtype指定が必要
+        AdjustmentRule(
+            pattern=r"\[layopt\b(?![^\]]*\btype=)([^\]]*\blayer=[0-9]+[^\]]*)\]",
+            replacement=r"[layopt\1 type=alpha]",
+            description="レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
+        ),
     ]
 
     def __init__(
@@ -111,7 +174,7 @@ class ScriptAdjuster(BaseConverter):
             )
 
         try:
-            content = source.read_text(encoding="utf-8")
+            content = source.read_text(encoding="utf-8-sig")  # BOM を自動除去
             bytes_before = len(content.encode("utf-8"))
 
             adjusted_content, adjustment_count = self.adjust_content(content, source.name)
@@ -136,9 +199,9 @@ class ScriptAdjuster(BaseConverter):
             # 出力先ディレクトリを作成
             dest.parent.mkdir(parents=True, exist_ok=True)
 
-            # 調整後の内容を書き込み
-            dest.write_text(adjusted_content, encoding="utf-8")
-            bytes_after = len(adjusted_content.encode("utf-8"))
+            # 調整後の内容を書き込み（Kirikiri スクリプトは UTF-8 BOM が必要）
+            dest.write_text(adjusted_content, encoding="utf-8-sig")
+            bytes_after = len(adjusted_content.encode("utf-8")) + 3  # BOM 3バイト
 
             return ConversionResult(
                 source_path=source,
@@ -181,20 +244,19 @@ class ScriptAdjuster(BaseConverter):
         return result, total_count
 
     def add_startup_directive(self, content: str) -> str:
-        """startup.tjsにエンコーディングディレクティブを追加する
+        """startup.tjsにエンコーディングディレクティブとプラットフォームスタブを追加する
 
-        KiriKiriZ用のエンコーディング指定ディレクティブをスクリプト先頭に追加する。
+        KiriKiriZ用のエンコーディング指定ディレクティブと、
+        Android で欠落しているクラス（MenuItem等）のスタブをスクリプト先頭に追加する。
 
         Args:
             content: 元のスクリプト内容
 
         Returns:
-            ディレクティブを追加した内容
+            ディレクティブとスタブを追加した内容
         """
-        directive = """@if (kirikiriz)
-{
-    System.setArgument("-readencoding", "UTF-8");
-}
-@endif
+        directive = """// krkrsdl2 polyfill initialization
+Scripts.execStorage("system/polyfillinitialize.tjs");
+
 """
         return directive + content

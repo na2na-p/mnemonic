@@ -17,18 +17,24 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import mnemonic.cache as cache_module
+from mnemonic.builder.font_fetcher import FontDownloadError, FontFetcher
 from mnemonic.builder.gradle import GradleBuilder
+from mnemonic.builder.plugin_fetcher import PluginDownloadError, PluginFetcher, PluginsInfo
 from mnemonic.builder.template import (
     TemplateCache,
     TemplateDownloader,
 )
 from mnemonic.builder.template_preparer import TemplatePreparer
+from mnemonic.converter.base import ConversionStatus
 from mnemonic.converter.encoding import EncodingConverter
-from mnemonic.converter.image import ImageConverter
+from mnemonic.converter.image import ImageConverter, OutputFormat
 from mnemonic.converter.manager import ConversionManager
+from mnemonic.converter.midi import MidiConverter
+from mnemonic.converter.script import ScriptAdjuster
 from mnemonic.converter.video import VideoConverter
 from mnemonic.parser.detector import GameDetector, GameStructure
 from mnemonic.parser.exe import EmbeddedXP3Extractor
+from mnemonic.parser.icon import ExeIconExtractor
 from mnemonic.parser.xp3 import XP3Archive, XP3EncryptionChecker
 from mnemonic.signer.apk import DefaultApkSignerRunner, DefaultZipalignRunner, KeystoreConfig
 
@@ -459,9 +465,10 @@ class BuildPipeline:
         shutil.copytree(self._extract_dir, self._convert_dir, dirs_exist_ok=True)
 
         # コンバーターを設定
+        # 注意: MidiConverterは別途処理（出力ファイル名を.mid.oggにするため）
         converters: list[Any] = [
             EncodingConverter(),
-            ImageConverter(),
+            ImageConverter(output_format=OutputFormat.PNG),
         ]
 
         if not self._config.skip_video:
@@ -470,6 +477,190 @@ class BuildPipeline:
         # 変換対象ファイルを変換（上書き）
         manager = ConversionManager(converters=converters)
         manager.convert_directory(self._extract_dir, self._convert_dir)
+
+        # MIDI変換（.mid → .mid.ogg として出力）
+        self._convert_midi_files(self._convert_dir)
+
+        # プラグインディレクトリを削除（Windows DLLはAndroidで使用不可）
+        self._remove_plugin_directory(self._convert_dir)
+
+        # krkrsdl2 polyfill ファイルをコピー
+        self._copy_polyfill_files(self._convert_dir)
+
+        # スクリプト調整（startup.tjs に polyfill 読み込みを追加）
+        self._adjust_scripts(self._convert_dir)
+
+        # Androidのファイルシステムは大文字小文字を区別するため、
+        # 重要なファイル名を正規化（小文字化）
+        # 注意: 変換処理の後に行う必要がある（変換が元のケースでファイルを作成するため）
+        self._normalize_critical_filenames(self._convert_dir)
+
+    def _normalize_critical_filenames(self, directory: Path) -> None:
+        """全ファイル名を正規化（小文字化）する
+
+        Windows はファイル名の大文字小文字を区別しないが、Android は区別する。
+        全てのファイル名を小文字に変換して一貫性を保つ。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        # 全ディレクトリを再帰的に処理（ファイルを先に処理、ディレクトリは後で）
+        # 深い階層から処理するためにリストを逆順にソート
+        all_paths = sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True)
+
+        for path in all_paths:
+            if path.is_file():
+                lower_name = path.name.lower()
+                if path.name != lower_name:
+                    new_path = path.parent / lower_name
+                    # 同名ファイルが既に存在する場合はスキップ
+                    if not new_path.exists():
+                        path.rename(new_path)
+
+    def _convert_midi_files(self, directory: Path) -> None:
+        """MIDIファイルをOGG Vorbis形式に変換する
+
+        krkrsdl2はMIDI再生未対応のため、MIDIファイルをOGG Vorbisに変換する。
+        スクリプト書き換えで参照が.oggに変更されるため、
+        出力ファイル名は.mid/.midiを.oggに置換した形式にする。
+        例: bgm/sinone.mid → bgm/sinone.ogg
+
+        変換成功後、元のMIDIファイルは削除する。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        midi_converter = MidiConverter(timeout=self._config.ffmpeg_timeout)
+        if not midi_converter.is_fluidsynth_available():
+            return
+
+        midi_extensions = (".mid", ".midi")
+        for midi_file in directory.rglob("*"):
+            if not midi_file.is_file():
+                continue
+            if midi_file.suffix.lower() not in midi_extensions:
+                continue
+
+            # 出力ファイル名: .mid/.midiを.oggに置換 (例: sinone.mid → sinone.ogg)
+            ogg_file = midi_file.with_suffix(".ogg")
+
+            result = midi_converter.convert(midi_file, ogg_file)
+            if result.status == ConversionStatus.SUCCESS:
+                # 変換成功時、元のMIDIファイルを削除
+                midi_file.unlink()
+
+    def _remove_plugin_directory(self, directory: Path) -> None:
+        """プラグインディレクトリを削除する
+
+        Windows用の.dllプラグインはAndroidで使用できないため、
+        プラグインディレクトリを削除する。krkrsdl2は多くの機能をビルトインで
+        持っているため、プラグインDLLは不要。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        # 大文字小文字のバリエーションを考慮
+        plugin_dir_names = ["plugin", "Plugin", "PLUGIN", "Plugins", "plugins", "PLUGINS"]
+
+        for name in plugin_dir_names:
+            plugin_dir = directory / name
+            if plugin_dir.exists() and plugin_dir.is_dir():
+                shutil.rmtree(plugin_dir)
+
+    def _adjust_scripts(self, directory: Path) -> None:
+        """全スクリプトファイルを調整する
+
+        ディレクトリ内の全ての .ks/.tjs ファイルに対して ScriptAdjuster を適用する。
+        loadplugin タグの置換やセーブデータパスの修正などを行う。
+
+        Args:
+            directory: 処理対象のディレクトリ
+        """
+        adjuster = ScriptAdjuster()
+
+        # 全ての.ks/.tjsファイルを再帰的に処理（大文字小文字のバリエーション対応）
+        extensions = [".ks", ".KS", ".Ks", ".tjs", ".TJS", ".Tjs"]
+        for ext in extensions:
+            for script_file in directory.rglob(f"*{ext}"):
+                adjuster.convert(script_file, script_file)
+
+    def _copy_polyfill_files(self, directory: Path) -> None:
+        """krkrsdl2 polyfill ファイルをコピーする
+
+        krkrsdl2/kag3 プロジェクトの polyfill ファイルをゲームデータディレクトリにコピーする。
+        これにより MenuItem や KAGParser などの不足クラスが提供される。
+        また、Koruriフォントをsystem/font.ttfとしてコピーする。
+
+        Args:
+            directory: コピー先のディレクトリ（ゲームデータのルート）
+        """
+        import importlib.resources
+
+        # system ディレクトリにコピー（Kirikiri が確実に見つけられる場所）
+        system_dir = directory / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+
+        # リソースからpolyfillファイルをコピー
+        polyfill_files = [
+            "PolyfillInitialize.tjs",
+            "MenuItem_stub.tjs",
+            "KAGParser.tjs",
+            "MIDISoundBuffer_stub.tjs",
+            "VideoOverlay_stub.tjs",
+        ]
+
+        resources_package = "mnemonic.resources.system_polyfill"
+        for filename in polyfill_files:
+            try:
+                resource_path = importlib.resources.files(resources_package).joinpath(filename)
+                with resource_path.open("rb") as src:
+                    content = src.read()
+                    (system_dir / filename).write_bytes(content)
+            except (FileNotFoundError, TypeError):
+                # リソースが見つからない場合はスキップ
+                pass
+
+        # Koruriフォントをsystem/font.ttfとしてコピー
+        self._copy_font_file(system_dir)
+
+    def _copy_font_file(self, system_dir: Path) -> None:
+        """Koruriフォントをsystem/font.ttfとしてコピーする
+
+        PolyfillInitialize.tjsはsystem/font.ttfまたはsystem/font.otfを探して
+        デフォルトフォントとして設定する。
+
+        Args:
+            system_dir: システムディレクトリのパス
+        """
+        import asyncio
+        import logging
+
+        logger = logging.getLogger(__name__)
+        font_dest = system_dir / "font.ttf"
+
+        # 既にフォントが存在する場合はスキップ
+        if font_dest.exists():
+            return
+
+        try:
+            fetcher = FontFetcher()
+
+            # 同期コンテキストで非同期メソッドを実行
+            loop = asyncio.new_event_loop()
+            try:
+                font_info = loop.run_until_complete(fetcher.get_font())
+            finally:
+                loop.close()
+
+            # フォントファイルをコピー
+            shutil.copy2(font_info.path, font_dest)
+            logger.info(f"Koruriフォントをコピーしました: {font_dest}")
+
+        except FontDownloadError as e:
+            # フォントダウンロードに失敗してもビルドは継続
+            logger.warning(f"フォントのダウンロードに失敗しました: {e}")
+        except OSError as e:
+            logger.warning(f"フォントファイルのコピーに失敗しました: {e}")
 
     def _execute_build(self) -> None:
         """BUILDフェーズ: APKビルド
@@ -534,13 +725,17 @@ class BuildPipeline:
         # ゲームアイコンを検索
         icon_path = self._find_game_icon()
 
-        # テンプレートを準備（jniLibs抽出、Java/Gradle/Manifest更新、assetsコピー、アイコン設定）
+        # プラグインを取得（jniLibsに配置するため）
+        plugins_info = self._fetch_plugins()
+
+        # テンプレートを準備（jniLibs抽出、プラグイン配置、Java/Gradle/Manifest更新等）
         preparer = TemplatePreparer(self._project_dir)
         preparer.prepare(
             package_name=package_name,
             app_name=app_name,
             assets_dir=self._convert_dir,
             icon_path=icon_path,
+            plugins_info=plugins_info,
         )
 
         # Gradleビルド実行
@@ -577,8 +772,9 @@ class BuildPipeline:
     def _find_game_icon(self) -> Path | None:
         """ゲームアイコンを検索する
 
-        抽出ディレクトリからアイコンファイルを検索します。
-        krkr/吉里吉里ゲームでよく使われるアイコンファイル名を優先的に検索します。
+        以下の優先順位でアイコンを検索します:
+        1. 抽出ディレクトリからアイコンファイルを検索
+        2. EXEファイルから埋め込みアイコンを抽出
 
         Returns:
             アイコンファイルのパス。見つからない場合はNone。
@@ -586,7 +782,7 @@ class BuildPipeline:
         if self._extract_dir is None:
             return None
 
-        # 優先順位の高いファイル名から検索
+        # 1. 抽出ディレクトリから既存アイコンファイルを検索
         icon_names = ["icon.png", "icon.ico", "icon.bmp"]
         for name in icon_names:
             icon_path = self._extract_dir / name
@@ -597,7 +793,44 @@ class BuildPipeline:
         for ico_file in self._extract_dir.glob("*.ico"):
             return ico_file
 
+        # 2. EXEファイルからアイコンを抽出（入力がEXEの場合のみ）
+        if self._config.input_path.suffix.lower() == ".exe":
+            icon_extractor = ExeIconExtractor()
+            extracted_icon = icon_extractor.extract(self._config.input_path, self._extract_dir)
+            if extracted_icon is not None:
+                return extracted_icon
+
         return None
+
+    def _fetch_plugins(self) -> PluginsInfo | None:
+        """krkrsdl2プラグインを取得する
+
+        PluginFetcherを使用してextransとwuvorbisプラグインを取得する。
+        失敗してもビルドは継続する。
+
+        Returns:
+            プラグイン情報。取得に失敗した場合はNone。
+        """
+        import asyncio
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            fetcher = PluginFetcher()
+
+            loop = asyncio.new_event_loop()
+            try:
+                plugins_info = loop.run_until_complete(fetcher.get_plugins())
+            finally:
+                loop.close()
+
+            logger.info(f"プラグインを取得しました: {', '.join(plugins_info.plugins.keys())}")
+            return plugins_info
+
+        except PluginDownloadError as e:
+            logger.warning(f"プラグインの取得に失敗しました: {e}")
+            return None
 
     def _execute_sign(self) -> None:
         """SIGNフェーズ: APK署名

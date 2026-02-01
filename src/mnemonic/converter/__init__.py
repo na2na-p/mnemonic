@@ -24,6 +24,7 @@ from mnemonic.converter.manager import (
     ConversionTask,
     RetryConfig,
 )
+from mnemonic.converter.midi import MidiConversionConfig, MidiConverter
 from mnemonic.converter.script import AdjustmentRule, ScriptAdjuster
 from mnemonic.converter.video import VideoConverter, VideoInfo
 
@@ -39,6 +40,8 @@ __all__ = [
     "EncodingDetectionResult",
     "EncodingDetector",
     "ImageConverter",
+    "MidiConversionConfig",
+    "MidiConverter",
     "QualityPreset",
     "RetryConfig",
     "ScriptAdjuster",

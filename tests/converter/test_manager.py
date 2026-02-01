@@ -26,11 +26,13 @@ class MockConverter(BaseConverter):
         extensions: tuple[str, ...] = (".txt",),
         fail_count: int = 0,
         raise_exception: bool = False,
+        output_extension: str | None = None,
     ) -> None:
         self._extensions = extensions
         self._fail_count = fail_count
         self._call_count = 0
         self._raise_exception = raise_exception
+        self._output_extension = output_extension
 
     @property
     def supported_extensions(self) -> tuple[str, ...]:
@@ -38,6 +40,9 @@ class MockConverter(BaseConverter):
 
     def can_convert(self, file_path: Path) -> bool:
         return file_path.suffix.lower() in self._extensions
+
+    def get_output_extension(self, source_path: Path) -> str | None:
+        return self._output_extension
 
     def convert(self, source: Path, dest: Path) -> ConversionResult:
         self._call_count += 1
@@ -545,6 +550,49 @@ class TestConversionManagerConvertDirectory:
         result = summary.results[0]
         assert "sub" in str(result.dest_path)
         assert "nested" in str(result.dest_path)
+
+    def test_convert_directory_changes_extension(self, tmp_path: Path) -> None:
+        """正常系: 出力拡張子が指定されている場合に拡張子が変更される"""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        (source_dir / "image.tlg").write_text("dummy tlg content")
+
+        dest_dir = tmp_path / "dest"
+
+        # 出力拡張子を.pngに設定
+        converter = MockConverter(extensions=(".tlg",), output_extension=".png")
+        manager = ConversionManager(converters=[converter], max_workers=1)
+
+        summary = manager.convert_directory(source_dir, dest_dir)
+
+        assert summary.success == 1
+        result = summary.results[0]
+        # 出力先パスの拡張子が.pngになっていることを確認
+        assert result.dest_path is not None
+        assert result.dest_path.suffix == ".png"
+        assert result.dest_path.stem == "image"
+
+    def test_convert_directory_keeps_extension_when_none(self, tmp_path: Path) -> None:
+        """正常系: 出力拡張子がNoneの場合は元の拡張子を保持する"""
+        source_dir = tmp_path / "source"
+        source_dir.mkdir()
+
+        (source_dir / "file.txt").write_text("content")
+
+        dest_dir = tmp_path / "dest"
+
+        # 出力拡張子を指定しない
+        converter = MockConverter(extensions=(".txt",), output_extension=None)
+        manager = ConversionManager(converters=[converter], max_workers=1)
+
+        summary = manager.convert_directory(source_dir, dest_dir)
+
+        assert summary.success == 1
+        result = summary.results[0]
+        # 出力先パスの拡張子が.txtのまま
+        assert result.dest_path is not None
+        assert result.dest_path.suffix == ".txt"
 
 
 class TestCalculateWorkers:

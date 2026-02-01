@@ -63,6 +63,12 @@ DEPENDENCIES: list[DependencyInfo] = [
         version_flag="-version",
         required=True,
     ),
+    DependencyInfo(
+        name="FluidSynth",
+        command="fluidsynth",
+        version_flag="--version",
+        required=False,
+    ),
 ]
 
 

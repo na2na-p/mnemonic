@@ -3,7 +3,7 @@
 TLG画像形式のデコードおよび変換機能を提供する。
 吉里吉里2エンジンで使用されるTLG5/TLG6形式の画像を
 標準的な画像形式（PNG等）に変換する。
-また、BMP/JPG/PNG形式からWebP形式への変換機能も提供する。
+また、BMP/JPG/PNG形式からWebP/PNG形式への変換機能も提供する。
 """
 
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from mnemonic.converter.base import BaseConverter, ConversionResult, ConversionStatus
+from mnemonic.converter.tlg import TLG5Decoder, TLG6Decoder
 
 
 class TLGVersion(Enum):
@@ -39,6 +40,17 @@ class QualityPreset(Enum):
     LOW = 70
 
 
+class OutputFormat(Enum):
+    """画像出力形式
+
+    ImageConverterの出力形式を定義する列挙型。
+    krkrsdl2がWebP未対応のため、PNG出力をデフォルトとする。
+    """
+
+    WEBP = "webp"
+    PNG = "png"
+
+
 @dataclass(frozen=True)
 class TLGInfo:
     """TLG画像のメタ情報
@@ -62,17 +74,23 @@ class TLGImageDecoder:
     """TLG画像デコーダー
 
     TLG形式の画像ファイルを読み込み、PIL.Imageオブジェクトに変換する。
-    TLG5およびTLG6形式に対応。
+    TLG5およびTLG6形式に対応。SDSコンテナ形式もサポート。
     """
 
     # TLGマジックバイト
     TLG5_MAGIC = b"TLG5.0\x00raw\x1a"
     TLG6_MAGIC = b"TLG6.0\x00raw\x1a"
+    SDS_MAGIC = b"TLG0.0\x00sds\x1a"
+
+    def __init__(self) -> None:
+        """TLGImageDecoderを初期化する"""
+        self._tlg5_decoder = TLG5Decoder()
+        self._tlg6_decoder = TLG6Decoder()
 
     def is_tlg_file(self, file_path: Path) -> bool:
         """指定されたファイルがTLG形式かどうかを判定する
 
-        ファイルのマジックバイトを読み取り、TLG5またはTLG6形式かを判定する。
+        ファイルのマジックバイトを読み取り、TLG5/TLG6/SDS形式かを判定する。
 
         Args:
             file_path: 判定対象のファイルパス
@@ -86,9 +104,55 @@ class TLGImageDecoder:
         try:
             with open(file_path, "rb") as f:
                 header = f.read(len(self.TLG5_MAGIC))
-                return header == self.TLG5_MAGIC or header == self.TLG6_MAGIC
+                return (
+                    header == self.TLG5_MAGIC
+                    or header == self.TLG6_MAGIC
+                    or header == self.SDS_MAGIC
+                )
         except OSError:
             return False
+
+    def _unwrap_sds(self, data: bytes) -> bytes:
+        """SDSコンテナから内部のTLGデータを抽出する
+
+        SDSコンテナ構造:
+        - マジック: TLG0.0\\x00sds\\x1a (11バイト)
+        - チャンクサイズ: 4バイト (リトルエンディアン)
+        - 内部TLGデータ: TLG5またはTLG6
+
+        Args:
+            data: SDSコンテナ形式のバイト列
+
+        Returns:
+            内部のTLGデータ
+        """
+        if not data.startswith(self.SDS_MAGIC):
+            return data
+
+        # SDSヘッダーをスキップ（11バイトマジック + 4バイトサイズ）
+        return data[15:]
+
+    def _detect_version(self, data: bytes) -> TLGVersion:
+        """TLGデータのバージョンを判別する
+
+        SDSコンテナの場合は内部データのバージョンを返す。
+
+        Args:
+            data: TLG画像データ
+
+        Returns:
+            TLGバージョン
+        """
+        # SDSコンテナの場合は内部データを確認
+        if data.startswith(self.SDS_MAGIC):
+            data = self._unwrap_sds(data)
+
+        if data.startswith(self.TLG5_MAGIC):
+            return TLGVersion.TLG5
+        elif data.startswith(self.TLG6_MAGIC):
+            return TLGVersion.TLG6
+        else:
+            return TLGVersion.UNKNOWN
 
     def get_info(self, file_path: Path) -> TLGInfo:
         """TLG画像のメタ情報を取得する
@@ -103,7 +167,32 @@ class TLGImageDecoder:
             ValueError: TLG形式でないファイルの場合
             FileNotFoundError: ファイルが存在しない場合
         """
-        raise NotImplementedError
+        if not file_path.exists():
+            raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
+
+        data = file_path.read_bytes()
+        # SDSコンテナの場合は内部データを抽出
+        data = self._unwrap_sds(data)
+        version = self._detect_version(data)
+
+        if version == TLGVersion.TLG5:
+            tlg5_header = self._tlg5_decoder.parse_header(data)
+            return TLGInfo(
+                version=TLGVersion.TLG5,
+                width=tlg5_header.width,
+                height=tlg5_header.height,
+                has_alpha=tlg5_header.colors == 4,
+            )
+        elif version == TLGVersion.TLG6:
+            tlg6_header = self._tlg6_decoder.parse_header(data)
+            return TLGInfo(
+                version=TLGVersion.TLG6,
+                width=tlg6_header.width,
+                height=tlg6_header.height,
+                has_alpha=tlg6_header.colors == 4,
+            )
+        else:
+            raise ValueError(f"TLG形式ではありません: {file_path}")
 
     def decode(self, file_path: Path) -> Image.Image:
         """TLG画像をデコードしてPIL.Imageオブジェクトを返す
@@ -117,8 +206,23 @@ class TLGImageDecoder:
         Raises:
             ValueError: TLG形式でないファイルの場合
             FileNotFoundError: ファイルが存在しない場合
+            NotImplementedError: TLG6形式の場合（デコーダーが未実装）
         """
-        raise NotImplementedError
+        if not file_path.exists():
+            raise FileNotFoundError(f"ファイルが見つかりません: {file_path}")
+
+        data = file_path.read_bytes()
+        # SDSコンテナの場合は内部データを抽出
+        data = self._unwrap_sds(data)
+        version = self._detect_version(data)
+
+        if version == TLGVersion.TLG5:
+            return self._tlg5_decoder.decode(data)
+        elif version == TLGVersion.TLG6:
+            # TLG6Decoder.decode()はNotImplementedErrorを投げる
+            return self._tlg6_decoder.decode(data)
+        else:
+            raise ValueError(f"TLG形式ではありません: {file_path}")
 
     def decode_to_file(self, source: Path, dest: Path) -> None:
         """TLG画像をデコードしてファイルに保存する
@@ -130,38 +234,53 @@ class TLGImageDecoder:
         Raises:
             ValueError: TLG形式でないファイルの場合
             FileNotFoundError: ファイルが存在しない場合
+            NotImplementedError: TLG6形式の場合（デコーダーが未実装）
         """
-        raise NotImplementedError
+        image = self.decode(source)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            image.save(dest)
+        finally:
+            image.close()
 
 
 class ImageConverter(BaseConverter):
     """画像変換クラス
 
-    BMP/JPG/PNG/TLG形式の画像をWebP形式に変換する。
+    BMP/JPG/PNG/TLG形式の画像をWebP/PNG形式に変換する。
     品質設定やアルファチャンネルの取り扱いをカスタマイズ可能。
 
     Attributes:
+        output_format: 出力形式（WebPまたはPNG）
         quality: WebP出力時の品質値（0-100）
         lossless_alpha: アルファチャンネルをロスレスで保存するか
     """
 
     def __init__(
         self,
+        output_format: OutputFormat = OutputFormat.PNG,
         quality: QualityPreset | int = QualityPreset.HIGH,
         lossless_alpha: bool = True,
     ) -> None:
         """ImageConverterを初期化する
 
         Args:
+            output_format: 出力形式（デフォルトはPNG、krkrsdl2互換のため）
             quality: WebP品質（プリセットまたは0-100の整数）
-            lossless_alpha: アルファチャンネルをロスレスで保存するか
+            lossless_alpha: アルファチャンネルをロスレスで保存するか（WebP時のみ使用）
         """
+        self._output_format = output_format
         if isinstance(quality, QualityPreset):
             self._quality = quality.value
         else:
             self._quality = quality
         self._lossless_alpha = lossless_alpha
         self._tlg_decoder = TLGImageDecoder()
+
+    @property
+    def output_format(self) -> OutputFormat:
+        """出力形式を返す"""
+        return self._output_format
 
     @property
     def quality(self) -> int:
@@ -178,9 +297,26 @@ class ImageConverter(BaseConverter):
         """対応する拡張子のタプルを返す
 
         Returns:
-            対応する拡張子のタプル（.tlg, .bmp, .jpg, .jpeg, .png）
+            対応する拡張子のタプル（.tlgのみ）
+            JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため変換不要
         """
-        return (".tlg", ".bmp", ".jpg", ".jpeg", ".png")
+        return (".tlg",)
+
+    def get_output_extension(self, source_path: Path) -> str | None:
+        """変換後のファイル拡張子を返す
+
+        出力形式に応じた拡張子を返す。TLGファイルはPNG/WebPに変換される。
+
+        Args:
+            source_path: 変換元ファイルのパス
+
+        Returns:
+            出力ファイルの拡張子（.pngまたは.webp）
+        """
+        if self._output_format == OutputFormat.PNG:
+            return ".png"
+        else:
+            return ".webp"
 
     def can_convert(self, file_path: Path) -> bool:
         """このConverterで変換可能なファイルかを判定する
@@ -197,9 +333,9 @@ class ImageConverter(BaseConverter):
         return ext in self.supported_extensions
 
     def convert(self, source: Path, dest: Path) -> ConversionResult:
-        """画像ファイルをWebP形式に変換する
+        """画像ファイルを指定された形式に変換する
 
-        BMP/JPG/PNG/TLG形式の画像をWebP形式に変換し、
+        BMP/JPG/PNG/TLG形式の画像をWebP/PNG形式に変換し、
         指定されたパスに出力する。
 
         Args:
@@ -213,20 +349,23 @@ class ImageConverter(BaseConverter):
         bytes_before = self._get_file_size(source)
 
         ext = source.suffix.lower()
-        # TLGファイルはTLGImageDecoderでデコード（decode()はまだ未実装）
+        # TLGファイルはTLGImageDecoderでデコード
         img = self._tlg_decoder.decode(source) if ext == ".tlg" else Image.open(source)
 
         try:
-            result = self._save_as_webp(img, dest, source, bytes_before)
+            if self._output_format == OutputFormat.PNG:
+                result = self._save_as_png(img, dest, source, bytes_before)
+            else:
+                result = self._save_as_webp(img, dest, source, bytes_before)
         finally:
             img.close()
 
         return result
 
     def convert_from_image(self, image: Image.Image, dest: Path) -> ConversionResult:
-        """PIL.ImageオブジェクトをWebP形式で保存する
+        """PIL.Imageオブジェクトを指定形式で保存する
 
-        既にメモリ上にある画像オブジェクトを直接WebP形式で保存する。
+        既にメモリ上にある画像オブジェクトを直接WebP/PNG形式で保存する。
         TLGデコード後の画像変換等に使用。
 
         Args:
@@ -237,7 +376,10 @@ class ImageConverter(BaseConverter):
             変換結果を表すConversionResultオブジェクト
         """
         # PIL.Imageからの変換はsource_pathが無いのでdestをダミーとして使用
-        return self._save_as_webp(image, dest, dest, bytes_before=0)
+        if self._output_format == OutputFormat.PNG:
+            return self._save_as_png(image, dest, dest, bytes_before=0)
+        else:
+            return self._save_as_webp(image, dest, dest, bytes_before=0)
 
     def _save_as_webp(
         self,
@@ -272,6 +414,49 @@ class ImageConverter(BaseConverter):
             if image.mode != "RGB":
                 image = image.convert("RGB")
             image.save(dest, "WEBP", quality=self._quality)
+
+        bytes_after = self._get_file_size(dest)
+
+        return ConversionResult(
+            source_path=source,
+            dest_path=dest,
+            status=ConversionStatus.SUCCESS,
+            bytes_before=bytes_before,
+            bytes_after=bytes_after,
+        )
+
+    def _save_as_png(
+        self,
+        image: Image.Image,
+        dest: Path,
+        source: Path,
+        bytes_before: int,
+    ) -> ConversionResult:
+        """画像をPNG形式で保存する内部メソッド
+
+        PNG形式はロスレス圧縮のため、品質設定は使用されない。
+
+        Args:
+            image: 保存するPIL.Imageオブジェクト
+            dest: 保存先パス
+            source: 変換元パス（結果記録用）
+            bytes_before: 変換前のファイルサイズ
+
+        Returns:
+            変換結果
+        """
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # PNG形式で保存（ロスレス）
+        # アルファチャンネルがある場合はRGBA、ない場合はRGB
+        if image.mode not in ("RGB", "RGBA", "L", "LA", "P", "PA"):
+            # 他のモードはRGB/RGBAに変換
+            if "A" in image.mode or image.mode == "PA":
+                image = image.convert("RGBA")
+            else:
+                image = image.convert("RGB")
+
+        image.save(dest, "PNG")
 
         bytes_after = self._get_file_size(dest)
 

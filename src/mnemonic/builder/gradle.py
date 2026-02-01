@@ -185,7 +185,11 @@ class GradleBuilder:
 
         output_log = result.stdout + result.stderr
 
-        if result.returncode != 0:
+        # BUILD SUCCESSFUL が含まれていれば成功とみなす
+        # (Gradle が警告で非ゼロ終了コードを返す場合があるため)
+        build_successful = "BUILD SUCCESSFUL" in output_log
+
+        if result.returncode != 0 and not build_successful:
             raise GradleBuildError(
                 f"Gradle build failed with exit code {result.returncode}: {output_log}"
             )
@@ -209,9 +213,12 @@ class GradleBuilder:
             GradleNotFoundError: Gradle wrapperが見つからない場合
         """
         result = self._run_gradle("clean")
+        output_log = result.stdout + result.stderr
 
-        if result.returncode != 0:
-            output_log = result.stdout + result.stderr
+        # BUILD SUCCESSFUL が含まれていれば成功とみなす
+        build_successful = "BUILD SUCCESSFUL" in output_log
+
+        if result.returncode != 0 and not build_successful:
             raise GradleBuildError(
                 f"Gradle clean failed with exit code {result.returncode}: {output_log}"
             )
@@ -241,13 +248,26 @@ class GradleBuilder:
         Returns:
             APKファイルのパス。ファイルが存在しない場合はNone。
         """
+        apk_dir = self._project_path / "app" / "build" / "outputs" / "apk" / build_type
+
+        if not apk_dir.exists():
+            return None
+
+        # ディレクトリ内の APK ファイルを検索
+        # 標準名を優先してチェック
         if build_type == "release":
-            apk_name = "app-release-unsigned.apk"
+            standard_names = ["app-release-unsigned.apk", "app-release.apk"]
         else:
-            apk_name = f"app-{build_type}.apk"
+            standard_names = [f"app-{build_type}.apk"]
 
-        apk_path = self._project_path / "app" / "build" / "outputs" / "apk" / build_type / apk_name
+        for name in standard_names:
+            apk_path = apk_dir / name
+            if apk_path.exists():
+                return apk_path
 
-        if apk_path.exists():
-            return apk_path
+        # 標準名が見つからない場合は、ディレクトリ内の任意の APK ファイルを返す
+        apk_files = list(apk_dir.glob("*.apk"))
+        if apk_files:
+            return apk_files[0]
+
         return None

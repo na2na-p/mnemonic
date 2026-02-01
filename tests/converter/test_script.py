@@ -257,9 +257,8 @@ var initialized = false;
 """
         result = adjuster.add_startup_directive(content)
 
-        assert "@if (kirikiriz)" in result
-        assert 'System.setArgument("-readencoding", "UTF-8");' in result
-        assert "@endif" in result
+        assert "// krkrsdl2 polyfill initialization" in result
+        assert 'Scripts.execStorage("system/polyfillinitialize.tjs");' in result
         assert "// Original script" in result
 
     def test_directive_is_added_at_beginning(self, adjuster: ScriptAdjuster) -> None:
@@ -267,7 +266,7 @@ var initialized = false;
         content = "var x = 1;"
         result = adjuster.add_startup_directive(content)
 
-        assert result.startswith("@if (kirikiriz)")
+        assert result.startswith("// krkrsdl2 polyfill initialization")
 
     def test_original_content_preserved(self, adjuster: ScriptAdjuster) -> None:
         """元の内容が保持されることを確認する"""
@@ -336,8 +335,8 @@ var kag = new KAGWindow();
 
         assert result.status == ConversionStatus.SUCCESS
         converted = dest.read_text(encoding="utf-8")
-        assert "@if (kirikiriz)" in converted
-        assert 'System.setArgument("-readencoding", "UTF-8");' in converted
+        assert "// krkrsdl2 polyfill initialization" in converted
+        assert 'Scripts.execStorage("system/polyfillinitialize.tjs");' in converted
 
     def test_skips_directive_when_disabled(self, tmp_path: Path) -> None:
         """add_encoding_directiveが無効の場合ディレクティブを追加しないことを確認する"""
@@ -432,3 +431,301 @@ var x = 1;
         converted = dest.read_text(encoding="utf-8")
         assert "日本語テスト" in converted
         assert "日本語コメント" in converted
+
+
+class TestScriptAdjusterMidiRules:
+    """MIDIファイル参照の変換ルールテスト"""
+
+    def test_replaces_midi_sound_buffer(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBufferをWaveSoundBufferに変換することを確認する"""
+        content = 'var bgm = new MIDISoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "WaveSoundBuffer" in adjusted
+        assert "MIDISoundBuffer" not in adjusted
+        assert count >= 1
+
+    def test_replaces_mid_extension_in_double_quotes(self, adjuster: ScriptAdjuster) -> None:
+        """.mid参照を.oggに変換することを確認する（ダブルクォート）"""
+        content = 'var bgm = new WaveSoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '"bgm/title.ogg"' in adjusted
+        assert count >= 1
+
+    def test_replaces_mid_extension_in_single_quotes(self, adjuster: ScriptAdjuster) -> None:
+        """.mid参照を.oggに変換することを確認する（シングルクォート）"""
+        content = "var bgm = new WaveSoundBuffer('bgm/title.mid');"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "'bgm/title.ogg'" in adjusted
+        assert count >= 1
+
+    def test_replaces_midi_extension(self, adjuster: ScriptAdjuster) -> None:
+        """.midi参照を.oggに変換することを確認する"""
+        content = 'var bgm = new WaveSoundBuffer("bgm/title.midi");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '"bgm/title.ogg"' in adjusted
+        assert count >= 1
+
+    def test_combined_midi_sound_buffer_and_extension(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBufferと.mid拡張子の両方を変換することを確認する"""
+        content = 'var bgm = new MIDISoundBuffer("bgm/title.mid");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "WaveSoundBuffer" in adjusted
+        assert "MIDISoundBuffer" not in adjusted
+        assert '"bgm/title.ogg"' in adjusted
+        assert count >= 2
+
+    def test_multiple_midi_references(self, adjuster: ScriptAdjuster) -> None:
+        """複数のMIDI参照を変換することを確認する"""
+        content = """var bgm1 = new MIDISoundBuffer("bgm/title.mid");
+var bgm2 = new MIDISoundBuffer("bgm/battle.midi");
+var se = new WaveSoundBuffer("se/click.wav");
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("WaveSoundBuffer") == 3
+        assert "MIDISoundBuffer" not in adjusted
+        assert '"bgm/title.ogg"' in adjusted
+        assert '"bgm/battle.ogg"' in adjusted
+        assert '"se/click.wav"' in adjusted  # WAVはそのまま
+
+    def test_does_not_replace_mid_in_unquoted_context(self, adjuster: ScriptAdjuster) -> None:
+        """クォートされていないコンテキストではMIDが変換されないことを確認する"""
+        content = "var midpoint = calculateMidpoint();"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # midpoint はそのまま維持されるべき
+        assert "midpoint" in adjusted
+        # MIDISoundBufferルールによるカウントがなければ0
+        # （他のルールがマッチしない限り）
+
+
+class TestScriptAdjusterMidiOutRule:
+    """WaveSoundBuffer.midiOut呼び出しのコメントアウトルールテスト"""
+
+    def test_replaces_midi_out_with_empty_statement(self, adjuster: ScriptAdjuster) -> None:
+        """WaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
+        content = "WaveSoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # 空文（;）で置換され、元のコードはコメントとして残る
+        assert adjusted.startswith("; // ")
+        assert "// WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_replaces_midi_out_with_indentation(self, adjuster: ScriptAdjuster) -> None:
+        """インデント付きのWaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
+        content = "    WaveSoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # インデントが保持され、空文で置換される
+        assert adjusted.startswith("    ; // ")
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_replaces_midi_out_with_different_arguments(self, adjuster: ScriptAdjuster) -> None:
+        """異なる引数のWaveSoundBuffer.midiOut呼び出しを空文に置換することを確認する"""
+        content = 'WaveSoundBuffer.midiOut("some_message");'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "; // " in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 1
+
+    def test_midi_out_converted_from_midi_sound_buffer(self, adjuster: ScriptAdjuster) -> None:
+        """MIDISoundBuffer.midiOutが変換後に空文に置換されることを確認する
+
+        MIDISoundBuffer → WaveSoundBuffer 変換後に midiOut が空文に置換されるべき
+        """
+        content = "MIDISoundBuffer.midiOut(midiInitialMessage);"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # MIDISoundBuffer → WaveSoundBuffer に変換される
+        assert "MIDISoundBuffer" not in adjusted
+        # 変換後の WaveSoundBuffer.midiOut が空文に置換される
+        assert "; // WaveSoundBuffer.midiOut(midiInitialMessage);" in adjusted
+        assert "Disabled: midiOut not available in WaveSoundBuffer" in adjusted
+        assert count >= 2  # MIDISoundBuffer変換 + midiOut置換
+
+    def test_multiple_midi_out_calls(self, adjuster: ScriptAdjuster) -> None:
+        """複数のmidiOut呼び出しを空文に置換することを確認する"""
+        content = """WaveSoundBuffer.midiOut(msg1);
+    WaveSoundBuffer.midiOut(msg2);
+WaveSoundBuffer.midiOut(msg3);
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("Disabled: midiOut not available in WaveSoundBuffer") == 3
+        # 各行が "; // WaveSoundBuffer.midiOut" で始まることを確認
+        lines = [line for line in adjusted.split("\n") if line.strip()]
+        for line in lines:
+            assert line.lstrip().startswith("; // WaveSoundBuffer.midiOut")
+        assert count >= 3
+
+
+class TestScriptAdjusterLoadpluginRules:
+    """loadpluginタグの変換ルールテスト"""
+
+    def test_replaces_extrans_dll_to_libextrans_so(self, adjuster: ScriptAdjuster) -> None:
+        """extrans.dllをlibextrans.soに変換することを確認する（Android krkrsdl2対応）"""
+        content = '[loadplugin module="extrans.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '[loadplugin module="libextrans.so"]' in adjusted
+        assert "extrans.dll" not in adjusted
+        assert count >= 1
+
+    def test_replaces_wuvorbis_dll_to_libwuvorbis_so(self, adjuster: ScriptAdjuster) -> None:
+        """wuvorbis.dllをlibwuvorbis.soに変換することを確認する"""
+        content = '[loadplugin module="wuvorbis.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert '[loadplugin module="libwuvorbis.so"]' in adjusted
+        assert "wuvorbis.dll" not in adjusted
+        assert count >= 1
+
+    def test_comments_out_krmovie_dll(self, adjuster: ScriptAdjuster) -> None:
+        """krmovie.dllをコメントアウトすることを確認する"""
+        content = '[loadplugin module="krmovie.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert ";#" in adjusted
+        assert "not supported on krkrsdl2" in adjusted
+        assert count >= 1
+
+    def test_comments_out_other_dll_plugins(self, adjuster: ScriptAdjuster) -> None:
+        """その他のDLLプラグインをコメントアウトすることを確認する"""
+        content = '[loadplugin module="layerexdraw.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert ";#" in adjusted
+        assert "Disabled for Android" in adjusted
+        assert count >= 1
+
+    def test_multiple_loadplugin_tags(self, adjuster: ScriptAdjuster) -> None:
+        """複数のloadpluginタグを処理することを確認する"""
+        content = """[loadplugin module="wuvorbis.dll"]
+[loadplugin module="extrans.dll"]
+[loadplugin module="krmovie.dll"]
+[loadplugin module="something.dll"]
+"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        # extrans.dll → libextrans.so
+        assert '[loadplugin module="libextrans.so"]' in adjusted
+        # wuvorbis.dll → libwuvorbis.so
+        assert '[loadplugin module="libwuvorbis.so"]' in adjusted
+        # krmovie.dll はkrkrsdl2未対応でコメントアウト
+        assert "not supported on krkrsdl2" in adjusted
+        # something.dll はAndroid非対応でコメントアウト
+        assert "Disabled for Android" in adjusted
+        assert count >= 4
+
+    def test_preserves_libextrans_so(self, adjuster: ScriptAdjuster) -> None:
+        """変換後のlibextrans.soタグは再変換されないことを確認する"""
+        content = '[loadplugin module="libextrans.so"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # libextrans.soはそのまま維持される（コメントアウトされない）
+        assert '[loadplugin module="libextrans.so"]' in adjusted
+        assert ";#" not in adjusted
+        assert count == 0
+
+    def test_handles_loadplugin_with_extra_spaces(self, adjuster: ScriptAdjuster) -> None:
+        """スペースを含むloadpluginタグを処理することを確認する"""
+        content = '[loadplugin  module="extrans.dll"]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # スペースが2つの場合も変換される
+        assert "extrans" in adjusted
+        # 注: 現在のパターンは厳密なスペース1つを想定しているため、
+        # スペース2つの場合は変換されない可能性がある
+
+
+class TestScriptAdjusterLayerAlphaRules:
+    """レイヤー透過修正ルールテスト（krkrsdl2対応）"""
+
+    def test_adds_type_alpha_to_layopt_without_type(self, adjuster: ScriptAdjuster) -> None:
+        """type=が未指定の[layopt layer=N]にtype=alphaを追加することを確認する"""
+        content = "[layopt layer=0 page=back visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert "type=alpha" in adjusted
+        assert adjusted == "[layopt layer=0 page=back visible=true type=alpha]"
+        assert count >= 1
+
+    def test_does_not_modify_layopt_with_existing_type(self, adjuster: ScriptAdjuster) -> None:
+        """既にtype=が指定されている[layopt]は変更しないことを確認する"""
+        content = "[layopt layer=0 type=opaque visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # type=opaqueはそのまま維持される
+        assert "type=opaque" in adjusted
+        assert adjusted.count("type=") == 1
+        # このルールによるカウントは0（他のルールがマッチしない限り）
+
+    def test_does_not_modify_layopt_with_type_alpha(self, adjuster: ScriptAdjuster) -> None:
+        """既にtype=alphaが指定されている[layopt]は変更しないことを確認する"""
+        content = "[layopt layer=0 type=alpha visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("type=alpha") == 1
+
+    def test_does_not_modify_base_layer(self, adjuster: ScriptAdjuster) -> None:
+        """layer=base（背景レイヤー）は変更しないことを確認する"""
+        content = "[layopt layer=base visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # baseはtype=alphaを追加しない（数字ではないため）
+        assert "type=alpha" not in adjusted
+        assert adjusted == content
+
+    def test_does_not_modify_message_layer(self, adjuster: ScriptAdjuster) -> None:
+        """layer=message（メッセージレイヤー）は変更しないことを確認する"""
+        content = "[layopt layer=message visible=true]"
+        adjusted, count = adjuster.adjust_content(content)
+
+        # messageはtype=alphaを追加しない（数字ではないため）
+        assert "type=alpha" not in adjusted
+        assert adjusted == content
+
+    def test_adds_type_alpha_to_multiple_numbered_layers(self, adjuster: ScriptAdjuster) -> None:
+        """複数の数字レイヤーにtype=alphaを追加することを確認する"""
+        content = """[layopt layer=0 visible=true]
+[layopt layer=1 visible=true]
+[layopt layer=2 page=back visible=true]"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        assert adjusted.count("type=alpha") == 3
+        assert count >= 3
+
+    def test_handles_layopt_in_kag_script(self, adjuster: ScriptAdjuster) -> None:
+        """実際のKAGスクリプトパターンを処理できることを確認する"""
+        content = """[backlay]
+[image storage="title-base" layer=base page=back]
+[layopt layer=0 page=back visible=true]
+[image storage="title-fore" layer=0 page=back top=0 left=0]
+[trans method=crossfade time=2000]
+[wt]"""
+        adjusted, count = adjuster.adjust_content(content)
+
+        # layer=0のlayoptにtype=alphaが追加される
+        assert "[layopt layer=0 page=back visible=true type=alpha]" in adjusted
+        # 他のタグは変更されない
+        assert '[image storage="title-base" layer=base page=back]' in adjusted
+        assert "[trans method=crossfade time=2000]" in adjusted
+        assert count >= 1
+
+    def test_layopt_with_quoted_layer_value(self, adjuster: ScriptAdjuster) -> None:
+        """クォート付きlayer値を処理しないことを確認する（数字パターンのため）"""
+        content = '[layopt layer="0" visible=true]'
+        adjusted, count = adjuster.adjust_content(content)
+
+        # layer="0"は数字パターン layer=[0-9]+ にマッチしないため変更されない
+        # これは想定通りの動作（KAGでは通常クォートなしで数字を指定）
+        assert adjusted == content

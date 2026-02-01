@@ -168,8 +168,8 @@ class TestDependencies:
         assert len(DEPENDENCIES) > 0
 
     def test_dependencies_count(self) -> None:
-        """DEPENDENCIESは5つの依存ツールを含む"""
-        assert len(DEPENDENCIES) == 5
+        """DEPENDENCIESは6つの依存ツールを含む"""
+        assert len(DEPENDENCIES) == 6
 
     @pytest.mark.parametrize(
         "expected_name,expected_command,expected_required",

@@ -1,0 +1,33 @@
+﻿// MenuItem_stub.tjs - MenuItem Stub for krkrsdl2
+// Source: https://github.com/krkrsdl2/kag3
+// Based on KAG3 (Kirikiri Adventure Game System)
+// Copyright (C) W.Dee and contributors - 改変・配布は自由です
+
+class MenuItem
+{
+	var caption;
+	var checked;
+	var enabled;
+	var group;
+	var radio;
+	var shortcut;
+	var visible;
+	var parent;
+	var children;
+	var root;
+	var window;
+	var index;
+	function MenuItem() {
+		children = [];
+	}
+	function finalize() {}
+	function add() {}
+	function insert() {}
+	function remove() {}
+	function popup() {}
+	function onClick() {}
+	function fireClick() {}
+}
+
+global.Window.menu = new MenuItem();
+

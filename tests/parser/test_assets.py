@@ -54,6 +54,11 @@ class TestConversionAction:
                 id="正常系: UTF-8エンコード",
             ),
             pytest.param(
+                ConversionAction.CONVERT_PNG,
+                "convert_png",
+                id="正常系: PNG変換",
+            ),
+            pytest.param(
                 ConversionAction.CONVERT_WEBP,
                 "convert_webp",
                 id="正常系: WebP変換",
@@ -89,8 +94,8 @@ class TestConversionAction:
         assert action.value == expected_value
 
     def test_conversion_action_count(self) -> None:
-        """ConversionActionは6種類存在する"""
-        assert len(ConversionAction) == 6
+        """ConversionActionは7種類存在する"""
+        assert len(ConversionAction) == 7
 
 
 class TestAssetFile:
@@ -117,12 +122,12 @@ class TestAssetFile:
         asset = AssetFile(
             path=Path("image/bg01.tlg"),
             asset_type=AssetType.IMAGE,
-            action=ConversionAction.CONVERT_WEBP,
+            action=ConversionAction.CONVERT_PNG,
             source_format=".tlg",
-            target_format=".webp",
+            target_format=".png",
         )
 
-        assert asset.target_format == ".webp"
+        assert asset.target_format == ".png"
 
     def test_asset_file_is_immutable(self) -> None:
         """AssetFileはイミュータブル（frozen=True）"""
@@ -162,16 +167,16 @@ class TestAssetManifest:
             AssetFile(
                 path=Path("image/bg01.tlg"),
                 asset_type=AssetType.IMAGE,
-                action=ConversionAction.CONVERT_WEBP,
+                action=ConversionAction.CONVERT_PNG,
                 source_format=".tlg",
-                target_format=".webp",
+                target_format=".png",
             ),
             AssetFile(
                 path=Path("image/chara.bmp"),
                 asset_type=AssetType.IMAGE,
-                action=ConversionAction.CONVERT_WEBP,
+                action=ConversionAction.COPY,
                 source_format=".bmp",
-                target_format=".webp",
+                target_format=None,
             ),
             AssetFile(
                 path=Path("bgm/title.wav"),
@@ -294,17 +299,18 @@ class TestAssetManifest:
         assert len(result) == 2
         assert all(f.action == ConversionAction.ENCODE_UTF8 for f in result)
 
-    def test_filter_by_action_convert_webp(self, sample_files: list[AssetFile]) -> None:
-        """filter_by_action()でCONVERT_WEBPアクションがフィルタされる"""
+    def test_filter_by_action_convert_png(self, sample_files: list[AssetFile]) -> None:
+        """filter_by_action()でCONVERT_PNGアクションがフィルタされる"""
         manifest = AssetManifest(
             game_dir=Path("/games/mygame"),
             files=sample_files,
         )
 
-        result = manifest.filter_by_action(ConversionAction.CONVERT_WEBP)
+        result = manifest.filter_by_action(ConversionAction.CONVERT_PNG)
 
-        assert len(result) == 2
-        assert all(f.action == ConversionAction.CONVERT_WEBP for f in result)
+        # TLGのみがCONVERT_PNG（JPEG/BMPはkrkrsdl2でネイティブサポートのためCOPY）
+        assert len(result) == 1
+        assert all(f.action == ConversionAction.CONVERT_PNG for f in result)
 
     def test_filter_by_action_convert_ogg(self, sample_files: list[AssetFile]) -> None:
         """filter_by_action()でCONVERT_OGGアクションがフィルタされる"""
@@ -339,7 +345,8 @@ class TestAssetManifest:
 
         result = manifest.filter_by_action(ConversionAction.COPY)
 
-        assert len(result) == 2
+        # ogg, txt, bmp がCOPY（JPEG/BMPはkrkrsdl2でネイティブサポート）
+        assert len(result) == 3
         assert all(f.action == ConversionAction.COPY for f in result)
 
     def test_get_summary(self, sample_files: list[AssetFile]) -> None:
@@ -579,33 +586,28 @@ class TestAssetScannerConversionAction:
         assert len(manifest.files) == 1
         assert manifest.files[0].action == expected_action
 
+    def test_tlg_conversion_action(self, tmp_path: Path) -> None:
+        """TLGファイルにCONVERT_PNGが設定される（krkrsdl2がTLG未対応のため）"""
+        test_file = tmp_path / "test.tlg"
+        test_file.write_bytes(b"\x00TLG5")
+
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.CONVERT_PNG
+        assert manifest.files[0].target_format == ".png"
+
     @pytest.mark.parametrize(
-        "extension,expected_action",
+        "extension",
         [
-            pytest.param(
-                ".tlg",
-                ConversionAction.CONVERT_WEBP,
-                id="正常系: .tlgはCONVERT_WEBP",
-            ),
-            pytest.param(
-                ".bmp",
-                ConversionAction.CONVERT_WEBP,
-                id="正常系: .bmpはCONVERT_WEBP",
-            ),
-            pytest.param(
-                ".jpg",
-                ConversionAction.CONVERT_WEBP,
-                id="正常系: .jpgはCONVERT_WEBP",
-            ),
+            pytest.param(".bmp", id="正常系: .bmpはCOPY"),
+            pytest.param(".jpg", id="正常系: .jpgはCOPY"),
+            pytest.param(".jpeg", id="正常系: .jpegはCOPY"),
         ],
     )
-    def test_image_conversion_action(
-        self,
-        tmp_path: Path,
-        extension: str,
-        expected_action: ConversionAction,
-    ) -> None:
-        """画像ファイルにCONVERT_WEBPが設定される"""
+    def test_native_image_copy_action(self, tmp_path: Path, extension: str) -> None:
+        """JPEG/BMPファイルにCOPYが設定される（krkrsdl2でネイティブサポート）"""
         test_file = tmp_path / f"test{extension}"
         test_file.write_bytes(b"\x00")
 
@@ -613,7 +615,8 @@ class TestAssetScannerConversionAction:
         manifest = scanner.scan()
 
         assert len(manifest.files) == 1
-        assert manifest.files[0].action == expected_action
+        assert manifest.files[0].action == ConversionAction.COPY
+        assert manifest.files[0].target_format is None
 
     def test_wav_conversion_action(self, tmp_path: Path) -> None:
         """WAVファイルにCONVERT_OGGが設定される"""
@@ -636,6 +639,18 @@ class TestAssetScannerConversionAction:
 
         assert len(manifest.files) == 1
         assert manifest.files[0].action == ConversionAction.COPY
+
+    def test_png_copy_action(self, tmp_path: Path) -> None:
+        """PNGファイルにCOPYが設定される（変換不要）"""
+        test_file = tmp_path / "test.png"
+        test_file.write_bytes(b"\x89PNG")
+
+        scanner = AssetScanner(game_dir=tmp_path)
+        manifest = scanner.scan()
+
+        assert len(manifest.files) == 1
+        assert manifest.files[0].action == ConversionAction.COPY
+        assert manifest.files[0].target_format is None
 
     @pytest.mark.parametrize(
         "extension,expected_action",

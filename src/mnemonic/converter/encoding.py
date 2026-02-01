@@ -228,7 +228,15 @@ class EncodingConverter(BaseConverter):
         Returns:
             対応するテキストファイル拡張子のタプル
         """
-        return (".ks", ".tjs", ".txt", ".csv", ".ini")
+        return (".ks", ".tjs", ".txt", ".csv", ".ini", ".asd")
+
+    @property
+    def _kirikiri_script_extensions(self) -> tuple[str, ...]:
+        """吉里吉里スクリプトファイルの拡張子を返す
+
+        これらのファイルは UTF-8 BOM が必要（BOM がないと Shift_JIS として解釈される）
+        """
+        return (".ks", ".tjs", ".asd")
 
     def can_convert(self, file_path: Path) -> bool:
         """このConverterで変換可能なファイルかを判定する
@@ -279,12 +287,14 @@ class EncodingConverter(BaseConverter):
             source_encoding = detection_result.encoding or "utf-8"
 
         # 既にターゲットエンコーディングの場合はスキップ（BOMなしのUTF-8）
+        # ただし吉里吉里スクリプトファイルは BOM が必要なのでスキップしない
         target_normalized = self._target_encoding.lower().replace("-", "_")
         source_normalized = source_encoding.lower().replace("-", "_")
         utf8_bom = b"\xef\xbb\xbf"
         has_bom = data.startswith(utf8_bom)
+        is_kirikiri_script = source.suffix.lower() in self._kirikiri_script_extensions
 
-        if source_normalized == target_normalized and not has_bom:
+        if source_normalized == target_normalized and not has_bom and not is_kirikiri_script:
             return ConversionResult(
                 source_path=source,
                 dest_path=dest,
@@ -302,6 +312,14 @@ class EncodingConverter(BaseConverter):
         try:
             text = data.decode(source_encoding)
             result_bytes = text.encode(self._target_encoding)
+
+            # 吉里吉里スクリプトファイル (.ks, .tjs, .asd) は UTF-8 BOM が必要
+            # BOM がないと Shift_JIS として解釈しようとしてエラーになる
+            is_kirikiri_script = source.suffix.lower() in self._kirikiri_script_extensions
+            is_utf8_target = self._target_encoding.lower().replace("-", "_") == "utf_8"
+            if is_kirikiri_script and is_utf8_target:
+                result_bytes = utf8_bom + result_bytes
+
         except (UnicodeDecodeError, UnicodeEncodeError) as e:
             return ConversionResult(
                 source_path=source,
