@@ -211,8 +211,9 @@ class TLG5Decoder:
         """デルタエンコーディングされたデータを復元する
 
         TLG5のデルタエンコーディング:
-        - 各行の最初のピクセルは前の行の最初のピクセルとの差分
-        - 行内の各ピクセルは同じ行の前のピクセルとの差分
+        - 各ピクセル = (水平累積 + delta + 上のピクセル) & 0xFF
+        - 水平累積は各行でリセットされる
+        - 最初の行（y=0）では上のピクセル = 0
 
         Args:
             channel: 復元先のチャンネルデータ
@@ -226,22 +227,23 @@ class TLG5Decoder:
         for row in range(rows):
             y = y_start + row
             row_offset = y * width
+            prev_row_offset = (y - 1) * width if y > 0 else None
+
+            # 各行で水平累積をリセット
+            horizontal_accum = 0
 
             for x in range(width):
                 delta_value = delta_data[delta_pos]
                 delta_pos += 1
 
-                if x == 0:
-                    # 各行の最初のピクセル: 前の行の最初のピクセルとの差分
-                    if y == 0:
-                        # 最初の行は直接値
-                        channel[row_offset] = delta_value
-                    else:
-                        prev_row_offset = (y - 1) * width
-                        channel[row_offset] = (channel[prev_row_offset] + delta_value) & 0xFF
-                else:
-                    # 行内の他のピクセル: 同じ行の前のピクセルとの差分
-                    channel[row_offset + x] = (channel[row_offset + x - 1] + delta_value) & 0xFF
+                # 水平累積に加算
+                horizontal_accum = (horizontal_accum + delta_value) & 0xFF
+
+                # 上のピクセルを取得（y=0の場合は0）
+                upper_pixel = channel[prev_row_offset + x] if prev_row_offset is not None else 0
+
+                # 最終値 = 水平累積 + 上のピクセル
+                channel[row_offset + x] = (horizontal_accum + upper_pixel) & 0xFF
 
     def _create_image(
         self,

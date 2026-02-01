@@ -322,17 +322,21 @@ public class KirikiriSDL2Activity extends SDLActivity {{
 
     /**
      * krkrsdl2に渡すコマンドライン引数を設定する
-     * プラグイン検索パスにネイティブライブラリディレクトリを追加
+     * - プラグイン検索パス: ネイティブライブラリディレクトリを指定
+     * - holdalpha: アルファチャンネル保持を有効化（透過表示の互換性向上）
      */
     @Override
     protected String[] getArguments() {{
         if (sNativeLibDir != null) {{
             Log.i(TAG, "Setting plugin search path: " + sNativeLibDir);
             return new String[]{{
-                "-krkrsdl2_pluginsearchpath=" + sNativeLibDir
+                "-krkrsdl2_pluginsearchpath=" + sNativeLibDir,
+                "-holdalpha=yes"
             }};
         }}
-        return new String[]{{}};
+        return new String[]{{
+            "-holdalpha=yes"
+        }};
     }}
 
     /**

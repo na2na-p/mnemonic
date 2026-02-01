@@ -72,6 +72,20 @@ with(global.Window)
 		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "videooverlay_stub.tjs");
 	}
 
+	// Enable alpha channel hold for better transparency handling
+	// This ensures proper alpha blending on Android/krkrsdl2
+	if (typeof(global.System.setArgument) === "Object")
+	{
+		try
+		{
+			global.System.setArgument("-holdalpha", "yes");
+		}
+		catch (e)
+		{
+			// pass - argument may already be set via command line
+		}
+	}
+
 	// Load font and set it as default
 	if (typeof(global.Font) === "Object" && typeof(global.Font.addFont) === "Object")
 	{

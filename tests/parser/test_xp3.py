@@ -15,6 +15,7 @@ from mnemonic.parser import (
     XP3EncryptionChecker,
     XP3EncryptionError,
 )
+from mnemonic.parser.xp3 import XP3_MAGIC, XP3FileEntry, XP3Segment
 
 
 class TestEncryptionType:
@@ -323,3 +324,283 @@ class TestXP3ArchiveIntegration:
         archive = XP3Archive(xp3_file)
         with pytest.raises(FileNotFoundError):
             archive.extract_file(filename, output_path)
+
+
+class TestXP3Segment:
+    """XP3Segmentデータクラスのテスト"""
+
+    def test_segment_creation(self) -> None:
+        """正常系: XP3Segmentが正しく生成される"""
+        segment = XP3Segment(
+            offset=1000,
+            size=500,
+            original_size=800,
+            is_compressed=True,
+        )
+
+        assert segment.offset == 1000
+        assert segment.size == 500
+        assert segment.original_size == 800
+        assert segment.is_compressed is True
+
+    def test_segment_is_immutable(self) -> None:
+        """XP3Segmentはイミュータブル"""
+        segment = XP3Segment(
+            offset=1000,
+            size=500,
+            original_size=800,
+            is_compressed=True,
+        )
+
+        with pytest.raises(AttributeError):
+            segment.offset = 2000  # type: ignore[misc]
+
+
+class TestXP3FileEntryWithSegments:
+    """複数セグメント対応のXP3FileEntryのテスト"""
+
+    def test_file_entry_with_single_segment(self) -> None:
+        """正常系: 単一セグメントのXP3FileEntryが正しく生成される"""
+        segment = XP3Segment(
+            offset=1000,
+            size=500,
+            original_size=800,
+            is_compressed=True,
+        )
+        entry = XP3FileEntry(
+            name="test.ogg",
+            segments=[segment],
+            is_encrypted=False,
+        )
+
+        assert entry.name == "test.ogg"
+        assert len(entry.segments) == 1
+        assert entry.segments[0].offset == 1000
+        assert entry.total_size == 800
+
+    def test_file_entry_with_multiple_segments(self) -> None:
+        """正常系: 複数セグメントのXP3FileEntryが正しく生成される"""
+        segments = [
+            XP3Segment(offset=100, size=50, original_size=101, is_compressed=True),
+            XP3Segment(offset=200, size=100, original_size=192, is_compressed=True),
+            XP3Segment(offset=300, size=5000, original_size=11905, is_compressed=True),
+        ]
+        entry = XP3FileEntry(
+            name="水滴.ogg",
+            segments=segments,
+            is_encrypted=False,
+        )
+
+        assert entry.name == "水滴.ogg"
+        assert len(entry.segments) == 3
+        # total_sizeは全セグメントのoriginal_sizeの合計
+        assert entry.total_size == 101 + 192 + 11905  # 12198
+
+    def test_file_entry_total_size_property(self) -> None:
+        """正常系: total_sizeプロパティが全セグメントの合計を返す"""
+        segments = [
+            XP3Segment(offset=0, size=100, original_size=100, is_compressed=False),
+            XP3Segment(offset=100, size=200, original_size=200, is_compressed=False),
+            XP3Segment(offset=300, size=300, original_size=300, is_compressed=False),
+        ]
+        entry = XP3FileEntry(
+            name="test.bin",
+            segments=segments,
+            is_encrypted=False,
+        )
+
+        assert entry.total_size == 600
+
+    def test_file_entry_is_immutable(self) -> None:
+        """XP3FileEntryはイミュータブル"""
+        segment = XP3Segment(
+            offset=1000,
+            size=500,
+            original_size=800,
+            is_compressed=True,
+        )
+        entry = XP3FileEntry(
+            name="test.ogg",
+            segments=[segment],
+            is_encrypted=False,
+        )
+
+        with pytest.raises(AttributeError):
+            entry.name = "other.ogg"  # type: ignore[misc]
+
+
+class TestXP3MultipleSegmentParsing:
+    """複数セグメントのパースと抽出のテスト"""
+
+    def _create_xp3_with_multiple_segments(
+        self, tmp_path: Path, segments_data: list[tuple[bytes, bool]]
+    ) -> tuple[Path, bytes]:
+        """複数セグメントを持つXP3ファイルを作成する
+
+        Args:
+            tmp_path: 一時ディレクトリ
+            segments_data: (データ, 圧縮フラグ)のリスト
+
+        Returns:
+            (XP3ファイルパス, 期待される結合データ)
+        """
+        import struct
+        import zlib
+
+        xp3_file = tmp_path / "multi_segment.xp3"
+
+        # ヘッダー: XP3 magic (11バイト) + info_offset (8バイト)
+        header = bytearray(XP3_MAGIC)
+
+        # ファイルデータを構築（各セグメントを連結）
+        file_data_parts: list[bytes] = []
+        segment_infos: list[tuple[int, int, int, bool]] = []  # (offset, size, orig_size, comp)
+
+        current_offset = 100  # ファイルデータの開始位置（ヘッダー後）
+
+        expected_data = bytearray()
+        for data, is_compressed in segments_data:
+            if is_compressed:
+                compressed = zlib.compress(data)
+                file_data_parts.append(compressed)
+                segment_infos.append((current_offset, len(compressed), len(data), True))
+                current_offset += len(compressed)
+            else:
+                file_data_parts.append(data)
+                segment_infos.append((current_offset, len(data), len(data), False))
+                current_offset += len(data)
+            expected_data.extend(data)
+
+        # ファイルエントリの構築
+        entry_data = bytearray()
+
+        # infoチャンク
+        file_name = "test.bin"
+        name_bytes = file_name.encode("utf-16-le")
+        total_original_size = sum(s[2] for s in segment_infos)
+        total_compressed_size = sum(s[1] for s in segment_infos)
+
+        info_content = bytearray()
+        info_content.extend(struct.pack("<I", 0))  # flags
+        info_content.extend(struct.pack("<Q", total_original_size))
+        info_content.extend(struct.pack("<Q", total_compressed_size))
+        info_content.extend(struct.pack("<H", len(file_name)))
+        info_content.extend(name_bytes)
+
+        entry_data.extend(b"info")
+        entry_data.extend(struct.pack("<Q", len(info_content)))
+        entry_data.extend(info_content)
+
+        # segmチャンク（複数セグメント情報を含む）
+        segm_content = bytearray()
+        for offset, size, orig_size, is_comp in segment_infos:
+            flags = 0x07 if is_comp else 0x00
+            segm_content.extend(struct.pack("<I", flags))
+            segm_content.extend(struct.pack("<Q", offset))
+            segm_content.extend(struct.pack("<Q", size))
+            segm_content.extend(struct.pack("<Q", orig_size))
+
+        entry_data.extend(b"segm")
+        entry_data.extend(struct.pack("<Q", len(segm_content)))
+        entry_data.extend(segm_content)
+
+        # adlrチャンク
+        entry_data.extend(b"adlr")
+        entry_data.extend(struct.pack("<Q", 4))
+        entry_data.extend(struct.pack("<I", 0))  # dummy checksum
+
+        # Fileチャンク
+        file_chunk = bytearray()
+        file_chunk.extend(b"File")
+        file_chunk.extend(struct.pack("<Q", len(entry_data)))
+        file_chunk.extend(entry_data)
+
+        # ファイルテーブルを圧縮
+        compressed_table = zlib.compress(bytes(file_chunk))
+
+        # info_offsetの位置（ファイルデータの後）
+        info_offset = current_offset
+        header.extend(struct.pack("<Q", info_offset))
+
+        # パディング
+        header_with_padding = bytes(header).ljust(100, b"\x00")
+
+        # ファイルを構築
+        with open(xp3_file, "wb") as f:
+            f.write(header_with_padding)
+            for part in file_data_parts:
+                f.write(part)
+            # info構造: flag (1) + compressed_size (8) + original_size (8) + zlib_data
+            f.write(struct.pack("<B", 0x00))  # flag
+            f.write(struct.pack("<Q", len(compressed_table)))
+            f.write(struct.pack("<Q", len(file_chunk)))
+            f.write(compressed_table)
+
+        return xp3_file, bytes(expected_data)
+
+    def test_parse_multiple_segments(self, tmp_path: Path) -> None:
+        """正常系: 複数セグメントを持つエントリが正しくパースされる"""
+        # 3つのセグメントを持つファイルを作成
+        segments_data = [
+            (b"A" * 101, True),  # セグメント1: 101バイト、圧縮
+            (b"B" * 192, True),  # セグメント2: 192バイト、圧縮
+            (b"C" * 11905, True),  # セグメント3: 11905バイト、圧縮
+        ]
+        xp3_file, expected_data = self._create_xp3_with_multiple_segments(tmp_path, segments_data)
+
+        archive = XP3Archive(xp3_file)
+        files = archive.list_files()
+
+        assert "test.bin" in files
+
+    def test_extract_multiple_segments_concatenated(self, tmp_path: Path) -> None:
+        """正常系: 複数セグメントが連結されて抽出される"""
+        segments_data = [
+            (b"FIRST_SEGMENT_DATA_", False),
+            (b"SECOND_SEGMENT_DATA_", False),
+            (b"THIRD_SEGMENT_DATA", False),
+        ]
+        xp3_file, expected_data = self._create_xp3_with_multiple_segments(tmp_path, segments_data)
+
+        archive = XP3Archive(xp3_file)
+        output_path = tmp_path / "output" / "test.bin"
+        archive.extract_file("test.bin", output_path)
+
+        assert output_path.exists()
+        actual_data = output_path.read_bytes()
+        assert actual_data == expected_data
+
+    def test_extract_multiple_compressed_segments(self, tmp_path: Path) -> None:
+        """正常系: 複数の圧縮セグメントが正しく解凍・連結される"""
+        segments_data = [
+            (b"X" * 100, True),  # 圧縮セグメント1
+            (b"Y" * 200, True),  # 圧縮セグメント2
+            (b"Z" * 300, True),  # 圧縮セグメント3
+        ]
+        xp3_file, expected_data = self._create_xp3_with_multiple_segments(tmp_path, segments_data)
+
+        archive = XP3Archive(xp3_file)
+        output_path = tmp_path / "output" / "test.bin"
+        archive.extract_file("test.bin", output_path)
+
+        assert output_path.exists()
+        actual_data = output_path.read_bytes()
+        assert len(actual_data) == 600  # 100 + 200 + 300
+        assert actual_data == expected_data
+
+    def test_extract_mixed_compression_segments(self, tmp_path: Path) -> None:
+        """正常系: 圧縮・非圧縮が混在するセグメントが正しく処理される"""
+        segments_data = [
+            (b"UNCOMPRESSED_1_", False),  # 非圧縮
+            (b"C" * 100, True),  # 圧縮
+            (b"UNCOMPRESSED_2", False),  # 非圧縮
+        ]
+        xp3_file, expected_data = self._create_xp3_with_multiple_segments(tmp_path, segments_data)
+
+        archive = XP3Archive(xp3_file)
+        output_path = tmp_path / "output" / "test.bin"
+        archive.extract_file("test.bin", output_path)
+
+        assert output_path.exists()
+        actual_data = output_path.read_bytes()
+        assert actual_data == expected_data

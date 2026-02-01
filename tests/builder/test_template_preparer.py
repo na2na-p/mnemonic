@@ -415,6 +415,31 @@ class TestTemplatePreparerUpdateJavaSource:
         # 古いディレクトリが削除されていることを確認
         assert not old_java_dir.exists()
 
+    def test_update_java_source_includes_holdalpha_argument(self, tmp_path: Path) -> None:
+        """正常系: getArguments に -holdalpha=yes が含まれる"""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        preparer = TemplatePreparer(project_dir=project_dir)
+
+        preparer._update_java_source("com.example.game")
+
+        java_file = (
+            project_dir
+            / "app"
+            / "src"
+            / "main"
+            / "java"
+            / "com"
+            / "example"
+            / "game"
+            / "KirikiriSDL2Activity.java"
+        )
+        content = java_file.read_text(encoding="utf-8")
+
+        # -holdalpha=yes がgetArguments内に含まれていることを確認
+        assert '"-holdalpha=yes"' in content
+
 
 class TestTemplatePreparerUpdateBuildGradle:
     """TemplatePreparer._update_build_gradleのテスト"""

@@ -95,24 +95,43 @@ class XP3EncryptionError(Exception):
 
 
 @dataclass(frozen=True)
+class XP3Segment:
+    """XP3ファイルセグメント情報
+
+    XP3アーカイブ内のファイルは複数のセグメントに分割されている場合がある。
+    各セグメントは異なるオフセットに配置され、個別に圧縮される可能性がある。
+
+    Attributes:
+        offset: セグメントデータのオフセット
+        size: 圧縮後サイズ
+        original_size: 元のサイズ
+        is_compressed: 圧縮されているか
+    """
+
+    offset: int
+    size: int
+    original_size: int
+    is_compressed: bool
+
+
+@dataclass(frozen=True)
 class XP3FileEntry:
     """XP3アーカイブ内のファイルエントリ情報
 
     Attributes:
         name: ファイル名（パス含む）
-        offset: ファイルデータのオフセット
-        size: 圧縮後サイズ
-        original_size: 元のサイズ
-        is_compressed: 圧縮されているか
+        segments: ファイルを構成するセグメントのリスト
         is_encrypted: 暗号化されているか
     """
 
     name: str
-    offset: int
-    size: int
-    original_size: int
-    is_compressed: bool
+    segments: tuple[XP3Segment, ...]
     is_encrypted: bool
+
+    @property
+    def total_size(self) -> int:
+        """全セグメントの元サイズの合計を返す"""
+        return sum(s.original_size for s in self.segments)
 
 
 class XP3Archive:
@@ -321,10 +340,7 @@ class XP3Archive:
         """
         stream = BytesIO(entry_data)
         name = ""
-        offset = 0
-        size = 0
-        original_size = 0
-        is_compressed = False
+        segments: list[XP3Segment] = []
         is_encrypted = False
 
         while True:
@@ -342,8 +358,7 @@ class XP3Archive:
                 info_data = stream.read(sub_chunk_size)
                 if len(info_data) >= 22:
                     flags = struct.unpack("<I", info_data[0:4])[0]
-                    original_size = struct.unpack("<Q", info_data[4:12])[0]
-                    size = struct.unpack("<Q", info_data[12:20])[0]
+                    # original_size, sizeはsegmチャンクから取得するためスキップ
                     name_len = struct.unpack("<H", info_data[20:22])[0]
                     if len(info_data) >= 22 + name_len * 2:
                         name_bytes = info_data[22 : 22 + name_len * 2]
@@ -353,17 +368,37 @@ class XP3Archive:
                             name = ""
 
                     is_encrypted = bool(flags & 0x80000000)
-                    is_compressed = size != original_size
 
             elif sub_chunk_name == b"segm":
-                # セグメント情報チャンク
+                # セグメント情報チャンク（複数セグメント対応）
                 segm_data = stream.read(sub_chunk_size)
-                if len(segm_data) >= 28:
-                    flags = struct.unpack("<I", segm_data[0:4])[0]
-                    offset = struct.unpack("<Q", segm_data[4:12])[0]
-                    size = struct.unpack("<Q", segm_data[12:20])[0]
-                    original_size = struct.unpack("<Q", segm_data[20:28])[0]
-                    is_compressed = bool(flags & 0x07)
+                # 各セグメントは28バイト: flags(4) + offset(8) + size(8) + original_size(8)
+                segment_size = 28
+                num_segments = len(segm_data) // segment_size
+
+                for i in range(num_segments):
+                    seg_offset = i * segment_size
+                    if seg_offset + segment_size > len(segm_data):
+                        break
+
+                    seg_flags = struct.unpack("<I", segm_data[seg_offset : seg_offset + 4])[0]
+                    seg_data_offset = struct.unpack(
+                        "<Q", segm_data[seg_offset + 4 : seg_offset + 12]
+                    )[0]
+                    seg_size = struct.unpack("<Q", segm_data[seg_offset + 12 : seg_offset + 20])[0]
+                    seg_original_size = struct.unpack(
+                        "<Q", segm_data[seg_offset + 20 : seg_offset + 28]
+                    )[0]
+                    seg_is_compressed = bool(seg_flags & 0x07)
+
+                    segments.append(
+                        XP3Segment(
+                            offset=seg_data_offset,
+                            size=seg_size,
+                            original_size=seg_original_size,
+                            is_compressed=seg_is_compressed,
+                        )
+                    )
 
             elif sub_chunk_name == b"adlr":
                 # Adler32チェックサムチャンク（スキップ）
@@ -373,13 +408,10 @@ class XP3Archive:
                 # 不明なサブチャンクはスキップ
                 stream.seek(sub_chunk_size, 1)
 
-        if name:
+        if name and segments:
             return XP3FileEntry(
                 name=name,
-                offset=offset,
-                size=size,
-                original_size=original_size,
-                is_compressed=is_compressed,
+                segments=tuple(segments),
                 is_encrypted=is_encrypted,
             )
         return None
@@ -449,6 +481,8 @@ class XP3Archive:
     def _extract_entry(self, f: BinaryIO, entry: XP3FileEntry, output_path: Path) -> None:
         """エントリを展開する
 
+        複数セグメントに分割されたファイルを全て読み取り、連結して出力する。
+
         Args:
             f: ファイルオブジェクト
             entry: 展開するエントリ
@@ -456,12 +490,17 @@ class XP3Archive:
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        f.seek(entry.offset)
-        data = f.read(entry.size)
+        # 全セグメントを読み取って連結
+        data = bytearray()
+        for segment in entry.segments:
+            f.seek(segment.offset)
+            segment_data = f.read(segment.size)
 
-        if entry.is_compressed and entry.size != entry.original_size:
-            with contextlib.suppress(zlib.error):
-                data = zlib.decompress(data)
+            if segment.is_compressed and segment.size != segment.original_size:
+                with contextlib.suppress(zlib.error):
+                    segment_data = zlib.decompress(segment_data)
+
+            data.extend(segment_data)
 
         output_path.write_bytes(data)
 
