@@ -19,9 +19,16 @@ jobs:
     uses: ./.github/workflows/app-ci.yml
     secrets: inherit
 
+  app-ci-go:
+    name: App CI (Go)
+    uses: ./.github/workflows/app-ci-go.yml
+    secrets: inherit
+
   summary:
     name: Summary
-    needs: app-ci
+    needs:
+      - app-ci
+      - app-ci-go
     runs-on: ubuntu-latest
     if: always()
 
@@ -33,6 +40,7 @@ jobs:
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| App CI | ${{ needs.app-ci.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| App CI (Go) | ${{ needs.app-ci-go.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

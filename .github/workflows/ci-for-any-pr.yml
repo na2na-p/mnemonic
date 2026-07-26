@@ -22,3 +22,8 @@ jobs:
     name: App CI
     uses: ./.github/workflows/app-ci.yml
     secrets: inherit
+
+  app-ci-go:
+    name: App CI (Go)
+    uses: ./.github/workflows/app-ci-go.yml
+    secrets: inherit
