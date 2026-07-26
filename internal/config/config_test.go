@@ -286,6 +286,7 @@ conversion_rules:
 		{name: "境界値: version_codeがintの範囲を超える正の浮動小数点数の場合はデフォルト値を維持する", value: "1.0e30"},
 		{name: "境界値: version_codeがintの範囲を超える負の浮動小数点数の場合はデフォルト値を維持する", value: "-1.0e30"},
 		{name: "境界値: version_codeが正の無限大の場合はデフォルト値を維持する", value: ".inf"},
+		{name: "境界値: version_codeがちょうど2^63の場合はデフォルト値を維持する", value: "9223372036854775808.0"},
 		{name: "境界値: version_codeがNaNの場合はデフォルト値を維持する", value: ".nan"},
 	}
 	for _, tt := range floatOverflowCases {
