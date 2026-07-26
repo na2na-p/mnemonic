@@ -261,7 +261,8 @@ func toInt(v any) (int, bool) {
 		// NaN/Infはint変換が未定義動作になり、有限だが範囲外の値
 		// （例: 1.0e30）はint(n)で符号反転・飽和した無関係の値になるため、
 		// いずれも変換失敗として拒否しデフォルト値へフォールバックさせる。
-		if math.IsNaN(n) || math.IsInf(n, 0) || n > float64(math.MaxInt) || n < float64(math.MinInt) {
+		// float64(math.MaxInt)は2^63へ切り上がり表現されるため、境界は >= で弾く。
+		if math.IsNaN(n) || math.IsInf(n, 0) || n >= float64(math.MaxInt) || n < float64(math.MinInt) {
 			return 0, false
 		}
 
