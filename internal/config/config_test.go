@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -261,6 +260,6 @@ func TestTimeoutConfig(t *testing.T) {
 func TestErrorSentinels_AreDistinct(t *testing.T) {
 	t.Parallel()
 
-	assert.False(t, errors.Is(config.ErrNotFound, config.ErrInvalidYAML))
-	assert.False(t, errors.Is(config.ErrInvalidYAML, config.ErrInvalidFormat))
+	require.NotErrorIs(t, config.ErrNotFound, config.ErrInvalidYAML)
+	require.NotErrorIs(t, config.ErrInvalidYAML, config.ErrInvalidFormat)
 }
