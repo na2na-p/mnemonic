@@ -108,8 +108,19 @@ func (d *ConsoleProgressDisplay) Update(current int, message string) {
 		return
 	}
 
-	percent := current * 100 / d.total
-	filled := progressBarWidth * current / d.total
+	// 呼び出し側がtotalを超える値や負値を渡しても panic せず表示上は 0-100% に
+	// 丸め込む（Python版はint()の除算で例外を投げず、単に100%超/負の表示になる
+	// 程度で落ちなかったため、Goでも少なくともクラッシュしない挙動に揃える）。
+	clamped := current
+	if clamped < 0 {
+		clamped = 0
+	}
+	if clamped > d.total {
+		clamped = d.total
+	}
+
+	percent := clamped * 100 / d.total
+	filled := progressBarWidth * clamped / d.total
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", progressBarWidth-filled)
 
 	msgPart := ""

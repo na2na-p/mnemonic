@@ -45,11 +45,31 @@ func TestConsoleProgressDisplay_Start(t *testing.T) {
 		phase        pipeline.Phase
 		expectedName string
 	}{
-		{name: "ANALYZE", phase: pipeline.PhaseAnalyze, expectedName: "Analyzing game structure"},
-		{name: "EXTRACT", phase: pipeline.PhaseExtract, expectedName: "Extracting assets"},
-		{name: "CONVERT", phase: pipeline.PhaseConvert, expectedName: "Converting assets"},
-		{name: "BUILD", phase: pipeline.PhaseBuild, expectedName: "Building APK"},
-		{name: "SIGN", phase: pipeline.PhaseSign, expectedName: "Signing APK"},
+		{
+			name:         "正常系: ANALYZEフェーズ名が表示される",
+			phase:        pipeline.PhaseAnalyze,
+			expectedName: "Analyzing game structure",
+		},
+		{
+			name:         "正常系: EXTRACTフェーズ名が表示される",
+			phase:        pipeline.PhaseExtract,
+			expectedName: "Extracting assets",
+		},
+		{
+			name:         "正常系: CONVERTフェーズ名が表示される",
+			phase:        pipeline.PhaseConvert,
+			expectedName: "Converting assets",
+		},
+		{
+			name:         "正常系: BUILDフェーズ名が表示される",
+			phase:        pipeline.PhaseBuild,
+			expectedName: "Building APK",
+		},
+		{
+			name:         "正常系: SIGNフェーズ名が表示される",
+			phase:        pipeline.PhaseSign,
+			expectedName: "Signing APK",
+		},
 	}
 
 	for _, tt := range tests {
@@ -93,6 +113,52 @@ func TestConsoleProgressDisplay_Update(t *testing.T) {
 
 		// 25%なので、約10個のバーがあるはず（40 * 0.25 = 10）
 		assert.Equal(t, 10, strings.Count(buf.String(), "█"))
+	})
+
+	t.Run("境界値: currentがtotalを超える場合は100%にクランプされpanicしない", func(t *testing.T) {
+		t.Parallel()
+
+		display, buf := newProgress(true, true)
+		display.Start(pipeline.PhaseConvert, 100)
+		buf.Reset()
+
+		assert.NotPanics(t, func() {
+			display.Update(150, "")
+		})
+
+		out := buf.String()
+		assert.Contains(t, out, "100%")
+		assert.Equal(t, 40, strings.Count(out, "█"))
+	})
+
+	t.Run("境界値: currentが負の場合は0%にクランプされpanicしない", func(t *testing.T) {
+		t.Parallel()
+
+		display, buf := newProgress(true, true)
+		display.Start(pipeline.PhaseConvert, 100)
+		buf.Reset()
+
+		assert.NotPanics(t, func() {
+			display.Update(-10, "")
+		})
+
+		out := buf.String()
+		assert.Contains(t, out, "0%")
+		assert.Equal(t, 0, strings.Count(out, "█"))
+	})
+
+	t.Run("境界値: totalが0の場合は何も描画せずpanicしない", func(t *testing.T) {
+		t.Parallel()
+
+		display, buf := newProgress(true, true)
+		display.Start(pipeline.PhaseConvert, 0)
+		buf.Reset()
+
+		assert.NotPanics(t, func() {
+			display.Update(5, "")
+		})
+
+		assert.Empty(t, buf.String())
 	})
 }
 
