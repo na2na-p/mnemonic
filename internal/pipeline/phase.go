@@ -14,6 +14,7 @@ package pipeline
 //  5. PhaseSign: APK署名
 type Phase string
 
+// Phaseの各段階。
 const (
 	PhaseAnalyze Phase = "analyze"
 	PhaseExtract Phase = "extract"

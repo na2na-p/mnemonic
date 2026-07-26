@@ -38,10 +38,11 @@ func unsetenvForTest(t *testing.T, key string) {
 	})
 }
 
+// 環境変数を書き換えるサブテストがt.Setenvを使うため、本テスト自体は
+// t.Parallel()にできない（t.Setenvは並行祖先を持つテストから呼べない）。
+//
+//nolint:tparallel // 理由は上記コメントの通り
 func TestDirForOS(t *testing.T) {
-	// 環境変数を書き換えるサブテストを含むため、本テスト自体はt.Parallel()を呼ばない
-	// （t.Setenvは並行祖先を持つテストからは呼べない制約があるため）。
-
 	t.Run("正常系: Linuxでデフォルトキャッシュディレクトリ", func(t *testing.T) {
 		unsetenvForTest(t, "XDG_CACHE_HOME")
 
@@ -211,7 +212,7 @@ func TestClearCacheDir(t *testing.T) {
 
 		require.NoError(t, err)
 		_, statErr := os.Stat(cacheFile)
-		assert.NoError(t, statErr)
+		require.NoError(t, statErr)
 		_, statErr = os.Stat(filepath.Join(dir, "templates"))
 		assert.True(t, os.IsNotExist(statErr))
 	})

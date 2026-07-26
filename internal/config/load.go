@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/goccy/go-yaml"
@@ -225,13 +226,25 @@ func stringSliceValue(data map[string]any, key string) ([]string, bool) {
 }
 
 // toInt はgoccy/go-yamlがデコードする数値型（int64/uint64/float64）をintへ正規化する。
+// version_code等の設定値はint型の範囲に収まる想定だが、YAML上は任意の大きさの
+// 整数を書けてしまうため、int変換でオーバーフローする値は不正値として拒否する
+// （黙ってラップアラウンドさせるとPython版の「そのまま代入する」挙動より
+// 悪い結果——符号反転した意図しない値——になりかねないため）。
 func toInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
 		return n, true
 	case int64:
+		if n < math.MinInt || n > math.MaxInt {
+			return 0, false
+		}
+
 		return int(n), true
 	case uint64:
+		if n > math.MaxInt {
+			return 0, false
+		}
+
 		return int(n), true
 	case float64:
 		return int(n), true
