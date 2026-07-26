@@ -14,6 +14,12 @@ func writeFile(t *testing.T, path string, content []byte) {
 	require.NoError(t, os.WriteFile(path, content, 0o600))
 }
 
+// mkdirAll はpathをその親も含めて作成するテストヘルパー。
+func mkdirAll(t *testing.T, path string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(path, 0o750))
+}
+
 // readFile はpathの内容を読み込むテストヘルパー。
 func readFile(t *testing.T, path string) []byte {
 	t.Helper()
