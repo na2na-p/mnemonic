@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -515,4 +516,133 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		require.ErrorAs(t, err, &encErr)
 		assert.True(t, encErr.Info.IsEncrypted)
 	})
+}
+
+// buildXP3ArchiveWithRawTable はrawTableをそのままファイルテーブル領域
+// （非圧縮、zlib解凍失敗時のフォールバック経路）に配置したXP3アーカイブを
+// 構築する。buildXP3Archive（xp3EntrySpec経由）では表現できない、
+// 意図的に壊れた／攻撃者制御のサブチャンクサイズを持つエントリを直接
+// 検証するための低レベルビルダー。
+func buildXP3ArchiveWithRawTable(rawTable []byte) []byte {
+	const headerSize = 19 // 11(magic) + 8(info_offset)
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(headerSize)) // info_offset: ヘッダー直後（データ領域なし）
+
+	buf.WriteByte(0x00)                      // flag: バージョン1
+	writeUint64(&buf, uint64(len(rawTable))) // compressed_size相当（実際は非圧縮のrawTableをそのまま使う）
+	writeUint64(&buf, uint64(len(rawTable))) // original_size（読み飛ばされるのみ）
+	buf.Write(rawTable)
+
+	return buf.Bytes()
+}
+
+func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
+	t.Parallel()
+
+	t.Run("異常系: infoサブチャンクが巨大サイズを宣言しても即時OOMしない", func(t *testing.T) {
+		t.Parallel()
+
+		// "info"サブチャンクがsubChunkSize=MaxUint64を宣言するが、実データは
+		// 一切続かない（=数十バイトの細工ファイル）。修正前はreadChunkが
+		// make([]byte, size)を素朴に呼び出しfatal error（回復不能なOOM）に
+		// なっていた。修正後はstream.Len()でクランプされ、単に情報不足として
+		// エントリが破棄されるだけになる。
+		var entryBody bytes.Buffer
+		entryBody.WriteString("info")
+		writeUint64(&entryBody, math.MaxUint64)
+
+		var table bytes.Buffer
+		writeChunkHeader(&table, "File", entryBody.Bytes())
+
+		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+		t.Logf("crafted archive size: %d bytes", len(archiveBytes))
+
+		path := filepath.Join(t.TempDir(), "malicious.xp3")
+		writeFile(t, path, archiveBytes)
+
+		archive, err := parser.NewXP3Archive(path)
+
+		require.NoError(t, err)
+		assert.Empty(t, archive.ListFiles())
+	})
+
+	t.Run("異常系: segmサブチャンクが巨大サイズを宣言しても即時OOMしない", func(t *testing.T) {
+		t.Parallel()
+
+		// writeChunkHeaderは実データ長をそのままsubChunkSizeとして書き込むため
+		// 使えない（「宣言サイズ ≠ 実データ長」という攻撃条件を作れない）。
+		// ここではsubChunkSize=MaxUint64を宣言しつつ実データを一切続けない
+		// バイト列を手動で組み立てる。
+		var entryBody bytes.Buffer
+		entryBody.WriteString("segm")
+		writeUint64(&entryBody, math.MaxUint64)
+
+		var table bytes.Buffer
+		writeChunkHeader(&table, "File", entryBody.Bytes())
+
+		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+
+		path := filepath.Join(t.TempDir(), "malicious_segm.xp3")
+		writeFile(t, path, archiveBytes)
+
+		archive, err := parser.NewXP3Archive(path)
+
+		require.NoError(t, err)
+		assert.Empty(t, archive.ListFiles())
+	})
+}
+
+func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *testing.T) {
+	t.Parallel()
+
+	// "info"で正当な名前を確定させた後、"segm"がint64範囲を超えるoffset/size/
+	// original_sizeを宣言するケース。修正前はint64(uint64)の素朴なキャストで
+	// 符号が反転して負値になり、ExtractAll時のmake([]byte, entry.Size)が
+	// makeslice: len out of range でパニックしていた。
+	// また、そのpanicを避けるために（誤って）Seek失敗時にエントリ全体を
+	// 破棄していたため、既に読み取れていたnameまで失われていた。
+	// 修正後はsafeInt64で範囲外の値のみ無視し、name・既存の妥当な値は保持する。
+	nameUTF16 := utf16.Encode([]rune("secret.dat"))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)                      // flags
+	writeUint64(&info, 5)                      // originalSize
+	writeUint64(&info, 5)                      // size
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0)              // flags
+	writeUint64(&segm, math.MaxUint64) // offset（int64範囲超過）
+	writeUint64(&segm, math.MaxUint64) // size（int64範囲超過）
+	writeUint64(&segm, math.MaxUint64) // originalSize（int64範囲超過）
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+
+	path := filepath.Join(t.TempDir(), "corrupt_segm.xp3")
+	writeFile(t, path, archiveBytes)
+
+	archive, err := parser.NewXP3Archive(path)
+	require.NoError(t, err)
+
+	// エントリが破棄されず、nameが保持されていること。
+	require.Equal(t, []string{"secret.dat"}, archive.ListFiles())
+
+	// 展開してもmakesliceパニックせずに完了すること
+	// （segmの値がint64安全域外のため無視され、infoのsize=5にフォールバックする）。
+	outputDir := t.TempDir()
+	err = archive.ExtractAll(outputDir)
+	require.NoError(t, err)
+	assert.FileExists(t, filepath.Join(outputDir, "secret.dat"))
 }

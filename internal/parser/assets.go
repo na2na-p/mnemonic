@@ -204,7 +204,6 @@ func (s *AssetScanner) Scan() (AssetManifest, error) {
 			return nil
 		}
 
-		// 隠しファイルは除外する。
 		if strings.HasPrefix(d.Name(), ".") {
 			return nil
 		}
@@ -241,16 +240,26 @@ func (s *AssetScanner) shouldExclude(relSlash string) bool {
 	return false
 }
 
+// conversionRuleOverride はconversion_rules設定から上書きアクションを決定する。
+//
+// why not: Python版(_get_conversion_rule_override)は最初にパターンが一致した
+// ルールでreturnし、converter名が未知の場合でも次のルールへは進まない
+// （_CONVERTER_TO_ACTION.get()がNoneを返すだけで、呼び出し側はNoneなら
+// 上書きしない扱いになる）。そのため本実装も「最初に一致したパターン」で
+// 探索を打ち切り、そのconverterが無効なら上書きなし(false)を返す
+// （後続のルールにフォールバックしない）。
 func (s *AssetScanner) conversionRuleOverride(relSlash string) (ConversionAction, bool) {
 	for _, rule := range s.config.ConversionRules {
-		if matchGlob(relSlash, rule.Pattern) {
-			action, ok := converterNameToAction[rule.Converter]
-			if !ok {
-				continue
-			}
-
-			return action, true
+		if !matchGlob(relSlash, rule.Pattern) {
+			continue
 		}
+
+		action, ok := converterNameToAction[rule.Converter]
+		if !ok {
+			return "", false
+		}
+
+		return action, true
 	}
 
 	return "", false

@@ -309,9 +309,7 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) {
 			if chunkSize > uint64(len(tableData)) { //nolint:gosec // len()は非負でuint64との比較として安全
 				return
 			}
-			if _, err := stream.Seek(int64(chunkSize), io.SeekCurrent); err != nil { //nolint:gosec // 直前にlen(tableData)以下であることを検証済み
-				return
-			}
+			skipChunk(stream, chunkSize)
 
 			continue
 		}
@@ -371,9 +369,14 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			infoData := readChunk(stream, subChunkSize)
 			if len(infoData) >= 22 {
 				flags := binary.LittleEndian.Uint32(infoData[0:4])
-				//nolint:gosec // XP3インデックス由来の値をPython版同様信頼して読む（構造体フィールドはint64で十分な範囲）
-				originalSize = int64(binary.LittleEndian.Uint64(infoData[4:12]))
-				size = int64(binary.LittleEndian.Uint64(infoData[12:20])) //nolint:gosec // 同上
+				// safeInt64がfalseの場合、対応フィールドは0のまま
+				// （エントリ全体は破棄せず、パース可能な範囲の情報を活かす）。
+				if v, ok := safeInt64(binary.LittleEndian.Uint64(infoData[4:12])); ok {
+					originalSize = v
+				}
+				if v, ok := safeInt64(binary.LittleEndian.Uint64(infoData[12:20])); ok {
+					size = v
+				}
 				nameLen := int(binary.LittleEndian.Uint16(infoData[20:22]))
 
 				if len(infoData) >= 22+nameLen*2 {
@@ -387,17 +390,22 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			segmData := readChunk(stream, subChunkSize)
 			if len(segmData) >= 28 {
 				flags := binary.LittleEndian.Uint32(segmData[0:4])
-				//nolint:gosec // XP3インデックス由来の値をPython版同様信頼して読む（構造体フィールドはint64で十分な範囲）
-				offset = int64(binary.LittleEndian.Uint64(segmData[4:12]))
-				size = int64(binary.LittleEndian.Uint64(segmData[12:20]))         //nolint:gosec // 同上
-				originalSize = int64(binary.LittleEndian.Uint64(segmData[20:28])) //nolint:gosec // 同上
+				// safeInt64がfalseの場合、対応フィールドは0のまま（infoケースと同様）。
+				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[4:12])); ok {
+					offset = v
+				}
+				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[12:20])); ok {
+					size = v
+				}
+				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[20:28])); ok {
+					originalSize = v
+				}
 				isCompressed = flags&0x07 != 0
 			}
 		default:
-			// adlr（Adler32チェックサム）を含む未知のサブチャンクはスキップする。
-			if _, err := stream.Seek(int64(subChunkSize), io.SeekCurrent); err != nil { //nolint:gosec // 上流でファイルサイズ以下であることを検証済み
-				return XP3FileEntry{}, false
-			}
+			// adlr（Adler32チェックサム）を含む未知のサブチャンクは、既知チャンクと
+			// 同じくskipChunkでスキップする（詳細はskipChunkのwhy not参照）。
+			skipChunk(stream, subChunkSize)
 		}
 	}
 
@@ -415,14 +423,53 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 	}, true
 }
 
-func readChunk(stream io.Reader, size uint64) []byte {
-	buf := make([]byte, size) //nolint:gosec // XP3インデックス内の宣言サイズを信頼して読み込む（Python版も同様）
+// readChunk はstreamからsizeバイトを読み取る。
+//
+// why not: sizeはXP3インデックス内の宣言値であり信頼できない。Pythonの
+// BytesIO.read(n)はnがどれほど大きくても実際にバッファ内に残っているバイト数
+// までしか読まず安全だが、Go版でmake([]byte, size)を素朴に呼ぶと巨大な
+// sizeでOOM（回復不能なfatal error）を起こしうる（実際に数十バイトの
+// 細工ファイルで再現する）。そのためstream.Len()（残りバイト数）でsizeを
+// クランプしてから確保し、Python版と同じ「残っている分だけ読む」挙動にする。
+func readChunk(stream *bytes.Reader, size uint64) []byte {
+	remaining := stream.Len()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if size > uint64(remaining) { //nolint:gosec // remainingはbytes.Reader.Len()の戻り値で常に非負
+		size = uint64(remaining)
+	}
+
+	buf := make([]byte, size)
 	n, err := io.ReadFull(stream, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil
 	}
 
 	return buf[:n]
+}
+
+// skipChunk はstreamの現在位置からsizeバイト分を前方へスキップする。
+//
+// why not: Pythonの BytesIO.seek(size, 1) はsizeがどれほど大きくても
+// バッファ終端を越えて（エラーにならず）位置を進めるだけであり、次の
+// stream.read(4) が空を返してループが自然終了するだけで済む。一方
+// bytes.Reader.Seek はint64変換後の絶対位置が負になる場合にエラーを返す
+// ため、sizeをuint64のまま素朴にint64変換すると（math.MaxInt64超で符号が
+// 反転し）Seekが失敗し、呼び出し元でエントリ全体を破棄してしまう
+// （情報チャンクを先に読んでいた場合、正常に得られたはずのデータまで
+// 失われる）。そのためsizeをstream.Len()でクランプし、Seekが常に成功する
+// ようにしてPython版の「バッファ終端で止まるだけ」という挙動に合わせる。
+func skipChunk(stream *bytes.Reader, size uint64) {
+	remaining := stream.Len()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if size > uint64(remaining) { //nolint:gosec // remainingはbytes.Reader.Len()の戻り値で常に非負
+		size = uint64(remaining)
+	}
+
+	_, _ = stream.Seek(int64(size), io.SeekCurrent) //nolint:gosec // 直前にremaining(int)以下へクランプ済みでint64へ安全に変換可能
 }
 
 // decodeUTF16LE はUTF-16LEバイト列をデコードする。
@@ -551,6 +598,14 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 // why not: Python版はPath結合をそのまま行いパストラバーサル対策をしていないが、
 // エントリ名はアーカイブ内データに由来し外部入力として信頼できないため、
 // Go移植では展開先がbaseDir外に脱出しないことを検証する（zip slip対策）。
+//
+// もう1点、Python版との既知の差分として、entryName中の"\"はここで"/"へ
+// 正規化してからOS区切り文字へ変換するためディレクトリ階層として扱われる。
+// Python版（PurePosixPath上でのパス結合）では"\"はパス区切りとして解釈
+// されず、"data\script.ks"のような名前のエントリはリテラルに"\"を含む
+// 単一ファイル名として書き出される。XP3アーカイブ内のエントリ名はWindows
+// 由来で"\"区切りのケースが実際にあり得るため、Go移植ではこちらを正規化する
+// 挙動を意図的に選んでいる。
 func safeJoin(baseDir, entryName string) (string, error) {
 	cleanedName := filepath.FromSlash(strings.ReplaceAll(entryName, `\`, "/"))
 	joined := filepath.Join(baseDir, cleanedName)

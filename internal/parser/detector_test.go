@@ -3,10 +3,12 @@ package parser_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/encoding/japanese"
 
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
@@ -238,6 +240,18 @@ func TestGameDetector_GetSummary(t *testing.T) {
 		assert.NotEmpty(t, summary)
 	})
 
+	t.Run("正常系: サマリーにエンジン情報が含まれる", func(t *testing.T) {
+		t.Parallel()
+
+		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
+		require.NoError(t, err)
+
+		summary, err := detector.GetSummary()
+
+		require.NoError(t, err)
+		assert.Contains(t, strings.ToLower(summary), "kirikiri")
+	})
+
 	t.Run("正常系: サマリーにファイル数（数字）が含まれる", func(t *testing.T) {
 		t.Parallel()
 
@@ -339,5 +353,71 @@ func TestGameDetector_Integration(t *testing.T) {
 		summary, err := detector.GetSummary()
 		require.NoError(t, err)
 		assert.NotEmpty(t, summary)
+	})
+}
+
+// TestGameDetector_ScriptEncodingDetection はchardet結果の文字コード名が
+// Python版chardetの語彙（"ascii"/"utf-8"/"shift_jis"）に正規化されることを
+// 固定するリグレッションテスト。
+//
+// github.com/saintfish/chardet は純ASCII入力に対して専用の判定器を持たず
+// "ISO-8859-1"（低信頼度）等を返すことがあり、Python版chardetの"ascii"と
+// 語彙が一致しない問題があったため（GetSummary出力やPR4の再エンコード判定に
+// 影響するユーザー可視の差分）、detectCharsetのASCII優先判定を固定する。
+func TestGameDetector_ScriptEncodingDetection(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: ASCIIスクリプトはasciiと判定される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		content := strings.Repeat("@bg storage=bg01\nvar x = 1;\n", 5)
+		writeFile(t, filepath.Join(dir, "first.ks"), []byte(content))
+
+		detector, err := parser.NewGameDetector(dir)
+		require.NoError(t, err)
+
+		result, err := detector.Detect()
+
+		require.NoError(t, err)
+		assert.Equal(t, "ascii", result.ScriptEncoding)
+	})
+
+	t.Run("正常系: UTF-8スクリプトはutf-8と判定される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		content := strings.Repeat(
+			"これはKirikiriのシナリオスクリプトのサンプルです。日本語のテキストを含みます。", 3,
+		)
+		writeFile(t, filepath.Join(dir, "first.ks"), []byte(content))
+
+		detector, err := parser.NewGameDetector(dir)
+		require.NoError(t, err)
+
+		result, err := detector.Detect()
+
+		require.NoError(t, err)
+		assert.Equal(t, "utf-8", result.ScriptEncoding)
+	})
+
+	t.Run("正常系: Shift_JISスクリプトはshift_jisと判定される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		text := strings.Repeat(
+			"これはKirikiriのシナリオスクリプトのサンプルです。日本語のテキストを含みます。", 3,
+		)
+		encoded, err := japanese.ShiftJIS.NewEncoder().String(text)
+		require.NoError(t, err)
+		writeFile(t, filepath.Join(dir, "first.ks"), []byte(encoded))
+
+		detector, err := parser.NewGameDetector(dir)
+		require.NoError(t, err)
+
+		result, err := detector.Detect()
+
+		require.NoError(t, err)
+		assert.Equal(t, "shift_jis", result.ScriptEncoding)
 	})
 }

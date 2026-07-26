@@ -23,6 +23,10 @@ func matchGlob(name, pattern string) bool {
 
 	re, err := regexp.Compile(translateFnmatch(pattern))
 	if err != nil {
+		// why not: translateFnmatchが生成した正規表現がコンパイルできない場合
+		// （下記の既知の差分など）、設定ファイルの記述ミス1件でスキャン全体を
+		// 失敗させたくないため、「不正なパターンは常に不一致」として
+		// 安全側（除外/上書きなしに倒れる）にフォールバックする。
 		return false
 	}
 
@@ -31,9 +35,16 @@ func matchGlob(name, pattern string) bool {
 
 // translateFnmatch はfnmatchパターンをGo正規表現ソースへ変換する。
 //
-// CPython fnmatch.translate() (3.12) の主要な変換規則を移植したもの。
-// "&"/"~"/"|" のセット演算エスケープや、範囲チャンクの重複除去といった
-// 出力最適化（意味を変えない）は省略している。
+// CPython fnmatch.translate() (3.12) の変換規則を移植したものだが、以下の2点は
+// 意味を保存しない既知の差分として残っている（拡張子・ディレクトリ名によるglob
+// という現実的な設定パターンでは踏まないため許容している。いずれも
+// regexp.Compileがエラーを返し、結果としてmatchGlobはfalseを返す）:
+//   - 文字クラス内のバックスラッシュ（例: "[a\b]"）: Python版は"-"を含まない
+//     文字クラスの中身のバックスラッシュを"\\\\"へエスケープしリテラル扱いに
+//     するが、本実装は素通しするため生成される正規表現の意味が変わりうる。
+//   - 逆順・空レンジ（例: "[b-a]"）: Python版は無効なレンジを検出して除去・
+//     結合するが、本実装は素通しするため、Goの正規表現エンジンが受理しない
+//     （開始>終了のレンジをコンパイルエラーにする）。
 func translateFnmatch(pattern string) string {
 	var b strings.Builder
 	b.WriteString("^")

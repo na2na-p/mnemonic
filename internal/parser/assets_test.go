@@ -384,4 +384,31 @@ func TestAssetScanner_WithConfig(t *testing.T) {
 		require.Len(t, manifest.Files, 1)
 		assert.Equal(t, "visible.ks", manifest.Files[0].Path)
 	})
+
+	t.Run("正常系: 最初に一致したルールのconverterが無効な場合、後続ルールへフォールバックしない", func(t *testing.T) {
+		t.Parallel()
+
+		// Python版(_get_conversion_rule_override)は最初にパターンが一致した
+		// ルールでreturnし、converterが未知でも次のルールを試さない。
+		// このケースは1番目のルールが一致しconverterが無効なため、2番目の
+		// "skip"ルールへフォールバックせず、拡張子デフォルト(convert_webp)の
+		// ままになるべき。
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "icon.png"), []byte("\x89PNG"))
+
+		cfg := &parser.ScannerConfig{
+			ConversionRules: []parser.ConversionRule{
+				{Pattern: "*.png", Converter: "unknown_converter"},
+				{Pattern: "*.png", Converter: "skip"},
+			},
+		}
+		scanner, err := parser.NewAssetScanner(dir, cfg)
+		require.NoError(t, err)
+
+		manifest, err := scanner.Scan()
+		require.NoError(t, err)
+
+		require.Len(t, manifest.Files, 1)
+		assert.Equal(t, parser.ConvertWebP, manifest.Files[0].Action)
+	})
 }

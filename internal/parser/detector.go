@@ -251,15 +251,47 @@ func (d *GameDetector) detectScriptEncoding(scripts []string) string {
 			continue
 		}
 
-		result, err := detector.DetectBest(rawData)
-		if err != nil || result == nil || result.Charset == "" {
-			continue
+		if charset, ok := detectCharset(detector, rawData); ok {
+			return charset
 		}
-
-		return strings.ToLower(result.Charset)
 	}
 
 	return ""
+}
+
+// detectCharset はrawDataの文字コードを推定し、Python版chardetの語彙に
+// 正規化して返す。
+//
+// why not: github.com/saintfish/chardet には専用のASCII判定器がなく、
+// 純ASCIIバイト列に対しても単バイト系のフォールバック候補
+// （例: "ISO-8859-1"、低信頼度）を返す。一方Python版が使うchardetは
+// 全バイトが0x7F以下の場合に専用の高速パスで必ず"ascii"を返す
+// （ゲーム構成検出結果に含まれる文字コード名はGetSummaryの表示や
+// PR4の再エンコード判定に使われるため、この語彙差はユーザー可視の
+// 挙動差になる）。そのため、まずGo側でも同じ判定を先に行い、
+// 純ASCIIなら"ascii"を返してchardetの推定より優先する。
+func detectCharset(detector *chardet.Detector, rawData []byte) (string, bool) {
+	if isASCII(rawData) {
+		return "ascii", true
+	}
+
+	result, err := detector.DetectBest(rawData)
+	if err != nil || result == nil || result.Charset == "" {
+		return "", false
+	}
+
+	return strings.ToLower(result.Charset), true
+}
+
+// isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
+func isASCII(data []byte) bool {
+	for _, b := range data {
+		if b >= 0x80 {
+			return false
+		}
+	}
+
+	return true
 }
 
 // detectTitle はConfig.tjsからゲームタイトルを取得する。
