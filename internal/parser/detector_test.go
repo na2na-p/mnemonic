@@ -1,6 +1,7 @@
 package parser_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -381,6 +382,24 @@ func TestGameDetector_ScriptEncodingDetection(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, "ascii", result.ScriptEncoding)
+	})
+
+	t.Run("正常系: ISO-2022-JPスクリプトはESCバイトによりASCII扱いされない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		// 「こんにちは」のISO-2022-JP表現。全バイトが7ビットだがESC(0x1B)を含む。
+		iso2022jp := []byte("\x1b$B$3$s$K$A$O\x1b(B")
+		content := bytes.Repeat(iso2022jp, 10)
+		writeFile(t, filepath.Join(dir, "first.ks"), content)
+
+		detector, err := parser.NewGameDetector(dir)
+		require.NoError(t, err)
+
+		result, err := detector.Detect()
+
+		require.NoError(t, err)
+		assert.NotEqual(t, "ascii", result.ScriptEncoding)
 	})
 
 	t.Run("正常系: UTF-8スクリプトはutf-8と判定される", func(t *testing.T) {

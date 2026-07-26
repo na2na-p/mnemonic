@@ -369,7 +369,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			infoData := readChunk(stream, subChunkSize)
 			if len(infoData) >= 22 {
 				flags := binary.LittleEndian.Uint32(infoData[0:4])
-				// safeInt64がfalseの場合、対応フィールドは0のまま
+				// safeInt64がfalseの場合、対応フィールドは直前の値のまま
 				// （エントリ全体は破棄せず、パース可能な範囲の情報を活かす）。
 				if v, ok := safeInt64(binary.LittleEndian.Uint64(infoData[4:12])); ok {
 					originalSize = v
@@ -390,7 +390,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			segmData := readChunk(stream, subChunkSize)
 			if len(segmData) >= 28 {
 				flags := binary.LittleEndian.Uint32(segmData[0:4])
-				// safeInt64がfalseの場合、対応フィールドは0のまま（infoケースと同様）。
+				// safeInt64がfalseの場合、対応フィールドは直前の値のまま（infoケースと同様）。
 				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[4:12])); ok {
 					offset = v
 				}

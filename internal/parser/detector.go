@@ -286,7 +286,9 @@ func detectCharset(detector *chardet.Detector, rawData []byte) (string, bool) {
 // isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
 func isASCII(data []byte) bool {
 	for _, b := range data {
-		if b >= 0x80 {
+		// ISO-2022-JPは7ビットのみで構成されるため、ESC(0x1B)を含む入力を
+		// ASCIIと即断するとchardetの正しいISO-2022-JP判定を潰してしまう。
+		if b >= 0x80 || b == 0x1b {
 			return false
 		}
 	}
