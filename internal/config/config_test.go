@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,6 +74,29 @@ func TestLoad(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, config.ErrNotFound)
+	})
+
+	t.Run("異常系: 権限不足の設定ファイルはErrReadFailed（ErrNotFoundではない）", func(t *testing.T) {
+		t.Parallel()
+
+		if runtime.GOOS == "windows" {
+			t.Skip("Windowsではファイルパーミッションのセマンティクスが異なるためスキップ")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root権限ではパーミッションが無視されるためスキップ")
+		}
+
+		path := writeConfig(t, "package_name: com.example.test")
+		require.NoError(t, os.Chmod(path, 0o000))
+		t.Cleanup(func() {
+			_ = os.Chmod(path, 0o600) // t.TempDir()のクリーンアップが削除できるように読み書き権限へ戻す
+		})
+
+		_, err := config.Load(path)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, config.ErrReadFailed)
+		require.NotErrorIs(t, err, config.ErrNotFound)
 	})
 
 	t.Run("異常系: 無効なYAMLはErrInvalidYAML", func(t *testing.T) {
@@ -216,6 +240,66 @@ exclude:
 		require.Len(t, got.ConversionRules, 1)
 		assert.Equal(t, []string{"debug/*"}, got.Exclude)
 	})
+
+	t.Run("正常系: 型が一致しないキーはデフォルト値を維持する", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeConfig(t, `
+image: "not a map"
+version_code: "abc"
+`)
+
+		got, err := config.Load(path)
+
+		require.NoError(t, err)
+		assert.Equal(t, config.Default().Image, got.Image)
+		assert.Equal(t, config.Default().VersionCode, got.VersionCode)
+	})
+
+	t.Run("正常系: pattern/converterを欠く変換ルールはスキップされる", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeConfig(t, `
+conversion_rules:
+  - pattern: "*.png"
+    converter: image
+  - pattern: "*.mp4"
+  - converter: audio
+  - pattern: "*.txt"
+    converter: text
+`)
+
+		got, err := config.Load(path)
+
+		require.NoError(t, err)
+		require.Len(t, got.ConversionRules, 2)
+		assert.Equal(t, "*.png", got.ConversionRules[0].Pattern)
+		assert.Equal(t, "image", got.ConversionRules[0].Converter)
+		assert.Equal(t, "*.txt", got.ConversionRules[1].Pattern)
+		assert.Equal(t, "text", got.ConversionRules[1].Converter)
+	})
+
+	floatOverflowCases := []struct {
+		name  string
+		value string
+	}{
+		{name: "境界値: version_codeがintの範囲を超える正の浮動小数点数の場合はデフォルト値を維持する", value: "1.0e30"},
+		{name: "境界値: version_codeがintの範囲を超える負の浮動小数点数の場合はデフォルト値を維持する", value: "-1.0e30"},
+		{name: "境界値: version_codeが正の無限大の場合はデフォルト値を維持する", value: ".inf"},
+		{name: "境界値: version_codeがNaNの場合はデフォルト値を維持する", value: ".nan"},
+	}
+	for _, tt := range floatOverflowCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeConfig(t, "version_code: "+tt.value)
+
+			got, err := config.Load(path)
+
+			require.NoError(t, err)
+			assert.Equal(t, config.Default().VersionCode, got.VersionCode)
+		})
+	}
 
 	t.Run("異常系: マッピング形式でないYAMLはErrInvalidFormat", func(t *testing.T) {
 		t.Parallel()

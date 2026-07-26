@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 
@@ -11,6 +12,10 @@ import (
 
 // ErrNotFound は設定ファイルが存在しない場合のエラー。
 var ErrNotFound = errors.New("設定ファイルが見つかりません")
+
+// ErrReadFailed は設定ファイルは存在するが読み込みに失敗した場合のエラー
+// （権限不足、ディレクトリをファイルとして指定した等、存在しないこと以外の原因）。
+var ErrReadFailed = errors.New("設定ファイルの読み込みに失敗しました")
 
 // ErrInvalidYAML はYAML解析に失敗した場合のエラー。
 var ErrInvalidYAML = errors.New("YAML解析エラー")
@@ -22,7 +27,13 @@ var ErrInvalidFormat = errors.New("設定ファイルはYAMLのマッピング�
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // ビルド対象ゲームのユーザー指定パスを読み込む用途のため妥当
 	if err != nil {
-		return Config{}, fmt.Errorf("%w: %s", ErrNotFound, path)
+		// 「存在しない」と「存在するが読めない（権限不足・ディレクトリ指定等）」は
+		// 原因も対処法も異なるため、fs.ErrNotExistかどうかで別のセンチネルにする。
+		if errors.Is(err, fs.ErrNotExist) {
+			return Config{}, fmt.Errorf("%w: %s", ErrNotFound, path)
+		}
+
+		return Config{}, fmt.Errorf("%w: %s: %w", ErrReadFailed, path, err)
 	}
 
 	var doc any
@@ -247,6 +258,13 @@ func toInt(v any) (int, bool) {
 
 		return int(n), true
 	case float64:
+		// NaN/Infはint変換が未定義動作になり、有限だが範囲外の値
+		// （例: 1.0e30）はint(n)で符号反転・飽和した無関係の値になるため、
+		// いずれも変換失敗として拒否しデフォルト値へフォールバックさせる。
+		if math.IsNaN(n) || math.IsInf(n, 0) || n > float64(math.MaxInt) || n < float64(math.MinInt) {
+			return 0, false
+		}
+
 		return int(n), true
 	default:
 		return 0, false
