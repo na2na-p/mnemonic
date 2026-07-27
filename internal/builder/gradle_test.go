@@ -358,6 +358,89 @@ func TestGradleBuilder_GetAPKPath(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("正常系: app-release.apk(unsigned接尾辞なし)が存在する場合にパスを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		apkDir := filepath.Join(dir, "app", "build", "outputs", "apk", "release")
+		require.NoError(t, os.MkdirAll(apkDir, 0o750))
+		apkFile := filepath.Join(apkDir, "app-release.apk")
+		require.NoError(t, os.WriteFile(apkFile, []byte(""), 0o600))
+
+		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
+		require.NoError(t, err)
+
+		result := b.GetAPKPath("release")
+
+		require.NotNil(t, result)
+		assert.Equal(t, apkFile, *result)
+	})
+
+	t.Run("正常系: krkrsdl2テンプレートのカスタムファイル名しか無い場合はglobフォールバックで見つかる", func(t *testing.T) {
+		t.Parallel()
+
+		// why not: krkrsdl2テンプレートのapp/build.gradleはoutputFileNameを
+		// "${app_name}_${architecture}.apk"へカスタマイズしており、標準名の
+		// APKが生成されないことがある（T-218で判明した実ビルドでの回帰）。
+		dir := t.TempDir()
+		apkDir := filepath.Join(dir, "app", "build", "outputs", "apk", "release")
+		require.NoError(t, os.MkdirAll(apkDir, 0o750))
+		apkFile := filepath.Join(apkDir, "krkrsdl2_universal.apk")
+		require.NoError(t, os.WriteFile(apkFile, []byte(""), 0o600))
+
+		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
+		require.NoError(t, err)
+
+		result := b.GetAPKPath("release")
+
+		require.NotNil(t, result)
+		assert.Equal(t, apkFile, *result)
+	})
+
+	t.Run("正常系: outputsディレクトリが存在しない場合にnilを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
+		require.NoError(t, err)
+
+		assert.Nil(t, b.GetAPKPath("release"))
+	})
+
+	t.Run("正常系: ディレクトリは存在するがAPKファイルが無い場合にnilを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		apkDir := filepath.Join(dir, "app", "build", "outputs", "apk", "release")
+		require.NoError(t, os.MkdirAll(apkDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(apkDir, "readme.txt"), []byte(""), 0o600))
+
+		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
+		require.NoError(t, err)
+
+		assert.Nil(t, b.GetAPKPath("release"))
+	})
+
+	t.Run("正常系: 標準名とカスタム名の両方が存在する場合は標準名が優先される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		apkDir := filepath.Join(dir, "app", "build", "outputs", "apk", "release")
+		require.NoError(t, os.MkdirAll(apkDir, 0o750))
+		standardFile := filepath.Join(apkDir, "app-release-unsigned.apk")
+		require.NoError(t, os.WriteFile(standardFile, []byte(""), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(apkDir, "krkrsdl2_universal.apk"), []byte(""), 0o600))
+
+		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
+		require.NoError(t, err)
+
+		result := b.GetAPKPath("release")
+
+		require.NotNil(t, result)
+		assert.Equal(t, standardFile, *result)
+	})
 }
 
 func writeFakeGradlew(t *testing.T, dir string) {
