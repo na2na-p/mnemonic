@@ -37,8 +37,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # このリポジトリはまだ Go の release タグ運用（vX.Y.Z）を持たないため、
-      # 日付 + short SHA による dev バージョン文字列を暫定的に採番する。
+      # main への push は未リリースの検証用ビルドのため、日付 + short SHA の
+      # dev バージョンを採番する。正式リリース（vX.Y.Z タグ）は release.yml が
+      # タグ版を埋め込んで GitHub Release を作成する。
       - name: Determine version
         id: version
         run: echo "value=0.1.0-dev.$(date -u +%Y%m%d).${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
