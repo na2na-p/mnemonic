@@ -42,6 +42,10 @@ var Dependencies = []DependencyInfo{
 	{Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true},
 	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
+	// why not: MidiConverter(T-211)が呼び出すFluidSynthはMIDIアセットを含む
+	// ゲームでのみ必要なため、Required=falseとする。必須にするとMIDI資産を
+	// 持たないゲームのビルドまでFluidSynthのインストールを強制してしまう。
+	{Name: "FluidSynth", Command: "fluidsynth", VersionFlag: "--version", Required: false},
 }
 
 // versionPatterns はコマンド出力からバージョン番号を抽出する正規表現の候補。

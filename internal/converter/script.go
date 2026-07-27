@@ -22,11 +22,42 @@ type AdjustmentRule struct {
 }
 
 // DefaultRules はScriptAdjusterのデフォルト調整ルール。
+//
+// MIDI系ルール（MIDISoundBuffer以降）はPR11'（T-211）でmidi.py+script.pyの
+// フィーチャーブランチ差分から移植した。適用順序はPython版と同一に保つ必要が
+// ある: MIDISoundBuffer→WaveSoundBuffer変換が先に走ることで、変換前の
+// "MIDISoundBuffer.midiOut(...)" 呼び出しも次のmidiOut置換ルールで捕捉される
+// （4e83a5eのtest_midi_out_converted_from_midi_sound_bufferが検証する挙動）。
 var DefaultRules = []AdjustmentRule{
 	{
 		Pattern:     `^(\s*)(Plugins\.link\(["'].*?\.dll["']\);)`,
 		Replacement: `$1// $2 // Disabled for Android`,
 		Description: "プラグインDLL読み込みの無効化",
+	},
+	{
+		Pattern:     `MIDISoundBuffer`,
+		Replacement: `WaveSoundBuffer`,
+		Description: "MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)`,
+		Replacement: `$1; // $2 // Disabled: midiOut not available in WaveSoundBuffer`,
+		Description: "WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.mid(["'])`,
+		Replacement: `$1$2.ogg$3`,
+		Description: "MIDI参照をOGGに変換（.mid → .ogg）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.midi(["'])`,
+		Replacement: `$1$2.ogg$3`,
+		Description: "MIDI参照をOGGに変換（.midi → .ogg）",
+	},
+	{
+		Pattern:     `storage \+ "\.mid\.ogg"`,
+		Replacement: `storage + ".ogg"`,
+		Description: "MIDI検索パターンを修正（.mid.ogg → .ogg）",
 	},
 }
 
