@@ -18,6 +18,12 @@ import (
 //
 // バージョンのソートはPython版と同じ単純な文字列降順（sorted(..., reverse=True)相当）
 // であり、セマンティックバージョニングとしての比較ではない。
+//
+// why not: os.ReadDirが返すDirEntry.IsDir()はシンボリックリンク自体の種別
+// （リンクはリンクとして報告されディレクトリとは報告されない）を見るため、
+// バージョンディレクトリがシンボリックリンクの場合に除外されてしまう。
+// Python版のPath.is_dir()はシンボリックリンクを解決した先の種別を見るため、
+// 挙動を合わせるためos.Stat（symlinkを解決する）で判定する。
 func findAndroidBuildTool(toolName string) (string, bool) {
 	if androidHome := os.Getenv("ANDROID_HOME"); androidHome != "" {
 		buildToolsDir := filepath.Join(androidHome, "build-tools")
@@ -25,7 +31,8 @@ func findAndroidBuildTool(toolName string) (string, bool) {
 		if entries, err := os.ReadDir(buildToolsDir); err == nil {
 			versions := make([]string, 0, len(entries))
 			for _, e := range entries {
-				if e.IsDir() {
+				info, statErr := os.Stat(filepath.Join(buildToolsDir, e.Name())) //nolint:gosec // ANDROID_HOME配下のディレクトリ一覧から得たパスの種別確認のみで、内容の読み書きは行わない
+				if statErr == nil && info.IsDir() {
 					versions = append(versions, e.Name())
 				}
 			}

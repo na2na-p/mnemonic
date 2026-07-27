@@ -85,4 +85,28 @@ func TestFindAndroidBuildTool(t *testing.T) {
 		assert.False(t, ok)
 		assert.Empty(t, result)
 	})
+
+	// レビュー指摘の回帰テスト: os.ReadDirのDirEntry.IsDir()はシンボリックリンク
+	// 自体の種別を見るためリンクされたバージョンディレクトリを除外してしまっていた。
+	// os.Stat（symlink解決）で判定するよう修正したことをピン留めする。
+	t.Run("正常系: バージョンディレクトリがシンボリックリンクでも検出", func(t *testing.T) {
+		androidHome := t.TempDir()
+		buildToolsDir := filepath.Join(androidHome, "build-tools")
+		require.NoError(t, os.MkdirAll(buildToolsDir, 0o750))
+
+		realDir := filepath.Join(t.TempDir(), "34.0.0-real")
+		require.NoError(t, os.MkdirAll(realDir, 0o750))
+		toolPath := filepath.Join(realDir, "zipalign")
+		require.NoError(t, os.WriteFile(toolPath, nil, 0o600))
+
+		linkPath := filepath.Join(buildToolsDir, "34.0.0")
+		require.NoError(t, os.Symlink(realDir, linkPath))
+
+		t.Setenv("ANDROID_HOME", androidHome)
+
+		result, ok := findAndroidBuildTool("zipalign")
+
+		assert.True(t, ok)
+		assert.Equal(t, filepath.Join(linkPath, "zipalign"), result)
+	})
 }
