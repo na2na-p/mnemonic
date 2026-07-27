@@ -43,7 +43,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # ffmpegはmnemonic自体の依存ツールであり、doctor/converterのテストが
+      # ffmpegはmnemonic自体の依存ツールであり、doctorのテストが
       # 実際のffmpegバイナリを前提とするため、ubuntu-latestにはデフォルトで
       # 入っていない場合に備えて明示的にインストールする。
       - name: Install ffmpeg
