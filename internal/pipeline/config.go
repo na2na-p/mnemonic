@@ -22,10 +22,14 @@ const (
 // TemplateVersionは空文字列自体が意味を持たないバージョン文字列ではなく
 // 「未指定→最新を使う」という区別が必要なため*stringで表現する。
 type Config struct {
-	InputPath            string
-	OutputPath           string
-	PackageName          string
-	AppName              string
+	InputPath   string
+	OutputPath  string
+	PackageName string
+	AppName     string
+	// SoundfontPath はMIDI変換に使うサウンドフォントのパス。空文字列を
+	// 「未指定」のsentinelとして扱い、converter.GetDefaultSoundfontPathによる
+	// 既定の解決に委ねる。
+	SoundfontPath        string
 	KeystorePath         string
 	SkipVideo            bool
 	Quality              string
