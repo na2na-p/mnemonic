@@ -34,7 +34,7 @@ func findAndroidBuildTool(toolName string) (string, bool) {
 
 			for _, v := range versions {
 				candidate := filepath.Join(buildToolsDir, v, toolName)
-				if _, statErr := os.Stat(candidate); statErr == nil {
+				if _, statErr := os.Stat(candidate); statErr == nil { //nolint:gosec // ANDROID_HOME配下のディレクトリ一覧から得たパスの存在確認のみで、内容の読み書きは行わない
 					return candidate, true
 				}
 			}

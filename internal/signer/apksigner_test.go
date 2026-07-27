@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -219,7 +218,7 @@ func TestDefaultApkSignerRunner_Sign(t *testing.T) {
 		_, err := r.Sign(apk, cfg)
 
 		require.ErrorIs(t, err, signer.ErrApkSignFailed)
-		assert.ErrorContains(t, err, "keystore password was incorrect")
+		require.ErrorContains(t, err, "keystore password was incorrect")
 		// CRITICAL: エラーメッセージに平文パスワードそのものを含めない
 		// （--ks-pass/--key-pass引数は含めず、apksigner自身のstderrのみを使う）。
 		assert.NotContains(t, err.Error(), "wrong_password")
@@ -369,6 +368,6 @@ func TestDefaultApkSignerRunner_FindApksigner(t *testing.T) {
 		result, ok := r.FindApkSigner()
 
 		require.True(t, ok)
-		assert.True(t, strings.Contains(result, "34.0.0"))
+		assert.Contains(t, result, "34.0.0")
 	})
 }
