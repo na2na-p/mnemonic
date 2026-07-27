@@ -114,6 +114,41 @@ func TestLZSSDecoder_Decode(t *testing.T) {
 	}
 }
 
+func TestLZSSDecoder_Decode_DictionaryPersistsAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	// DEFECT 2の回帰防止: krkrz TVPLoadTLG5はスライド辞書を画像1枚のデコード
+	// （全チャンク）を通じて持続させる。同一LZSSDecoderへの2回目のDecodeは、
+	// 1回目が辞書へ書き込んだバイトをバックリファレンスで参照できなければ
+	// ならない。旧実装（チャンクごとに辞書をゼロ初期化）ではここで
+	// []byte{0,0,0}が返り、このテストは失敗する。
+	d := tlg.NewLZSSDecoder()
+
+	first, err := d.Decode(append([]byte{0x00}, []byte("ABC")...), 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("ABC"), first)
+
+	// フラグ0x01(ビット0=マッチ)、mpos=0・mlen=3。持続する辞書のslide[0..2]は
+	// 1回目で書き込んだ"ABC"を保持しているため、出力は再び"ABC"になる。
+	second, err := d.Decode([]byte{0x01, 0x00, 0x00}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("ABC"), second)
+}
+
+func TestLZSSDecoder_Decode_FreshDecoderStartsFromZeroDictionary(t *testing.T) {
+	t.Parallel()
+
+	// 新しいLZSSDecoderは常にゼロ初期化された辞書から始まる（画像間で辞書が
+	// 汚染されないことの担保。tlg5.goが画像ごとにNewLZSSDecoderを生成する前提）。
+	d := tlg.NewLZSSDecoder()
+
+	// フラグ0x01(マッチ)、mpos=0・mlen=3。辞書が未書き込み(ゼロ)のため出力は
+	// ゼロ3バイトになる。
+	result, err := d.Decode([]byte{0x01, 0x00, 0x00}, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0x00, 0x00, 0x00}, result)
+}
+
 func TestLZSSDecoder_Decode_EdgeCases(t *testing.T) {
 	t.Parallel()
 

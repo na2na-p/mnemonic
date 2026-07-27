@@ -81,13 +81,17 @@ type TLG5Header struct {
 
 // TLG5Decoder はTLG5形式（LZSS圧縮・カラープレーン分離方式）の画像を
 // デコードする。
-type TLG5Decoder struct {
-	lzss *LZSSDecoder
-}
+//
+// why not(LZSSDecoderをフィールドで持たない理由): LZSSDecoderはスライド辞書を
+// 状態として保持し画像1枚のデコードを通じて持続させる（lzss.goのwhy not参照）。
+// TLG5DecoderのフィールドとしてLZSSDecoderを共有すると、辞書状態が画像をまたいで
+// 汚染され、2枚目以降のデコードが1枚目の残留辞書を参照して壊れる。そのため辞書は
+// Decode呼び出しごとに生成し、その画像のチャンク処理内に閉じる。
+type TLG5Decoder struct{}
 
 // NewTLG5Decoder はTLG5Decoderを初期化する。
 func NewTLG5Decoder() *TLG5Decoder {
-	return &TLG5Decoder{lzss: NewLZSSDecoder()}
+	return &TLG5Decoder{}
 }
 
 // IsValid はdataがTLG5形式のマジックバイトを持つかどうかを判定する。
@@ -203,6 +207,11 @@ func (d *TLG5Decoder) Decode(data []byte) (image.Image, error) {
 		channels[i] = make([]byte, width*height)
 	}
 
+	// why: スライド辞書を画像全体（全ブロック×全チャンネル）で持続させるため、
+	// LZSSDecoderは画像1枚につき1つだけ生成し全チャンクへ通す（krkrz TVPLoadTLG5が
+	// text/rを1組だけ確保して引き回す構造に相当。lzss.goのwhy not参照）。
+	lzss := NewLZSSDecoder()
+
 	// ブロックサイズ配列の後からブロックデータが始まる
 	offset := TLG5HeaderSize + blockCount*4
 
@@ -230,7 +239,7 @@ func (d *TLG5Decoder) Decode(data []byte) (image.Image, error) {
 			blockData := data[offset : offset+channelSize]
 			offset += channelSize
 
-			decompressed, blockErr := decodeBlock(d.lzss, mark, blockData, blockPixelCount)
+			decompressed, blockErr := decodeBlock(lzss, mark, blockData, blockPixelCount)
 			if blockErr != nil {
 				return nil, blockErr
 			}
@@ -249,24 +258,20 @@ func (d *TLG5Decoder) Decode(data []byte) (image.Image, error) {
 // 準拠する: 0=LZSS圧縮ブロック、1=非圧縮の格納ブロック（エンコーダはLZSS
 // 圧縮が展開後より大きくなる場合に格納ブロックを使う）。
 //
-// why not(格納ブロックとスライド辞書の関係、未検証の前提): krkrzの実装では
-// 格納ブロックのデータもスライド辞書へ書き戻され、後続の圧縮ブロックの
-// バックリファレンスが辞書状態を前提にしている可能性がある。しかし本実装
-// （移植元のPython参照実装feat/exe-icon-extractionを含む）はLZSSDecoder.
-// Decodeをチャンネル×ブロックの圧縮データチャンクごとに独立して呼び出し、
-// スライド辞書を毎回ゼロ初期化する設計になっている（辞書状態はチャンク
-// 境界をまたいで一切引き継がれない。圧縮ブロック同士の間でも共有しない）。
-// この設計のもとでは、格納ブロックについてのみ辞書へ書き戻す処理を追加
-// しても後続チャンクの解凍結果には数学的に影響しない（次のLZSSDecoder.
-// Decode呼び出しは常にゼロ初期化された辞書から始まるため）。したがって
-// 格納ブロックは単純にバイト列をそのままピクセル値として採用するのみで
-// よい、という保守的な解釈を採用する。
+// why not(格納ブロックはスライド辞書へ書き戻さない): krkrzのTVPLoadTLG5では、
+// 圧縮ブロック(mark==0)はTVPTLG5DecompressSlideを通じてスライド辞書text/リング
+// ポインタrを更新するが、格納ブロック(mark==1)は`memcpy(outbuf, inbuf, size)`で
+// あり辞書へは一切触れない（rも進めない）。したがって本実装でも格納ブロックは
+// blockDataをそのままピクセル値として返すのみとし、共有LZSSDecoderの辞書状態
+// （slide/slidePos）は変更しない。この格納パスを通過した後の圧縮ブロックは、
+// 格納ブロック直前の辞書状態をそのまま引き継いでバックリファレンスを解決する。
 //
-// 実機のkrkrz実装が本当にチャンク単位で辞書をリセットしているのか、
-// この一致がTLG5フォーマットの「正しい」仕様なのか、それとも参照実装の
-// 簡略化がたまたま無害だっただけなのかは、参照実装の入手範囲では検証
-// できていない。この不確実性を明記した上で、現状の挙動をテストで
-// ピン留めする。
+// why not(辞書をチャンクごとにリセットしない): 旧実装（および移植元のPython参照
+// 実装）はLZSSDecoder.Decodeをチャンク（ブロック×チャンネル）ごとにスライド辞書を
+// ゼロ初期化して呼んでいたが、これはkrkrz非準拠であり、実RGBA .tlgアセット
+// （ブロック境界をまたぐバックリファレンスを含む）をノイズにデコードする欠陥
+// だった（実証済み）。現実装ではlzssは画像1枚につき1つで、全チャンクをまたいで
+// 辞書が持続する（tlg5.go DecodeおよびLZSSDecoderのwhy not参照）。
 func decodeBlock(lzss *LZSSDecoder, mark byte, blockData []byte, pixelCount int) ([]byte, error) {
 	switch mark {
 	case tlg5BlockMarkCompressed:
