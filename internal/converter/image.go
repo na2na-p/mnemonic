@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -111,7 +112,13 @@ type ImageConverter struct {
 
 // NewImageConverter はImageConverterを初期化する。
 // qualityはQualityPresetの値（95/85/70）または任意の0-100の整数を指定する。
+// qualityが0以下の場合はQualityHigh（Python版のデフォルト引数
+// quality: QualityPreset | int = QualityPreset.HIGHに相当）を使用する。
 func NewImageConverter(quality int, losslessAlpha bool) *ImageConverter {
+	if quality <= 0 {
+		quality = int(QualityHigh)
+	}
+
 	return &ImageConverter{
 		quality:       quality,
 		losslessAlpha: losslessAlpha,
@@ -247,15 +254,32 @@ type opaquer interface {
 // imageHasAlpha はimgが実質的なアルファチャンネルを持つかを判定する。
 //
 // why not: PythonのPIL.Image.modeは "RGBA/LA/PA" というフォーマット上の
-// チャンネル構成で判定するが、Goのimage.Imageにはこれに相当する統一的な
-// モード情報が無い。golang.org/x/image/bmpの24bpp BMPデコード結果は
-// alpha=0xff固定の*image.RGBA（アルファ格納可能な型だが実質不透明）を返すため、
-// 型情報だけで判定すると不透明なBMP/JPEGを誤って「アルファあり」と判定して
-// しまう。そのため実際のピクセルデータに基づくOpaque()（stdlib各具象型が実装）
-// を用いて判定する。フォーマット上アルファチャンネルを持つが全ピクセルが
-// 不透明なPNG（Pythonなら"RGBA"モード）はGo版ではhasAlpha=falseとなる差異が
-// あるが、Python版テストが検証する実際に半透明なアルファのケースでは一致する。
+// チャンネル構成で判定する（全ピクセルが不透明でも"RGBA"ならアルファあり
+// 扱い）。Goのimage.Imageには統一的なモード情報が無いため、まず
+// image/png.Decodeの具象型で判定する: stdlib image/pngはカラータイプ4/6
+// （グレースケール+アルファ／トゥルーカラー+アルファ）およびtRNSチャンクに
+// よる色キー透過を*image.NRGBA/*image.NRGBA64としてのみデコードする
+// （アルファの無いカラータイプ0/2/3はGray/RGBA/RGBA64/Palettedになる）ため、
+// これらの型はフォーマット上アルファチャンネルを持つPNGを全ピクセル不透明
+// でも正しく検出できる。
+//
+// この型判定に当てはまらない場合はOpaque()（stdlib各具象型が実装）へ
+// フォールバックする。golang.org/x/image/bmpの24bpp BMPデコード結果は
+// alpha=0xff固定の*image.RGBA（アルファ格納可能な型だが実質不透明）を返す
+// ため、型情報だけで判定すると不透明なBMP/JPEGを誤って「アルファあり」と
+// 判定してしまう——Opaque()フォールバックはこのBMP/JPEGのケースを正しく
+// falseにするために必要。
+//
+// 既知の残差: 32bpp BMPでアルファチャンネルを許可しない場合
+// (golang.org/x/image/bmp decodeNRGBAのallowAlpha=false)も*image.NRGBAで
+// 返るため、実質不透明でもhasAlpha=trueになる。Python版テスト・本パッケージの
+// テストが対象とする24bpp BMP/PNGのケースでは発生しない。
 func imageHasAlpha(img image.Image) bool {
+	switch img.ColorModel() {
+	case color.NRGBAModel, color.NRGBA64Model:
+		return true
+	}
+
 	if o, ok := img.(opaquer); ok {
 		return !o.Opaque()
 	}

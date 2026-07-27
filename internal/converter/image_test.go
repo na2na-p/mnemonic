@@ -1,6 +1,7 @@
 package converter_test
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -65,6 +66,53 @@ func writePNGFixture(t *testing.T, path string, c color.RGBA) {
 	defer func() { _ = f.Close() }()
 
 	require.NoError(t, png.Encode(f, newSolidRGBA(c)))
+}
+
+// forceAlphaImage はOpaque()を常にfalseとして偽装するimage.Imageラッパー。
+//
+// why: stdlib image/pngのエンコーダは実際に全ピクセルが不透明な画像を
+// 渡すとOpaque()==trueを検出しアルファチャンネル無しのカラータイプで
+// 書き出してしまう（image/png/writer.goのopaque(m)判定）。そのため
+// 「フォーマット上アルファチャンネルを持つが全ピクセルは不透明なPNG」
+// （PythonのPillowがmode="RGBA"で保存した場合の実際の挙動）を
+// stdlibのpng.Encodeだけで再現できない。Opaque()を偽装してこの
+// 最適化を回避し、テスト用フィクスチャとして意図的な状態を作る。
+type forceAlphaImage struct {
+	image.Image
+}
+
+func (forceAlphaImage) Opaque() bool { return false }
+
+// writeOpaqueAlphaPNGFixture はフォーマット上アルファチャンネルを持つが
+// 全ピクセルが不透明なPNGファイルを書き出す
+// （image/png.Decode時に*image.NRGBAとしてデコードされ、hasAlpha判定の
+// テスト対象になる）。
+func writeOpaqueAlphaPNGFixture(t *testing.T, path string, c color.RGBA) {
+	t.Helper()
+
+	c.A = 255
+	nc := color.NRGBAModel.Convert(c).(color.NRGBA) //nolint:forcetypeassert // color.NRGBAModel.Convertは常にcolor.NRGBAを返す
+	img := image.NewNRGBA(image.Rect(0, 0, testImageSize, testImageSize))
+	for y := range testImageSize {
+		for x := range testImageSize {
+			img.SetNRGBA(x, y, nc)
+		}
+	}
+
+	f, err := os.Create(path) //nolint:gosec // テスト用の一時ファイル
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	require.NoError(t, png.Encode(f, forceAlphaImage{img}))
+}
+
+// isLosslessWebP はWebPファイルがロスレス(VP8Lチャンク)でエンコードされて
+// いるかを判定するテストヘルパー。WebPのRIFFコンテナはロスレスなら"VP8L"、
+// ロッシーなら"VP8 "のFourCCチャンクを含む。
+func isLosslessWebP(t *testing.T, path string) bool {
+	t.Helper()
+
+	return bytes.Contains(readFile(t, path), []byte("VP8L"))
 }
 
 func TestTLGImageDecoder_IsTLGFile(t *testing.T) {
@@ -260,6 +308,16 @@ func TestImageConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 	})
 
+	t.Run("正常系: quality=0はQualityHighにフォールバックする", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。Python版はquality: QualityPreset | int =
+		// QualityPreset.HIGHという既定引数を持つため、Go版でNewImageConverterへ
+		// ゼロ値を渡した場合もHIGH(95)相当にフォールバックすることをピン留めする。
+		c := converter.NewImageConverter(0, true)
+		assert.Equal(t, int(converter.QualityHigh), c.Quality())
+	})
+
 	t.Run("正常系: アルファチャンネルが保持される(lossless_alpha=true)", func(t *testing.T) {
 		t.Parallel()
 
@@ -292,6 +350,47 @@ func TestImageConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 		assert.FileExists(t, dest)
+	})
+
+	t.Run("正常系: 全ピクセル不透明でもフォーマット上アルファを持つPNGはロスレスになる", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。PythonのPIL.Image.mode=="RGBA"は全ピクセル
+		// 不透明でもアルファありとして扱いlossless=Trueで保存される。Go版が
+		// Opaque()だけで判定していた旧実装ではここがロッシーパスに落ちて
+		// いたため、フォーマット上アルファを持つPNG(*image.NRGBA)を
+		// ロスレスパスへ通すことをピン留めする。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "opaque_alpha.png")
+		writeOpaqueAlphaPNGFixture(t, source, color.RGBA{R: 255, A: 255})
+		dest := filepath.Join(dir, "output.webp")
+
+		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		assert.True(t, isLosslessWebP(t, dest))
+	})
+
+	t.Run("正常系: 24bppのBMPはロッシーパスになる", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。golang.org/x/image/bmpの24bpp BMPデコード
+		// 結果はalpha=0xff固定の*image.RGBAであり、アルファチャンネルを持たない
+		// フォーマットである。Opaque()フォールバックにより非ロスレスのRGB
+		// パスになることをピン留めする。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.bmp")
+		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
+		dest := filepath.Join(dir, "output.webp")
+
+		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		assert.False(t, isLosslessWebP(t, dest))
 	})
 
 	t.Run("正常系: 変換結果に成功状態が正しく記録される", func(t *testing.T) {
