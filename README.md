@@ -8,11 +8,10 @@
 
 | ツール | 用途 |
 | --- | --- |
-| Go 1.26+ | ツール自体のビルド |
+| Go 1.26.4+ | ツール自体のビルド |
 | FFmpeg | 動画/音声変換 |
 | Android SDK（Platform 34, NDK r21） | APKビルド |
-| Java JDK 17+ | Gradle実行 |
-| Gradle | Androidプロジェクトのビルド |
+| Java JDK 17+ | Gradle実行（Gradle本体はテンプレート同梱のGradle Wrapperを使用するためシステムへの別途インストールは不要） |
 
 依存ツールが揃っているかは `mnemonic doctor` で確認できる。
 
@@ -97,5 +96,3 @@ go test -race -shuffle=on ./...
 golangci-lint run
 golangci-lint fmt
 ```
-
-設計の詳細は [`docs/designdoc.md`](docs/designdoc.md) を参照。
