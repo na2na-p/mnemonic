@@ -57,6 +57,10 @@ func (a *ScriptAdjuster) SupportedExtensions() []string {
 	return []string{".ks", ".tjs"}
 }
 
+// GetOutputExtension は出力ファイルの拡張子を変更しないため常に空文字列を
+// 返す（スクリプト調整は拡張子を保持する）。
+func (a *ScriptAdjuster) GetOutputExtension(_ string) string { return "" }
+
 // CanConvert はfilePathが.ksまたは.tjsファイルかを判定する。
 func (a *ScriptAdjuster) CanConvert(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))

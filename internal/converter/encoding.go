@@ -219,6 +219,10 @@ func (c *EncodingConverter) SupportedExtensions() []string {
 	return []string{".ks", ".tjs", ".txt", ".csv", ".ini"}
 }
 
+// GetOutputExtension は出力ファイルの拡張子を変更しないため常に空文字列を
+// 返す（文字コード変換は拡張子を保持する）。
+func (c *EncodingConverter) GetOutputExtension(_ string) string { return "" }
+
 // CanConvert はfilePathが変換可能かを判定する。
 // 拡張子がサポート対象であり、かつテキストファイルである場合にtrueを返す。
 func (c *EncodingConverter) CanConvert(filePath string) bool {

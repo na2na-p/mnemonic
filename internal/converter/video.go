@@ -114,6 +114,10 @@ func (c *VideoConverter) SupportedExtensions() []string {
 	return []string{".mpg", ".mpeg", ".wmv", ".avi"}
 }
 
+// GetOutputExtension は出力ファイルの拡張子を変更しないため常に空文字列を
+// 返す（動画変換は拡張子を保持する）。
+func (c *VideoConverter) GetOutputExtension(_ string) string { return "" }
+
 // CanConvert はfilePathが変換可能かを拡張子で判定する。
 func (c *VideoConverter) CanConvert(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
