@@ -29,7 +29,7 @@ func findDependency(t *testing.T, name string) doctor.DependencyInfo {
 func TestDependencies_Count(t *testing.T) {
 	t.Parallel()
 
-	assert.Len(t, doctor.Dependencies, 5)
+	assert.Len(t, doctor.Dependencies, 4)
 }
 
 func TestDependencies_ContainsRequiredTools(t *testing.T) {
@@ -41,7 +41,6 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 		expectedCommand string
 		expectedRequire bool
 	}{
-		{caseName: "正常系: Pythonが必須依存として登録されている", name: "Python", expectedCommand: "python", expectedRequire: true},
 		{
 			caseName: "正常系: Java_JDKが必須依存として登録されている", name: "Java JDK",
 			expectedCommand: "java", expectedRequire: true,
@@ -86,22 +85,22 @@ func TestDependencies_AllHaveVersionFlag(t *testing.T) {
 func TestCheckDependency_ReturnsCheckResult(t *testing.T) {
 	t.Parallel()
 
-	info := doctor.DependencyInfo{Name: "Python", Command: "python", VersionFlag: "--version", Required: true}
+	info := doctor.DependencyInfo{Name: "Test", Command: "nonexistent_command_xyz123", VersionFlag: "--version", Required: true}
 
 	result := doctor.CheckDependency(info)
 
-	assert.Equal(t, "Python", result.Name)
+	assert.Equal(t, "Test", result.Name)
 }
 
 func TestCheckDependency_FoundStatus(t *testing.T) {
 	t.Parallel()
 
-	// why: doctor.Dependenciesの実際のPythonエントリ（command="python"）を
-	// 参照する。テストが独自に"python3"のようなハードコードしたコマンド名で
-	// 検証すると、本番のDependencyInfo.Command（"python"）が実行環境で解決
+	// why: doctor.Dependenciesの実際のFFmpegエントリ（command="ffmpeg"）を
+	// 参照する。テストが独自に"ffmpeg"のようなハードコードしたコマンド名で
+	// 検証すると、本番のDependencyInfo.Command（"ffmpeg"）が実行環境で解決
 	// できなくなった場合にテストだけが誤って通り続けてしまうため、必ず
 	// 本番の定義から拾う。
-	pythonDep := findDependency(t, "Python")
+	ffmpegDep := findDependency(t, "FFmpeg")
 
 	tests := []struct {
 		name         string
@@ -110,7 +109,7 @@ func TestCheckDependency_FoundStatus(t *testing.T) {
 		expectFound  bool
 		wantsMessage bool
 	}{
-		{name: "正常系: pythonが見つかる", command: pythonDep.Command, versionFlag: pythonDep.VersionFlag, expectFound: true},
+		{name: "正常系: ffmpegが見つかる", command: ffmpegDep.Command, versionFlag: ffmpegDep.VersionFlag, expectFound: true},
 		{
 			name: "異常系: 存在しないコマンド", command: "nonexistent_command_xyz123", versionFlag: "--version",
 			expectFound: false, wantsMessage: true,
@@ -178,7 +177,7 @@ func TestExtractVersion(t *testing.T) {
 		output string
 		want   string
 	}{
-		{name: "正常系: セマンティックバージョン", output: "Python 3.12.0", want: "3.12.0"},
+		{name: "正常系: セマンティックバージョン", output: "ffmpeg version 6.0.1", want: "6.0.1"},
 		{name: "正常系: マイナーバージョンのみ", output: "version 1.5", want: "1.5"},
 		{name: "正常系: メジャーバージョンのみ", output: "version 17", want: "17"},
 		{name: "異常系: バージョン番号なし", output: "no version here", want: ""},

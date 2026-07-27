@@ -218,12 +218,12 @@ func TestDoctorCommand_ShowsTable(t *testing.T) {
 	assert.Contains(t, result.stdout, "依存ツールチェック結果")
 }
 
-func TestDoctorCommand_ShowsPython(t *testing.T) {
+func TestDoctorCommand_ShowsFFmpeg(t *testing.T) {
 	t.Parallel()
 
 	result := invoke(t, []string{"doctor"})
 
-	assert.Contains(t, result.stdout, "Python")
+	assert.Contains(t, result.stdout, "FFmpeg")
 }
 
 func TestInfoCommand_Help(t *testing.T) {

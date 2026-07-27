@@ -43,6 +43,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # ffmpegはmnemonic自体の依存ツールであり、doctorのテストが
+      # 実際のffmpegバイナリを前提とするため、ubuntu-latestにはデフォルトで
+      # 入っていない場合に備えて明示的にインストールする。
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run tests
         run: go test -race -shuffle=on -coverprofile=coverage.out ./...
 

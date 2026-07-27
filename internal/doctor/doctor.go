@@ -1,6 +1,4 @@
 // Package doctor はビルドに必要な依存ツールのインストール状況を確認する。
-//
-// Python版 (src/mnemonic/doctor.py) をGoへ移植したもの。
 package doctor
 
 import (
@@ -20,9 +18,9 @@ type CheckResult struct {
 	Name     string
 	Required bool
 	Found    bool
-	// Versionが空文字列の場合、Python版のNone（バージョン未検出）に相当する。
+	// Versionが空文字列の場合、バージョン未検出を表す。
 	Version string
-	// Messageが空文字列の場合、Python版のNone（メッセージなし）に相当する。
+	// Messageが空文字列の場合、メッセージなしを表す。
 	Message string
 }
 
@@ -32,13 +30,14 @@ type DependencyInfo struct {
 	Command     string
 	VersionFlag string
 	Required    bool
-	// MinVersionが空文字列の場合、Python版のNone（最小バージョン指定なし）に相当する。
+	// MinVersionが空文字列の場合、最小バージョン指定なしを表す。
 	MinVersion string
 }
 
 // Dependencies はビルドに必要な依存ツールの一覧。
+// mnemonic自体はGoの単一バイナリとして動作するためランタイム依存を持たない。
+// ここに列挙するのはAPKビルドパイプラインが実行時に呼び出す外部ツール。
 var Dependencies = []DependencyInfo{
-	{Name: "Python", Command: "python", VersionFlag: "--version", Required: true, MinVersion: "3.12"},
 	{Name: "Java JDK", Command: "java", VersionFlag: "-version", Required: true, MinVersion: "17"},
 	{Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true},
 	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
@@ -46,8 +45,7 @@ var Dependencies = []DependencyInfo{
 }
 
 // versionPatterns はコマンド出力からバージョン番号を抽出する正規表現の候補。
-// 先頭から順に試し、最初にマッチしたものを採用する
-// （Python版_extract_versionのpatterns探索順と同一）。
+// 先頭から順に試し、最初にマッチしたものを採用する。
 var versionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(\d+\.\d+\.\d+)`),
 	regexp.MustCompile(`(\d+\.\d+)`),
@@ -110,8 +108,7 @@ func CheckDependency(info DependencyInfo) CheckResult {
 
 		// 非ゼロ終了コード（例: javaは-versionの出力を標準エラーへ書きつつ
 		// 正常終了コード以外を返すことがある）でもバージョン情報自体は
-		// 取得できている場合があるため、Python版のsubprocess.run(check=False)と
-		// 同様にfoundとして扱いバージョン抽出を試みる。
+		// 取得できている場合があるため、foundとして扱いバージョン抽出を試みる。
 		output := stdout.String() + stderr.String()
 
 		return CheckResult{
