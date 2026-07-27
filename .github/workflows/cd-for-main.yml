@@ -14,21 +14,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  app-ci:
-    name: App CI
-    uses: ./.github/workflows/app-ci.yml
-    secrets: inherit
-
   app-ci-go:
     name: App CI (Go)
     uses: ./.github/workflows/app-ci-go.yml
     secrets: inherit
 
+  release-build:
+    name: Release Build (Go)
+    needs:
+      - app-ci-go
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # このリポジトリはまだ Go の release タグ運用（vX.Y.Z）を持たないため、
+      # 日付 + short SHA による dev バージョン文字列を暫定的に採番する。
+      - name: Determine version
+        id: version
+        run: echo "value=0.1.0-dev.$(date -u +%Y%m%d).${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        run: |
+          mkdir -p dist
+          go build -ldflags "-X github.com/na2na-p/mnemonic/internal/version.value=${{ steps.version.outputs.value }}" \
+            -o dist/mnemonic \
+            ./cmd/mnemonic
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnemonic-${{ steps.version.outputs.value }}
+          path: dist/mnemonic
+          retention-days: 30
+
   summary:
     name: Summary
     needs:
-      - app-ci
       - app-ci-go
+      - release-build
     runs-on: ubuntu-latest
     if: always()
 
@@ -39,8 +70,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| App CI | ${{ needs.app-ci.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| App CI (Go) | ${{ needs.app-ci-go.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Release Build (Go) | ${{ needs.release-build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
