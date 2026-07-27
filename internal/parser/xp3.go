@@ -74,11 +74,12 @@ func (e *XP3EncryptionError) Error() string {
 	return message
 }
 
-// XP3FileEntry はXP3アーカイブ内のファイルエントリ情報を表す。
-type XP3FileEntry struct {
-	// Name はファイル名（パス含む）。
-	Name string
-	// Offset はファイルデータのオフセット。
+// XP3Segment はXP3ファイルセグメント情報を表す。
+//
+// XP3アーカイブ内のファイルは複数のセグメントに分割されている場合がある。
+// 各セグメントは異なるオフセットに配置され、個別に圧縮される可能性がある。
+type XP3Segment struct {
+	// Offset はセグメントデータのオフセット。
 	Offset int64
 	// Size は圧縮後サイズ。
 	Size int64
@@ -86,8 +87,26 @@ type XP3FileEntry struct {
 	OriginalSize int64
 	// IsCompressed は圧縮されているか。
 	IsCompressed bool
+}
+
+// XP3FileEntry はXP3アーカイブ内のファイルエントリ情報を表す。
+type XP3FileEntry struct {
+	// Name はファイル名（パス含む）。
+	Name string
+	// Segments はファイルを構成するセグメントの一覧（登場順）。
+	Segments []XP3Segment
 	// IsEncrypted は暗号化されているか。
 	IsEncrypted bool
+}
+
+// TotalSize は全セグメントの元サイズ（OriginalSize）の合計を返す。
+func (e XP3FileEntry) TotalSize() int64 {
+	var total int64
+	for _, segment := range e.Segments {
+		total += segment.OriginalSize
+	}
+
+	return total
 }
 
 // XP3Archive はXP3アーカイブを操作する。
@@ -340,17 +359,17 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) {
 
 // parseSingleEntry は単一のファイルエントリをパースする。
 //
-// nameが取得できなかった場合（infoチャンクを欠くなど）はokにfalseを返す。
+// nameが取得できなかった場合（infoチャンクを欠くなど）、またはセグメントを
+// 1つも持てなかった場合（segmチャンクを欠く、あるいは28バイト未満で
+// 有効なセグメントを構成できない場合）はokにfalseを返す。Python版の
+// `if name and segments:` と同じ判定条件。
 func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 	stream := bytes.NewReader(entryData)
 
 	var (
-		name         string
-		offset       int64
-		size         int64
-		originalSize int64
-		isCompressed bool
-		isEncrypted  bool
+		name        string
+		segments    []XP3Segment
+		isEncrypted bool
 	)
 
 	for {
@@ -369,14 +388,8 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			infoData := readChunk(stream, subChunkSize)
 			if len(infoData) >= 22 {
 				flags := binary.LittleEndian.Uint32(infoData[0:4])
-				// safeInt64がfalseの場合、対応フィールドは直前の値のまま
-				// （エントリ全体は破棄せず、パース可能な範囲の情報を活かす）。
-				if v, ok := safeInt64(binary.LittleEndian.Uint64(infoData[4:12])); ok {
-					originalSize = v
-				}
-				if v, ok := safeInt64(binary.LittleEndian.Uint64(infoData[12:20])); ok {
-					size = v
-				}
+				// original_size, sizeはsegmチャンク側の各セグメントが持つため、
+				// ここでは読み飛ばす（Python版delta 3a17127と同じ判断）。
 				nameLen := int(binary.LittleEndian.Uint16(infoData[20:22]))
 
 				if len(infoData) >= 22+nameLen*2 {
@@ -384,24 +397,10 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 				}
 
 				isEncrypted = flags&0x80000000 != 0
-				isCompressed = size != originalSize
 			}
 		case bytes.Equal(subChunkName, []byte("segm")):
 			segmData := readChunk(stream, subChunkSize)
-			if len(segmData) >= 28 {
-				flags := binary.LittleEndian.Uint32(segmData[0:4])
-				// safeInt64がfalseの場合、対応フィールドは直前の値のまま（infoケースと同様）。
-				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[4:12])); ok {
-					offset = v
-				}
-				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[12:20])); ok {
-					size = v
-				}
-				if v, ok := safeInt64(binary.LittleEndian.Uint64(segmData[20:28])); ok {
-					originalSize = v
-				}
-				isCompressed = flags&0x07 != 0
-			}
+			segments = append(segments, parseSegments(segmData)...)
 		default:
 			// adlr（Adler32チェックサム）を含む未知のサブチャンクは、既知チャンクと
 			// 同じくskipChunkでスキップする（詳細はskipChunkのwhy not参照）。
@@ -409,18 +408,57 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 		}
 	}
 
-	if name == "" {
+	if name == "" || len(segments) == 0 {
 		return XP3FileEntry{}, false
 	}
 
 	return XP3FileEntry{
-		Name:         name,
-		Offset:       offset,
-		Size:         size,
-		OriginalSize: originalSize,
-		IsCompressed: isCompressed,
-		IsEncrypted:  isEncrypted,
+		Name:        name,
+		Segments:    segments,
+		IsEncrypted: isEncrypted,
 	}, true
+}
+
+// parseSegments はsegmサブチャンクのデータを28バイト単位のセグメント列としてパースする。
+//
+// why not: 宣言されたsubChunkSizeではなく、実際に読み取れたsegmData
+// （readChunkでstream残量にクランプ済み）の長さを28で割った件数だけを対象にする。
+// これによりPython版の`len(segm_data) // segment_size`と同じく、末尾の
+// 28バイト未満の断片は自然に無視され、宣言セグメント数がどれほど巨大でも
+// 実データ長を超えて処理することはない（segmData自体が既にstream残量で
+// クランプ済みのため、追加のOOM対策は不要）。
+func parseSegments(segmData []byte) []XP3Segment {
+	const segmentRecordSize = 28
+
+	numSegments := len(segmData) / segmentRecordSize
+	if numSegments == 0 {
+		return nil
+	}
+
+	segments := make([]XP3Segment, 0, numSegments)
+	for i := range numSegments {
+		record := segmData[i*segmentRecordSize : (i+1)*segmentRecordSize]
+
+		var segment XP3Segment
+
+		flags := binary.LittleEndian.Uint32(record[0:4])
+		// safeInt64がfalseの場合、対応フィールドはゼロ値のまま
+		// （セグメント自体は破棄せず、パース可能な範囲の情報を活かす）。
+		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[4:12])); ok {
+			segment.Offset = v
+		}
+		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[12:20])); ok {
+			segment.Size = v
+		}
+		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[20:28])); ok {
+			segment.OriginalSize = v
+		}
+		segment.IsCompressed = flags&0x07 != 0
+
+		segments = append(segments, segment)
+	}
+
+	return segments
 }
 
 // readChunk はstreamからsizeバイトを読み取る。
@@ -564,26 +602,25 @@ func (a *XP3Archive) findEntry(filename string) (XP3FileEntry, bool) {
 	return XP3FileEntry{}, false
 }
 
+// extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
+// outputPathへ書き出す（Python版delta 3a17127の複数セグメント連結展開に相当）。
 func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
-	if _, err := f.Seek(entry.Offset, io.SeekStart); err != nil {
-		return fmt.Errorf("ファイルオフセットへのシークに失敗しました: %w", err)
+	fileSize, err := streamSize(f)
+	if err != nil {
+		return err
 	}
 
-	data := make([]byte, entry.Size)
-	n, err := io.ReadFull(f, data)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("ファイルデータの読み込みに失敗しました: %w", err)
-	}
-	data = data[:n]
-
-	if entry.IsCompressed && entry.Size != entry.OriginalSize {
-		if decompressed, err := decompressZlib(data); err == nil {
-			data = decompressed
+	var data []byte
+	for _, segment := range entry.Segments {
+		segmentData, err := readSegment(f, segment, fileSize)
+		if err != nil {
+			return err
 		}
+		data = append(data, segmentData...)
 	}
 
 	if err := os.WriteFile(outputPath, data, 0o600); err != nil {
@@ -591,6 +628,59 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 	}
 
 	return nil
+}
+
+// streamSize はfの総バイト数を返す。
+//
+// why not: 各セグメントのSize宣言値はアーカイブバイナリ由来で信頼できず、
+// safeInt64の範囲チェックを通過していても実ファイルサイズを大幅に超える
+// 値になりうる（int64範囲内の巨大値の宣言は防げない）。事前にファイル全体の
+// サイズを取得しておき、readSegmentでオフセット以降の実際の残量にSizeを
+// クランプすることで、巨大なSize宣言によるmake([]byte, size)でのOOMを防ぐ。
+func streamSize(f io.ReadSeeker) (int64, error) {
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("ファイルサイズの取得に失敗しました: %w", err)
+	}
+
+	return size, nil
+}
+
+// readSegment は1セグメント分のデータを読み取り、圧縮されていれば解凍する。
+//
+// fileSizeでセグメントのSize宣言値をクランプする理由はstreamSizeのwhy not参照。
+func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64) ([]byte, error) {
+	if _, err := f.Seek(segment.Offset, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
+	}
+
+	remaining := fileSize - segment.Offset
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	readSize := segment.Size
+	if readSize > remaining {
+		readSize = remaining
+	}
+	if readSize < 0 {
+		readSize = 0
+	}
+
+	buf := make([]byte, readSize)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
+	}
+	buf = buf[:n]
+
+	if segment.IsCompressed && segment.Size != segment.OriginalSize {
+		if decompressed, err := decompressZlib(buf); err == nil {
+			buf = decompressed
+		}
+	}
+
+	return buf, nil
 }
 
 // safeJoin はbaseDir配下にentryNameを結合する。
