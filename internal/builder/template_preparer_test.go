@@ -152,6 +152,7 @@ android {
 		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrJniLibsNotFound)
+		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "ベースAPKが見つかりません")
 	})
 }

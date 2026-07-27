@@ -17,6 +17,30 @@ import (
 	"github.com/na2na-p/mnemonic/internal/resources"
 )
 
+// skipIfCaseInsensitiveFS はdirが大文字小文字を区別しないファイルシステム
+// （例: macOSのAPFS既定設定）上にある場合、このテストをスキップする。
+//
+// why not: os.Rename("Foo.tmp", "foo.tmp")は大文字小文字を区別しない
+// ファイルシステム上では単なる同一ファイルの表記変更になり、Python版
+// （pathlib経由でも同じOS依存の挙動）を含め、リネーム後も旧表記の
+// パスでos.Statが成功し続ける。これはリネーム処理自体の不具合ではなく
+// ファイルシステムの性質であり、Python版もこの環境では同じ挙動になる
+// （レビュー指摘: 本番コードを変更すべき問題ではない）。CI/DevContainerの
+// 実行環境（Linux、大文字小文字を区別する）では本テストは実際に
+// リネームの旧名不在を検証する。判定はconstではなく実際のt.TempDir()を
+// probeして行う（tmpディレクトリのマウント設定次第でホストのデフォルト
+// と異なる場合があるため）。
+func skipIfCaseInsensitiveFS(t *testing.T, dir string) {
+	t.Helper()
+
+	probe := filepath.Join(dir, "Foo.tmp")
+	require.NoError(t, os.WriteFile(probe, []byte("probe"), 0o600))
+
+	if _, err := os.Stat(filepath.Join(dir, "foo.tmp")); err == nil {
+		t.Skip("大文字小文字を区別しないファイルシステムのためスキップ")
+	}
+}
+
 // TestBuildPipeline_NormalizeCriticalFilenames はPython版
 // TestBuildPipelineNormalizeCriticalFilenamesの移植。
 func TestBuildPipeline_NormalizeCriticalFilenames(t *testing.T) {
@@ -27,6 +51,7 @@ func TestBuildPipeline_NormalizeCriticalFilenames(t *testing.T) {
 
 		p := newTestPipeline(t)
 		dir := t.TempDir()
+		skipIfCaseInsensitiveFS(t, dir)
 
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "Data.XP3"), []byte("data"), 0o600))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "Config.TJS"), []byte("config"), 0o600))
@@ -62,6 +87,7 @@ func TestBuildPipeline_NormalizeCriticalFilenames(t *testing.T) {
 
 		p := newTestPipeline(t)
 		dir := t.TempDir()
+		skipIfCaseInsensitiveFS(t, dir)
 		nestedDir := filepath.Join(dir, "system")
 		deepDir := filepath.Join(nestedDir, "plugins")
 		require.NoError(t, os.MkdirAll(deepDir, 0o750))

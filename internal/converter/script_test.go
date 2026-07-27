@@ -824,6 +824,84 @@ func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
 		assert.GreaterOrEqual(t, count, 1)
 	})
 
+	t.Run("正常系: hittype=のような単語境界を伴わないtype=部分文字列は本物のtype=とみなさない", func(t *testing.T) {
+		t.Parallel()
+
+		// why: strings.Contains(attrs, "type=")は"hittype="のような、直前が
+		// 単語構成文字であるため実際にはtype属性ではない部分文字列にも誤って
+		// 一致してしまう。Python版の\btype=（単語境界付き）と同じ判定に
+		// する必要がある（レビュー指摘）。
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt hittype=foo layer=0]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt hittype=foo layer=0 type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: subtype=のような単語境界を伴わないtype=部分文字列は本物のtype=とみなさない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 subtype=q]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt layer=0 subtype=q type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: type=風の部分文字列がlayer=より前にあっても追加される", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt subtype=q layer=0]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt subtype=q layer=0 type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: layer=数値の後に他の文字が続いてもtype=alphaが追加される", func(t *testing.T) {
+		t.Parallel()
+
+		// why: Python版のlayer=[0-9]+には後続の単語境界(\b)要求が無いため、
+		// "layer=12abc"のように数字の後に他の文字が続いてもマッチする。
+		// Go版がlayer=[0-9]+\bのように末尾に\bを付けると"layer=12abc"に
+		// マッチしなくなりPython版と乖離する（レビュー指摘）。
+		testCases := []struct {
+			name    string
+			content string
+			want    string
+		}{
+			{
+				name:    "layer=12abc",
+				content: "[layopt layer=12abc visible=true]",
+				want:    "[layopt layer=12abc visible=true type=alpha]",
+			},
+			{
+				name:    "layer=1x",
+				content: "[layopt layer=1x visible=true]",
+				want:    "[layopt layer=1x visible=true type=alpha]",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				adjuster := converter.NewScriptAdjuster(nil, true)
+
+				adjusted, count := adjuster.AdjustContent(tc.content)
+
+				assert.Equal(t, tc.want, adjusted)
+				assert.GreaterOrEqual(t, count, 1)
+			})
+		}
+	})
+
 	t.Run("正常系: 既にtype=が指定されている場合は変更しない", func(t *testing.T) {
 		t.Parallel()
 

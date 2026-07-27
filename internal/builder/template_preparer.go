@@ -130,7 +130,7 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 
 	fetcher := NewSDL2SourceFetcher(0, p.sdl2Cache)
 	if err := fetcher.Fetch(javaDir); err != nil {
-		return fmt.Errorf("%w: %w", ErrSDL2SourceFetch, err)
+		return fmt.Errorf("%w: %w: %w", ErrTemplatePreparer, ErrSDL2SourceFetch, err)
 	}
 
 	return nil
@@ -177,7 +177,7 @@ func (p *TemplatePreparer) copyPluginsToJNILibs(pluginsInfo *PluginsInfo) error 
 func (p *TemplatePreparer) extractJNILibs() error {
 	baseAPK := filepath.Join(p.projectDir, "krkrsdl2_universal.apk")
 	if _, err := os.Stat(baseAPK); err != nil {
-		return fmt.Errorf("%w: ベースAPKが見つかりません: %s", ErrJniLibsNotFound, baseAPK)
+		return fmt.Errorf("%w: %w: ベースAPKが見つかりません: %s", ErrTemplatePreparer, ErrJniLibsNotFound, baseAPK)
 	}
 
 	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")

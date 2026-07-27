@@ -219,27 +219,32 @@ func TestAssetScanner_Classification(t *testing.T) {
 	t.Parallel()
 
 	classifyCases := []struct {
-		extension string
-		wantType  parser.AssetType
-		wantAct   parser.ConversionAction
+		extension  string
+		wantType   parser.AssetType
+		wantAct    parser.ConversionAction
+		wantTarget string
 	}{
-		{".ks", parser.AssetScript, parser.ConvertEncodeUTF8},
-		{".tjs", parser.AssetScript, parser.ConvertEncodeUTF8},
-		{".tlg", parser.AssetImage, parser.ConvertPNG},
-		{".bmp", parser.AssetImage, parser.ConvertCopy},
-		{".jpg", parser.AssetImage, parser.ConvertCopy},
-		{".png", parser.AssetImage, parser.ConvertCopy},
-		{".ogg", parser.AssetAudio, parser.ConvertCopy},
-		{".wav", parser.AssetAudio, parser.ConvertOgg},
-		{".mpg", parser.AssetVideo, parser.ConvertMP4},
-		{".wmv", parser.AssetVideo, parser.ConvertMP4},
-		{".txt", parser.AssetOther, parser.ConvertCopy},
-		{".ini", parser.AssetOther, parser.ConvertCopy},
-		{".dat", parser.AssetOther, parser.ConvertCopy},
+		{".ks", parser.AssetScript, parser.ConvertEncodeUTF8, ""},
+		{".tjs", parser.AssetScript, parser.ConvertEncodeUTF8, ""},
+		{".tlg", parser.AssetImage, parser.ConvertPNG, ".png"},
+		{".bmp", parser.AssetImage, parser.ConvertCopy, ""},
+		{".jpg", parser.AssetImage, parser.ConvertCopy, ""},
+		// .jpegはkrkrsdl2がネイティブサポートするためCOPY（変換なし）になる。
+		// .jpgのみを検証すると拡張子分岐の網羅にならないため、レビュー指摘に
+		// 従い.jpegも明示的に検証する。
+		{".jpeg", parser.AssetImage, parser.ConvertCopy, ""},
+		{".png", parser.AssetImage, parser.ConvertCopy, ""},
+		{".ogg", parser.AssetAudio, parser.ConvertCopy, ""},
+		{".wav", parser.AssetAudio, parser.ConvertOgg, ".ogg"},
+		{".mpg", parser.AssetVideo, parser.ConvertMP4, ".mp4"},
+		{".wmv", parser.AssetVideo, parser.ConvertMP4, ".mp4"},
+		{".txt", parser.AssetOther, parser.ConvertCopy, ""},
+		{".ini", parser.AssetOther, parser.ConvertCopy, ""},
+		{".dat", parser.AssetOther, parser.ConvertCopy, ""},
 	}
 
 	for _, tc := range classifyCases {
-		t.Run("正常系: "+tc.extension+"の種別・アクション分類", func(t *testing.T) {
+		t.Run("正常系: "+tc.extension+"の種別・アクション・変換後フォーマット分類", func(t *testing.T) {
 			t.Parallel()
 
 			dir := t.TempDir()
@@ -254,6 +259,7 @@ func TestAssetScanner_Classification(t *testing.T) {
 			require.Len(t, manifest.Files, 1)
 			assert.Equal(t, tc.wantType, manifest.Files[0].AssetType)
 			assert.Equal(t, tc.wantAct, manifest.Files[0].Action)
+			assert.Equal(t, tc.wantTarget, manifest.Files[0].TargetFormat)
 		})
 	}
 }

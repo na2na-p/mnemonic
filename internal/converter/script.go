@@ -133,8 +133,19 @@ var DefaultRules = []AdjustmentRule{
 }
 
 var (
-	layoptTagPattern        = regexp.MustCompile(`\[layopt\b([^\]]*)\]`)
-	layoptNumericLayerCheck = regexp.MustCompile(`\blayer=[0-9]+\b`)
+	layoptTagPattern = regexp.MustCompile(`\[layopt\b([^\]]*)\]`)
+	// why not: Python版の元パターンはlayer=[0-9]+の後ろに\bを付けないため
+	// "layer=12abc"のような後続文字があっても数字部分でマッチする。Go側も
+	// 末尾に\bを付けず同じ挙動にする（レビュー指摘: 付けると"layer=12abc"が
+	// マッチしなくなり、Python版と挙動が乖離する）。
+	layoptNumericLayerCheck = regexp.MustCompile(`\blayer=[0-9]+`)
+	// why not: Python版の元パターンは(?!type=)ではなく(?![^\]]*\btype=)、
+	// すなわち「\btype=」という単語境界付きの部分文字列が無いことを要求する。
+	// strings.Contains(attrs, "type=")は"hittype="や"subtype="のような、
+	// "type="の直前が単語構成文字であるため実際にはtype属性ではない
+	// 部分文字列にも誤って一致してしまう（レビュー指摘）。\btype=で
+	// Python版の単語境界付きマッチと同じ判定にする。
+	layoptTypeCheck = regexp.MustCompile(`\btype=`)
 )
 
 // applyLayoptAlphaRule は「type=が未指定かつlayer=数値を持つ[layopt]タグに
@@ -146,7 +157,7 @@ func applyLayoptAlphaRule(content string) (string, int) {
 	result := layoptTagPattern.ReplaceAllStringFunc(content, func(tag string) string {
 		attrs := layoptTagPattern.FindStringSubmatch(tag)[1]
 
-		if strings.Contains(attrs, "type=") || !layoptNumericLayerCheck.MatchString(attrs) {
+		if layoptTypeCheck.MatchString(attrs) || !layoptNumericLayerCheck.MatchString(attrs) {
 			return tag
 		}
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +132,39 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 		content, err := os.ReadFile(sdlActivity) //nolint:gosec // テストで自身が生成した一時ファイルを読む用途のため妥当
 		require.NoError(t, err)
 		assert.Equal(t, "dummy content", string(content))
+	})
+
+	t.Run("異常系: キャッシュ復元に失敗した場合ErrTemplatePreparerとErrSDL2SourceFetchの両方を満たす", func(t *testing.T) {
+		t.Parallel()
+
+		// マーカー/バージョンファイルは有効だがorgディレクトリを欠いた
+		// 壊れたキャッシュを用意し、実ネットワークに触れずに
+		// Cache.RestoreToを確実に失敗させる（レビュー指摘: 一般センチネル
+		// ErrTemplatePreparerと具体センチネルErrSDL2SourceFetchの両方を
+		// errors.Isで検証する）。
+		cacheDir := t.TempDir()
+		cache := NewSDL2SourceCache(cacheDir)
+		require.NoError(t, os.MkdirAll(cache.CachePath(), 0o750))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(cache.CachePath(), SDL2CacheMarkerFile),
+			[]byte(time.Now().Format(time.RFC3339Nano)),
+			0o600,
+		))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(cache.CachePath(), SDL2CacheVersionFile),
+			[]byte(SDL2CacheCurrentVersion),
+			0o600,
+		))
+		// "org" ディレクトリは意図的に作成しない
+
+		projectDir := t.TempDir()
+		p := NewTemplatePreparer(projectDir, cache)
+
+		err := p.fetchSDL2Sources()
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrTemplatePreparer)
+		require.ErrorIs(t, err, ErrSDL2SourceFetch)
 	})
 }
 
