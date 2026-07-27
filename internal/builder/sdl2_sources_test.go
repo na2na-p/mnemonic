@@ -468,12 +468,43 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 		assert.ErrorContains(t, err, "HTTP 404")
 	})
 
-	t.Run("異常系: タイムアウトの場合はErrSDL2SourceFetchTimeout", func(t *testing.T) {
+	t.Run("異常系: ヘッダー受信前のタイムアウトの場合はErrSDL2SourceFetchTimeout", func(t *testing.T) {
 		t.Parallel()
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			time.Sleep(200 * time.Millisecond)
 			_, _ = w.Write([]byte("too late"))
+		}))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(10*time.Millisecond, nil)
+		f.BaseURL = server.URL
+		destDir := t.TempDir()
+
+		err := f.Fetch(destDir)
+
+		require.ErrorIs(t, err, builder.ErrSDL2SourceFetchTimeout)
+		assert.ErrorContains(t, err, "タイムアウト")
+	})
+
+	// TestSDL2SourceFetcher_Fetch/異常系:_レスポンスボディ読み込み中のタイムアウト は
+	// レビュー指摘の回帰テスト: 上のケースはヘッダー受信前（client.Do自体）の
+	// タイムアウトしか検証できておらず、resp.Body.Read（io.ReadAll）側での
+	// タイムアウトがErrSDL2SourceFetchNetworkに誤分類される欠陥を見逃していた。
+	// ハンドラーでヘッダーを明示的にflushしてclient.Doを先に成功させ、
+	// ボディ転送中にタイムアウトさせることで、その分岐を検証する。
+	t.Run("異常系: レスポンスボディ読み込み中のタイムアウトの場合もErrSDL2SourceFetchTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusOK)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			// ヘッダー送出後、Content-Lengthの分のボディを書かずにクライアントの
+			// タイムアウトを超えて待機する。
+			time.Sleep(200 * time.Millisecond)
 		}))
 		t.Cleanup(server.Close)
 
@@ -522,6 +553,22 @@ func TestSDL2SourceFetcher_RequiredFiles(t *testing.T) {
 		}
 
 		assert.Equal(t, expected, builder.SDL2RequiredFiles)
+	})
+}
+
+// TestSDL2CacheCurrentVersion はレビュー指摘の回帰テスト: SDL2CacheCurrentVersionが
+// krkrsdl2互換コミット(53dea9830964eee8b5c2a7ee0a65d6e268dc78a1)の先頭8文字と
+// 一致することをピン留めする。実装側はコメントによる手動同期ではなく
+// sdlCommit[:8]からの構造的な派生に変更済みだが、その値自体が意図した
+// コミットからずれていないかは外部から検証できる形で残す。
+func TestSDL2CacheCurrentVersion(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: krkrsdl2互換SDLコミットの先頭8文字と一致する", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, "53dea983", builder.SDL2CacheCurrentVersion)
+		assert.Len(t, builder.SDL2CacheCurrentVersion, 8)
 	})
 }
 

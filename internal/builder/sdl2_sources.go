@@ -4,9 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,6 +29,22 @@ var (
 	ErrSDL2SourceCache = errors.New("キャッシュ操作に失敗しました")
 )
 
+// sdlCommit はkrkrsdl2が使用しているSDLコミット。このコミットのJavaソースは
+// krkrsdl2のネイティブライブラリ(libSDL2.so)と互換性がある。
+const sdlCommit = "53dea9830964eee8b5c2a7ee0a65d6e268dc78a1"
+
+// sdlCommitShortLen はSDL2CacheCurrentVersionとして使うsdlCommitの先頭文字数
+// （Python版CURRENT_VERSIONと同じ8文字の短縮形）。
+const sdlCommitShortLen = 8
+
+// SDL2CacheCurrentVersion は現在のキャッシュバージョン（SDLコミットSHAの短縮形）。
+//
+// why not: コメントでsdlCommitとの同期を表明するだけでは形骸化しうるため、
+// sdlCommitからのスライス派生にして構造的に同期を保証する
+// （P4: 「why not」はコメントで表明するのではなくコードで保証できる場合はそちらを優先する）。
+// 文字列スライスは定数式にできないため、Go言語仕様上varとせざるを得ない。
+var SDL2CacheCurrentVersion = sdlCommit[:sdlCommitShortLen]
+
 // SDL2ソースキャッシュ関連の定数。
 const (
 	// SDL2CacheValidityDays はキャッシュ有効期間（日）。
@@ -38,11 +53,6 @@ const (
 	SDL2CacheMarkerFile = ".cached_at"
 	// SDL2CacheVersionFile はキャッシュバージョンのファイル名。
 	SDL2CacheVersionFile = ".version"
-	// SDL2CacheCurrentVersion は現在のキャッシュバージョン（SDLコミットSHAの短縮形）。
-	//
-	// why not: SDL2SourceFetcher.sdlCommitと同期している必要がある
-	// （Python版CURRENT_VERSIONと同じ制約）。
-	SDL2CacheCurrentVersion = "53dea983"
 )
 
 // sdl2CacheMarkerTimeLayout はキャッシュ作成日時マーカーの日時フォーマット。
@@ -195,11 +205,6 @@ func (c *SDL2SourceCache) Clear() error {
 	return nil
 }
 
-// sdlCommit はkrkrsdl2が使用しているSDLコミット。このコミットのJavaソースは
-// krkrsdl2のネイティブライブラリ(libSDL2.so)と互換性がある。
-// SDL2CacheCurrentVersionと同期している必要がある。
-const sdlCommit = "53dea9830964eee8b5c2a7ee0a65d6e268dc78a1"
-
 // defaultSDL2BaseURL は既定のSDL2 Javaソース取得元ベースURL。
 const defaultSDL2BaseURL = "https://raw.githubusercontent.com/libsdl-org/SDL/" + sdlCommit +
 	"/android-project/app/src/main/java/org/libsdl/app"
@@ -238,12 +243,21 @@ type SDL2SourceFetcher struct {
 
 // NewSDL2SourceFetcher はSDL2SourceFetcherを初期化する。
 // timeoutが0以下の場合はdefaultSDL2Timeoutを使用する。
+//
+// why not: HTTPClientをここで生成せずhttpClient()に都度生成させると、Fetch1回
+// あたり8ファイルぶんhttp.Clientを毎回新規アロケートすることになる
+// （NewFontFetcher/NewPluginFetcherは既定クライアントをコンストラクタで確保して
+// いるのと同じ理由で、ここでも1つのクライアントをFetch全体で使い回す）。
 func NewSDL2SourceFetcher(timeout time.Duration, cache *SDL2SourceCache) *SDL2SourceFetcher {
 	if timeout <= 0 {
 		timeout = defaultSDL2Timeout
 	}
 
-	return &SDL2SourceFetcher{Timeout: timeout, Cache: cache}
+	return &SDL2SourceFetcher{
+		Timeout:    timeout,
+		Cache:      cache,
+		HTTPClient: &http.Client{Timeout: timeout},
+	}
 }
 
 // httpClient はHTTPClientフィールドを返す。nilの場合（SDL2SourceFetcher{}のゼロ値を
@@ -323,42 +337,33 @@ func (f *SDL2SourceFetcher) downloadJavaFile(filename string) ([]byte, error) {
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w: レスポンスの読み込みに失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceFetchNetwork, err)
+		// why not: ヘッダー受信後、ボディ転送中にタイムアウトするケース（例:
+		// Content-Lengthは返るがサーバーが応答を止める）もclassifySDL2FetchErrorへ
+		// 通す。ここで直接ErrSDL2SourceFetchNetworkに固定すると、ボディ読み込み中の
+		// タイムアウトがErrSDL2SourceFetchTimeoutとして分類されなくなる
+		// （TemplateDownloader.downloadFileOnceのio.Copy呼び出しと同じ方針）。
+		return nil, classifySDL2FetchError(err)
 	}
 
 	return content, nil
 }
 
-// classifySDL2FetchError はhttp.Client.Doが返したerrorをタイムアウト/ネットワーク
-// エラーへ分類する（TemplateDownloader.classifyHTTPErrorと同じ方針）。
+// classifySDL2FetchError はhttp.Client.Do、およびレスポンスボディ読み込み
+// （resp.Body.Read）が返したerrorをタイムアウト/ネットワークエラーへ分類する
+// （TemplateDownloader.classifyHTTPErrorと同じ方針）。
+//
+// why not: ヘッダー受信前のタイムアウト（Client.Doが返す*url.Error）と、ヘッダー
+// 受信後・ボディ転送中のタイムアウト（resp.Body.Readが返す非公開の
+// *http.timeoutError）は異なる型だが、いずれもnet.Errorを実装しTimeout()が
+// trueを返す。*url.Errorのみをerrors.Asで検査すると後者を取りこぼす
+// （ボディ転送中のタイムアウトがErrSDL2SourceFetchNetworkに誤分類される）ため、
+// net.Error単体で検査して両方のフェーズのタイムアウトを一様に扱う。
 func classifySDL2FetchError(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.Timeout() {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return fmt.Errorf("%w: %w: SDL2ソースのダウンロードがタイムアウトしました: %w",
 			ErrSDL2SourceFetcher, ErrSDL2SourceFetchTimeout, err)
 	}
 
 	return fmt.Errorf("%w: %w: SDL2ソースのダウンロードに失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceFetchNetwork, err)
-}
-
-// copyDir はsrcディレクトリの内容を再帰的にdstへコピーする。
-// dstが既に存在する場合、同名ファイルは上書きされる。
-func copyDir(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o750)
-		}
-
-		return copyFile(path, target)
-	})
 }
