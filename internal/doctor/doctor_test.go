@@ -1,6 +1,7 @@
 package doctor_test
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,22 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/doctor"
 )
+
+// findDependency はdoctor.Dependencies（本番の依存ツール一覧）からnameに一致する
+// エントリを検索する。テストを本番のDependencyInfoと突き合わせて検証するために使う。
+func findDependency(t *testing.T, name string) doctor.DependencyInfo {
+	t.Helper()
+
+	for _, dep := range doctor.Dependencies {
+		if dep.Name == name {
+			return dep
+		}
+	}
+
+	t.Fatalf("dependency %q not found in doctor.Dependencies", name)
+
+	return doctor.DependencyInfo{}
+}
 
 func TestDependencies_Count(t *testing.T) {
 	t.Parallel()
@@ -19,19 +36,29 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name            string
+		caseName        string // t.Run表示用の日本語テストケース名
+		name            string // doctor.Dependencies内の検索キー（DependencyInfo.Name）
 		expectedCommand string
 		expectedRequire bool
 	}{
-		{name: "Python", expectedCommand: "python", expectedRequire: true},
-		{name: "Java JDK", expectedCommand: "java", expectedRequire: true},
-		{name: "Android SDK", expectedCommand: "sdkmanager", expectedRequire: true},
-		{name: "Android NDK", expectedCommand: "ndk-build", expectedRequire: true},
-		{name: "FFmpeg", expectedCommand: "ffmpeg", expectedRequire: true},
+		{caseName: "正常系: Pythonが必須依存として登録されている", name: "Python", expectedCommand: "python", expectedRequire: true},
+		{
+			caseName: "正常系: Java_JDKが必須依存として登録されている", name: "Java JDK",
+			expectedCommand: "java", expectedRequire: true,
+		},
+		{
+			caseName: "正常系: Android_SDKが必須依存として登録されている", name: "Android SDK",
+			expectedCommand: "sdkmanager", expectedRequire: true,
+		},
+		{
+			caseName: "正常系: Android_NDKが必須依存として登録されている", name: "Android NDK",
+			expectedCommand: "ndk-build", expectedRequire: true,
+		},
+		{caseName: "正常系: FFmpegが必須依存として登録されている", name: "FFmpeg", expectedCommand: "ffmpeg", expectedRequire: true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.caseName, func(t *testing.T) {
 			t.Parallel()
 
 			var matched *doctor.DependencyInfo
@@ -69,6 +96,13 @@ func TestCheckDependency_ReturnsCheckResult(t *testing.T) {
 func TestCheckDependency_FoundStatus(t *testing.T) {
 	t.Parallel()
 
+	// why: doctor.Dependenciesの実際のPythonエントリ（command="python"）を
+	// 参照する。テストが独自に"python3"のようなハードコードしたコマンド名で
+	// 検証すると、本番のDependencyInfo.Command（"python"）が実行環境で解決
+	// できなくなった場合にテストだけが誤って通り続けてしまうため、必ず
+	// 本番の定義から拾う。
+	pythonDep := findDependency(t, "Python")
+
 	tests := []struct {
 		name         string
 		command      string
@@ -76,7 +110,7 @@ func TestCheckDependency_FoundStatus(t *testing.T) {
 		expectFound  bool
 		wantsMessage bool
 	}{
-		{name: "正常系: pythonが見つかる", command: "python3", versionFlag: "--version", expectFound: true},
+		{name: "正常系: pythonが見つかる", command: pythonDep.Command, versionFlag: pythonDep.VersionFlag, expectFound: true},
 		{
 			name: "異常系: 存在しないコマンド", command: "nonexistent_command_xyz123", versionFlag: "--version",
 			expectFound: false, wantsMessage: true,
@@ -101,6 +135,14 @@ func TestCheckDependency_FoundStatus(t *testing.T) {
 
 func TestCheckDependency_ExtractsVersion(t *testing.T) {
 	t.Parallel()
+
+	// why: goコマンド自体はこのテストバイナリをビルドした環境に存在する保証は
+	// あるが、その環境がテスト実行時のPATH上にあるとは限らない（クロス
+	// コンパイル済みバイナリの実行等）。ハードな前提にせず、見つからない場合は
+	// スキップして環境依存でテストが壊れないようにする。
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go command not found in PATH")
+	}
 
 	info := doctor.DependencyInfo{Name: "Go", Command: "go", VersionFlag: "version", Required: true}
 

@@ -127,6 +127,18 @@ func AnalyzeGame(path string) GameInfo {
 
 // detectEncoding はスクリプトファイルのエンコーディングを検出する。
 // 検出できない場合は空文字列を返す。
+//
+// why not: 複数のスクリプトファイルが混在するディレクトリでは、最初に見つかった
+// ファイルの検出結果を採用し以降は走査しない（下のfilepath.WalkDir内のearly
+// return参照）。Python版はpath.rglob("*")の列挙順（OSのディレクトリエントリ順
+// —— 多くの場合ファイルシステム依存で作成順や無秩序になる）に依存するため、
+// 同じディレクトリでも実行ごと・環境ごとに異なるファイルが「最初の1件」に
+// なりうり、結果として検出されるエンコーディングが非決定的になる欠陥がある
+// （実機で確認: 同一fixtureに対しPython "utf-8" / Go "ascii" のように結果が
+// 割れた）。Go版はfilepath.WalkDirがディレクトリエントリを常にファイル名の
+// 辞書順で返すことを利用し、意図的にPython版の非決定性を踏襲せず
+// 「辞書順で最初に見つかったファイルが勝つ」という決定的な規則に統一する
+// （TestAnalyzeGame_EncodingDetectionIsDeterministicByLexicalOrderでピン留め）。
 func detectEncoding(path string, extensions []string) string {
 	extLower := make(map[string]struct{}, len(extensions))
 	for _, ext := range extensions {

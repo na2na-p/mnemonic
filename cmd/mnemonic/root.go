@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
+	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/version"
 )
 
@@ -45,7 +46,22 @@ func exitWith(code apperr.ExitCode) error {
 }
 
 // NewRootCmd はmnemonic CLIのルートコマンドを構築する。
+// cacheサブコマンドは実環境のキャッシュディレクトリ（cache.Dir、通常$HOME配下）
+// を使用する。
 func NewRootCmd() *cobra.Command {
+	return newRootCmd(cache.Dir)
+}
+
+// newRootCmd はcacheディレクトリ解決関数を注入してルートコマンドを構築する。
+//
+// why: cache clean / cache infoは実際のキャッシュディレクトリを操作・削除する。
+// テストが本番同様cache.Dir（$HOME配下）を使うと、開発者がダウンロード済みの
+// テンプレートキャッシュを`go test`実行のたびに消去しかねない。コマンドツリー
+// 構築時に解決関数を引数として渡す設計にすることで、テストはt.TempDir()を
+// 返す関数を注入した独立したコマンドツリーを都度生成でき、newBuildPipeline
+// のようなパッケージ変数の差し替えと異なりグローバル状態を共有しないため、
+// t.Parallel()配下でも安全に使える。
+func newRootCmd(cacheDir func() (string, error)) *cobra.Command {
 	var showVersion bool
 
 	root := &cobra.Command{
@@ -70,7 +86,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newBuildCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newInfoCmd())
-	root.AddCommand(newCacheCmd())
+	root.AddCommand(newCacheCmd(cacheDir))
 
 	return root
 }
@@ -80,7 +96,13 @@ func NewRootCmd() *cobra.Command {
 // main()とテストの双方から呼び出せるよう、os.Exitを直接呼ばずコードを返す
 // 設計にする。
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	root := NewRootCmd()
+	return runWithRoot(NewRootCmd(), args, stdin, stdout, stderr)
+}
+
+// runWithRoot はrootを実行し、終了コードを返す。rootの構築方法を呼び出し元に
+// 委ねることで、テストがnewRootCmdへ差し替え用のcacheDir解決関数を注入した
+// コマンドツリーを実行できるようにする。
+func runWithRoot(root *cobra.Command, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	root.SetArgs(args)
 	root.SetIn(stdin)
 	root.SetOut(stdout)

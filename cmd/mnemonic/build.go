@@ -97,7 +97,16 @@ func newBuildCmd() *cobra.Command {
 			result := p.Run(progressCallback)
 
 			if result.Success {
-				fmt.Fprintf(cmd.OutOrStdout(), "ビルド完了: %s\n", *result.OutputPath) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+				// why not: 正常系のBuildPipeline.Runは常にOutputPathを設定するが、
+				// buildRunnerはテストではstubBuildRunnerに差し替え可能であり、
+				// Success:trueかつOutputPath:nilという（本来あり得ない）組み合わせを
+				// 返すスタブが来てもpanicしないよう防御的にnilチェックする。
+				outputPath := ""
+				if result.OutputPath != nil {
+					outputPath = *result.OutputPath
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "ビルド完了: %s\n", outputPath) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
 				return nil
 			}

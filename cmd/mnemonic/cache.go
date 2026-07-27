@@ -12,19 +12,19 @@ import (
 	"github.com/na2na-p/mnemonic/internal/cache"
 )
 
-func newCacheCmd() *cobra.Command {
+func newCacheCmd(cacheDir func() (string, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "cache",
 		Short: "キャッシュ管理",
 	}
 
-	cmd.AddCommand(newCacheCleanCmd())
-	cmd.AddCommand(newCacheInfoCmd())
+	cmd.AddCommand(newCacheCleanCmd(cacheDir))
+	cmd.AddCommand(newCacheInfoCmd(cacheDir))
 
 	return cmd
 }
 
-func newCacheCleanCmd() *cobra.Command {
+func newCacheCleanCmd(cacheDir func() (string, error)) *cobra.Command {
 	var (
 		force        bool
 		templateOnly bool
@@ -48,7 +48,14 @@ func newCacheCleanCmd() *cobra.Command {
 				}
 			}
 
-			if err := cache.ClearCache(templateOnly); err != nil {
+			dir, err := cacheDir()
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Error: %s\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+
+				return exitWith(apperr.ExitError)
+			}
+
+			if err := cache.ClearCacheDir(dir, templateOnly); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "Error: %s\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
 				return exitWith(apperr.ExitError)
@@ -87,12 +94,19 @@ func confirm(cmd *cobra.Command, prompt string) bool {
 	return answer == "y" || answer == "yes"
 }
 
-func newCacheInfoCmd() *cobra.Command {
+func newCacheInfoCmd(cacheDir func() (string, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   "info",
 		Short: "キャッシュ情報を表示する",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			ci, err := cache.GetCacheInfo()
+			dir, err := cacheDir()
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Error: %s\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+
+				return exitWith(apperr.ExitError)
+			}
+
+			ci, err := cache.InfoForDir(dir)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "Error: %s\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 

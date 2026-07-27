@@ -192,6 +192,24 @@ func TestAnalyzeGame_EncodingDetection(t *testing.T) {
 	assert.NotEmpty(t, result.DetectedEncoding)
 }
 
+// TestAnalyzeGame_EncodingDetectionIsDeterministicByLexicalOrder は、
+// internal/info.detectEncodingが辞書順で最初に見つかったスクリプトファイルの
+// 検出結果を採用するという、Go版が意図的に選んだ決定的な規則をピン留めする。
+// a_first.ks（純ASCII、"ascii"として検出される）とz_second.ks（非ASCIIの
+// UTF-8日本語テキスト、"utf-8"として検出されうる）を用意し、辞書順で先に
+// 訪れるa_first.ksの検出結果が採用されることを確認する。
+func TestAnalyzeGame_EncodingDetectionIsDeterministicByLexicalOrder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a_first.ks"), []byte("hello world"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "z_second.ks"), []byte("日本語テキスト"), 0o600))
+
+	result := info.AnalyzeGame(dir)
+
+	assert.Equal(t, "ascii", result.DetectedEncoding)
+}
+
 func TestAnalyzeGame_NoScriptsNoEncoding(t *testing.T) {
 	t.Parallel()
 

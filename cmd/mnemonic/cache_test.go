@@ -1,3 +1,9 @@
+// cache_test.go はpackage main（root_test.goのinvoke/invokeWithCacheDirおよび
+// runWithRoot/newRootCmdといった非公開の差し替え口）に依存するため、
+// 外部テストパッケージ（package main_test）へは分離しない。cache.Dirを
+// 参照する本番用NewRootCmdだけを使う純粋な結合テストであれば分離候補だが、
+// 本ファイルの全テストは$HOME配下の実キャッシュを誤って削除しないよう
+// invokeWithCacheDirでのcacheDir注入が必須であるため、その前提が成立しない。
 package main
 
 import (
@@ -10,7 +16,7 @@ import (
 func TestCacheHelpCommand_ShowsSubcommands(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "--help"}, "")
+	result := invoke(t, []string{"cache", "--help"})
 
 	assert.Equal(t, 0, result.exitCode)
 	assert.Contains(t, result.stdout, "clean")
@@ -20,7 +26,7 @@ func TestCacheHelpCommand_ShowsSubcommands(t *testing.T) {
 func TestCacheHelpCommand_ShowsDescription(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "--help"}, "")
+	result := invoke(t, []string{"cache", "--help"})
 
 	assert.Equal(t, 0, result.exitCode)
 	assert.Contains(t, result.stdout, "キャッシュ")
@@ -29,7 +35,7 @@ func TestCacheHelpCommand_ShowsDescription(t *testing.T) {
 func TestCacheCleanCommand_BasicExecution(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "clean"}, "y\n")
+	result := invokeWithCacheDir(t, []string{"cache", "clean"}, "y\n", t.TempDir())
 
 	assert.Equal(t, 0, result.exitCode)
 }
@@ -49,7 +55,7 @@ func TestCacheCleanCommand_ForceOption(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := invoke(t, tt.args, "")
+			result := invokeWithCacheDir(t, tt.args, "", t.TempDir())
 
 			assert.Equal(t, 0, result.exitCode)
 		})
@@ -59,7 +65,7 @@ func TestCacheCleanCommand_ForceOption(t *testing.T) {
 func TestCacheCleanCommand_TemplateOnlyOption(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "clean", "--template-only"}, "y\n")
+	result := invokeWithCacheDir(t, []string{"cache", "clean", "--template-only"}, "y\n", t.TempDir())
 
 	assert.Equal(t, 0, result.exitCode)
 }
@@ -85,7 +91,7 @@ func TestCacheCleanCommand_CombinedOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			result := invoke(t, tt.args, "")
+			result := invokeWithCacheDir(t, tt.args, "", t.TempDir())
 
 			assert.Equal(t, 0, result.exitCode)
 		})
@@ -95,7 +101,7 @@ func TestCacheCleanCommand_CombinedOptions(t *testing.T) {
 func TestCacheCleanCommand_HelpShowsOptions(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "clean", "--help"}, "")
+	result := invoke(t, []string{"cache", "clean", "--help"})
 
 	assert.Equal(t, 0, result.exitCode)
 	assert.True(t, strings.Contains(result.stdout, "--force") || strings.Contains(result.stdout, "-f"))
@@ -105,7 +111,7 @@ func TestCacheCleanCommand_HelpShowsOptions(t *testing.T) {
 func TestCacheCleanCommand_CancelledWhenDeclined(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "clean"}, "n\n")
+	result := invokeWithCacheDir(t, []string{"cache", "clean"}, "n\n", t.TempDir())
 
 	assert.Equal(t, 0, result.exitCode)
 	assert.Contains(t, result.stdout, "キャンセル")
@@ -114,7 +120,7 @@ func TestCacheCleanCommand_CancelledWhenDeclined(t *testing.T) {
 func TestCacheInfoCommand_BasicExecution(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "info"}, "")
+	result := invokeWithCacheDir(t, []string{"cache", "info"}, "", t.TempDir())
 
 	assert.Equal(t, 0, result.exitCode)
 }
@@ -122,7 +128,7 @@ func TestCacheInfoCommand_BasicExecution(t *testing.T) {
 func TestCacheInfoCommand_Help(t *testing.T) {
 	t.Parallel()
 
-	result := invoke(t, []string{"cache", "info", "--help"}, "")
+	result := invoke(t, []string{"cache", "info", "--help"})
 
 	assert.Equal(t, 0, result.exitCode)
 	assert.Contains(t, result.stdout, "キャッシュ情報")
