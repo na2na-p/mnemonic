@@ -121,10 +121,12 @@ func TestTLG5Decoder_ParseHeader(t *testing.T) {
 		blockHeight    uint32
 		expectedColors int
 	}{
-		"正常系: RGBA画像ヘッダー解析":  {32, 640, 480, 4, 4},
-		"正常系: RGB画像ヘッダー解析":   {24, 800, 600, 4, 3},
-		"正常系: 大きな画像ヘッダー解析":   {32, 1920, 1080, 8, 4},
-		"正常系: 最小サイズ画像ヘッダー解析": {24, 1, 1, 1, 3},
+		"正常系: RGBA画像ヘッダー解析":             {32, 640, 480, 4, 4},
+		"正常系: RGB画像ヘッダー解析":              {24, 800, 600, 4, 3},
+		"正常系: 大きな画像ヘッダー解析":              {32, 1920, 1080, 8, 4},
+		"正常系: 最小サイズ画像ヘッダー解析":            {24, 1, 1, 1, 3},
+		"正常系: 色深度3(krkrzチャンネル数表記)はRGB":  {3, 800, 600, 4, 3},
+		"正常系: 色深度4(krkrzチャンネル数表記)はRGBA": {4, 640, 480, 4, 4},
 	}
 
 	d := tlg.NewTLG5Decoder()
@@ -161,6 +163,16 @@ func TestTLG5Decoder_ParseHeader(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, tlg.ErrTLG5DataTooShort)
+	})
+
+	t.Run("異常系: 未知の色深度はErrTLG5InvalidColorDepthを返す", func(t *testing.T) {
+		t.Parallel()
+
+		data := tlg5Header(16, 8, 8, 4)
+		_, err := d.ParseHeader(data)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidColorDepth)
 	})
 }
 
@@ -249,6 +261,119 @@ func TestTLG5Decoder_Decode(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidBlockHeight)
+	})
+
+	t.Run("異常系: width/heightが巨大な場合ErrTLG5InvalidDimensionsを返す(makeslice panicの回帰防止)", func(t *testing.T) {
+		t.Parallel()
+
+		// レビュー指摘の回帰防止: width=height=0xFFFFFFFFの24バイト最小
+		// ヘッダーはmake([]byte, width*height)を呼ぶ前に拒否されなければ
+		// ならない（許容されると約17GBの確保でpanicする）。テストが
+		// 実際に大きな確保を試みていないこと自体もこのテストの検証対象。
+		d := tlg.NewTLG5Decoder()
+		data := tlg5Header(32, 0xFFFFFFFF, 0xFFFFFFFF, 4)
+
+		_, err := d.Decode(data)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidDimensions)
+	})
+
+	t.Run("異常系: width/heightが0の場合ErrTLG5InvalidDimensionsを返す", func(t *testing.T) {
+		t.Parallel()
+
+		cases := map[string]struct{ width, height uint32 }{
+			"width=0":  {0, 4},
+			"height=0": {4, 0},
+		}
+
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				d := tlg.NewTLG5Decoder()
+				data := tlg5Header(32, tc.width, tc.height, 4)
+
+				_, err := d.Decode(data)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tlg.ErrTLG5InvalidDimensions)
+			})
+		}
+	})
+
+	t.Run("異常系: widthまたはheightが上限を超える場合ErrTLG5InvalidDimensionsを返す", func(t *testing.T) {
+		t.Parallel()
+
+		// 1辺だけがTLG5MaxDimensionを超えるケース。面積チェックより先に
+		// 辺の上限チェックで拒否されることを確認する。
+		d := tlg.NewTLG5Decoder()
+		data := tlg5Header(32, 70000, 4, 4)
+
+		_, err := d.Decode(data)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidDimensions)
+	})
+
+	t.Run("正常系: mark=1(格納ブロック)は非圧縮のままピクセル値として扱われる", func(t *testing.T) {
+		t.Parallel()
+
+		d := tlg.NewTLG5Decoder()
+		width, height, blockHeight := 2, 2, 2
+		colorDepth := byte(32)
+
+		header := tlg5Header(colorDepth, uint32(width), uint32(height), uint32(blockHeight)) //nolint:gosec // テストフィクスチャの小さい値のみを扱う
+		blockCount := (height + blockHeight - 1) / blockHeight
+		blockSizes := make([]byte, blockCount*4)
+
+		// BGRA順、各チャンネルはデルタエンコーディング無しの生ピクセル値
+		// （格納ブロックはLZSS圧縮を経ないため、delta_dataがそのまま
+		// このバイト列になる。全ピクセル同色にするため先頭ピクセルのみ
+		// 値を持たせ残りは差分0を意味する0とする）。
+		channelValues := []byte{64, 128, 255, 255} // B, G, R, A
+		blockData := []byte{}
+		for _, v := range channelValues {
+			raw := make([]byte, width*height)
+			raw[0] = v
+			blockData = append(blockData, 1) // mark=1(格納)
+			sizeBuf := make([]byte, 4)
+			binary.LittleEndian.PutUint32(sizeBuf, uint32(len(raw))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
+			blockData = append(blockData, sizeBuf...)
+			blockData = append(blockData, raw...)
+		}
+
+		data := append(append(header, blockSizes...), blockData...)
+
+		img, err := d.Decode(data)
+
+		require.NoError(t, err)
+		for y := range height {
+			for x := range width {
+				r, g, b, a := colorAt(t, img, x, y)
+				assert.Equal(t, [4]uint8{255, 128, 64, 255}, [4]uint8{r, g, b, a}, "pixel (%d,%d)", x, y)
+			}
+		}
+	})
+
+	t.Run("異常系: mark>1はErrTLG5InvalidBlockMarkを返す", func(t *testing.T) {
+		t.Parallel()
+
+		d := tlg.NewTLG5Decoder()
+		width, height, blockHeight := 2, 2, 2
+
+		header := tlg5Header(32, uint32(width), uint32(height), uint32(blockHeight)) //nolint:gosec // テストフィクスチャの小さい値のみを扱う
+		blockCount := (height + blockHeight - 1) / blockHeight
+		blockSizes := make([]byte, blockCount*4)
+
+		// mark=2は0(圧縮)・1(格納)いずれでもない不正値
+		invalidMark := []byte{2, 4, 0, 0, 0, 0, 0, 0, 0}
+		data := append(append(header, blockSizes...), invalidMark...)
+
+		_, err := d.Decode(data)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidBlockMark)
 	})
 
 	t.Run("異常系: ブロックデータが不完全な場合ErrTLG5IncompleteBlockDataを返す", func(t *testing.T) {
