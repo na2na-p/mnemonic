@@ -37,7 +37,7 @@ type GameInfo struct {
 var (
 	scriptExtensions = []string{".ks", ".tjs"}
 	imageExtensions  = []string{".png", ".jpg", ".jpeg", ".bmp", ".gif"}
-	audioExtensions  = []string{".ogg", ".wav", ".mp3", ".flac"}
+	audioExtensions  = []string{".ogg", ".wav", ".mp3", ".flac", ".mid", ".midi"}
 	videoExtensions  = []string{".mp4", ".avi", ".wmv", ".mkv"}
 )
 

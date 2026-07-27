@@ -38,6 +38,7 @@ type ConversionAction string
 // ConversionActionの各値。
 const (
 	ConvertEncodeUTF8 ConversionAction = "encode_utf8"
+	ConvertPNG        ConversionAction = "convert_png"
 	ConvertWebP       ConversionAction = "convert_webp"
 	ConvertOgg        ConversionAction = "convert_ogg"
 	ConvertMP4        ConversionAction = "convert_mp4"
@@ -52,14 +53,21 @@ type extensionRule struct {
 }
 
 // extensionRules は拡張子ごとの種別・変換アクション・変換後フォーマットの対応表。
+//
+// why not: TLGのみPNGに変換する（krkrsdl2がTLG未対応のため）。JPEG/PNG/BMPは
+// krkrsdl2がネイティブサポートするためCOPY（変換なし）にする
+// （feat/exe-icon-extraction 680b27fより。誤ってWebPに変換されたJPEGを
+// krkrsdl2のネイティブローダーへ渡すとクラッシュする不具合の修正で、
+// internal/converter.ImageConverter.SupportedExtensionsが.tlgのみになった
+// のと対になる変更）。
 var extensionRules = map[string]extensionRule{
 	".ks":   {AssetScript, ConvertEncodeUTF8, ""},
 	".tjs":  {AssetScript, ConvertEncodeUTF8, ""},
-	".tlg":  {AssetImage, ConvertWebP, ".webp"},
-	".bmp":  {AssetImage, ConvertWebP, ".webp"},
-	".jpg":  {AssetImage, ConvertWebP, ".webp"},
-	".jpeg": {AssetImage, ConvertWebP, ".webp"},
-	".png":  {AssetImage, ConvertWebP, ".webp"},
+	".tlg":  {AssetImage, ConvertPNG, ".png"},
+	".bmp":  {AssetImage, ConvertCopy, ""},
+	".jpg":  {AssetImage, ConvertCopy, ""},
+	".jpeg": {AssetImage, ConvertCopy, ""},
+	".png":  {AssetImage, ConvertCopy, ""},
 	".wav":  {AssetAudio, ConvertOgg, ".ogg"},
 	".ogg":  {AssetAudio, ConvertCopy, ""},
 	".mp3":  {AssetAudio, ConvertCopy, ""},
@@ -72,6 +80,7 @@ var extensionRules = map[string]extensionRule{
 // converterNameToAction はconversion_rules設定のconverter名からConversionActionへの対応表。
 var converterNameToAction = map[string]ConversionAction{
 	"encode_utf8":  ConvertEncodeUTF8,
+	"convert_png":  ConvertPNG,
 	"convert_webp": ConvertWebP,
 	"convert_ogg":  ConvertOgg,
 	"convert_mp4":  ConvertMP4,

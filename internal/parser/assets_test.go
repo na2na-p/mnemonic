@@ -28,6 +28,7 @@ func TestConversionAction_Values(t *testing.T) {
 		expected string
 	}{
 		"正常系: UTF-8エンコード": {parser.ConvertEncodeUTF8, "encode_utf8"},
+		"正常系: PNG変換":      {parser.ConvertPNG, "convert_png"},
 		"正常系: WebP変換":     {parser.ConvertWebP, "convert_webp"},
 		"正常系: OGG変換":      {parser.ConvertOgg, "convert_ogg"},
 		"正常系: MP4変換":      {parser.ConvertMP4, "convert_mp4"},
@@ -55,12 +56,12 @@ func sampleAssetFiles() []parser.AssetFile {
 			SourceFormat: ".tjs",
 		},
 		{
-			Path: "image/bg01.tlg", AssetType: parser.AssetImage, Action: parser.ConvertWebP,
-			SourceFormat: ".tlg", TargetFormat: ".webp",
+			Path: "image/bg01.tlg", AssetType: parser.AssetImage, Action: parser.ConvertPNG,
+			SourceFormat: ".tlg", TargetFormat: ".png",
 		},
 		{
-			Path: "image/chara.bmp", AssetType: parser.AssetImage, Action: parser.ConvertWebP,
-			SourceFormat: ".bmp", TargetFormat: ".webp",
+			Path: "image/chara.bmp", AssetType: parser.AssetImage, Action: parser.ConvertCopy,
+			SourceFormat: ".bmp",
 		},
 		{
 			Path: "bgm/title.wav", AssetType: parser.AssetAudio, Action: parser.ConvertOgg,
@@ -134,12 +135,13 @@ func TestAssetManifest_Filters(t *testing.T) {
 		assert.Len(t, result, 2)
 	})
 
-	t.Run("正常系: FilterByActionでCONVERT_WEBPアクションがフィルタされる", func(t *testing.T) {
+	t.Run("正常系: FilterByActionでCONVERT_PNGアクションがフィルタされる", func(t *testing.T) {
 		t.Parallel()
 
-		result := manifest.FilterByAction(parser.ConvertWebP)
+		// TLGのみがCONVERT_PNG（JPEG/BMPはkrkrsdl2でネイティブサポートのためCOPY）
+		result := manifest.FilterByAction(parser.ConvertPNG)
 
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 1)
 	})
 
 	t.Run("正常系: FilterByActionでCONVERT_OGGアクションがフィルタされる", func(t *testing.T) {
@@ -161,9 +163,10 @@ func TestAssetManifest_Filters(t *testing.T) {
 	t.Run("正常系: FilterByActionでCOPYアクションがフィルタされる", func(t *testing.T) {
 		t.Parallel()
 
+		// ogg, txt, bmp がCOPY（JPEG/BMPはkrkrsdl2でネイティブサポート）
 		result := manifest.FilterByAction(parser.ConvertCopy)
 
-		assert.Len(t, result, 2)
+		assert.Len(t, result, 3)
 	})
 }
 
@@ -222,10 +225,10 @@ func TestAssetScanner_Classification(t *testing.T) {
 	}{
 		{".ks", parser.AssetScript, parser.ConvertEncodeUTF8},
 		{".tjs", parser.AssetScript, parser.ConvertEncodeUTF8},
-		{".tlg", parser.AssetImage, parser.ConvertWebP},
-		{".bmp", parser.AssetImage, parser.ConvertWebP},
-		{".jpg", parser.AssetImage, parser.ConvertWebP},
-		{".png", parser.AssetImage, parser.ConvertWebP},
+		{".tlg", parser.AssetImage, parser.ConvertPNG},
+		{".bmp", parser.AssetImage, parser.ConvertCopy},
+		{".jpg", parser.AssetImage, parser.ConvertCopy},
+		{".png", parser.AssetImage, parser.ConvertCopy},
 		{".ogg", parser.AssetAudio, parser.ConvertCopy},
 		{".wav", parser.AssetAudio, parser.ConvertOgg},
 		{".mpg", parser.AssetVideo, parser.ConvertMP4},
@@ -391,8 +394,8 @@ func TestAssetScanner_WithConfig(t *testing.T) {
 		// Python版(_get_conversion_rule_override)は最初にパターンが一致した
 		// ルールでreturnし、converterが未知でも次のルールを試さない。
 		// このケースは1番目のルールが一致しconverterが無効なため、2番目の
-		// "skip"ルールへフォールバックせず、拡張子デフォルト(convert_webp)の
-		// ままになるべき。
+		// "skip"ルールへフォールバックせず、拡張子デフォルト(copy、PNGは
+		// krkrsdl2がネイティブサポートするため変換不要)のままになるべき。
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "icon.png"), []byte("\x89PNG"))
 
@@ -409,6 +412,6 @@ func TestAssetScanner_WithConfig(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Len(t, manifest.Files, 1)
-		assert.Equal(t, parser.ConvertWebP, manifest.Files[0].Action)
+		assert.Equal(t, parser.ConvertCopy, manifest.Files[0].Action)
 	})
 }

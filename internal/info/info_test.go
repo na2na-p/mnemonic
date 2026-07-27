@@ -159,6 +159,22 @@ func TestAnalyzeGame_Kirikiri(t *testing.T) {
 	assert.Equal(t, 1, result.Video.Count)
 }
 
+func TestAnalyzeGame_CountsMidiFilesAsAudio(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "data.xp3"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bgm.mid"), []byte("MThd"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bgm2.midi"), []byte("MThd"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sound.ogg"), []byte("OggS1234"), 0o600))
+
+	result := info.AnalyzeGame(dir)
+
+	assert.Equal(t, 3, result.Audio.Count)
+	assert.Contains(t, result.Audio.Extensions, ".mid")
+	assert.Contains(t, result.Audio.Extensions, ".midi")
+}
+
 func TestAnalyzeGame_RPGMaker(t *testing.T) {
 	t.Parallel()
 
