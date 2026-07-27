@@ -1,0 +1,35 @@
+diff --git a/src/core/sdl2/SDLApplication.cpp b/src/core/sdl2/SDLApplication.cpp
+index 48c7820..3dcf1ca 100644
+--- a/src/core/sdl2/SDLApplication.cpp
++++ b/src/core/sdl2/SDLApplication.cpp
+@@ -938,7 +938,7 @@ void TVPWindowWindow::SetPaintBoxSize(tjs_int w, tjs_int h)
+ 			SDL_DestroyTexture(this->texture);
+ 			this->texture = nullptr;
+ 		}
+-		this->texture = SDL_CreateTexture(this->renderer, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, w, h);
++		this->texture = SDL_CreateTexture(this->renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+ 		if (!this->texture)
+ 		{
+ 			TVPThrowExceptionMessage(TJS_W("Cannot create texture texture: %1"), ttstr(SDL_GetError()));
+@@ -949,7 +949,7 @@ void TVPWindowWindow::SetPaintBoxSize(tjs_int w, tjs_int h)
+ 			SDL_FreeSurface(this->surface);
+ 			this->surface = nullptr;
+ 		}
+-		this->surface = SDL_CreateRGBSurface(0, w, h, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0);
++		this->surface = SDL_CreateRGBSurface(0, w, h, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+ 		if (!this->surface)
+ 		{
+ 			TVPThrowExceptionMessage(TJS_W("Cannot create surface: %1"), ttstr(SDL_GetError()));
+diff --git a/src/core/visual/sdl2/BasicDrawDevice.cpp b/src/core/visual/sdl2/BasicDrawDevice.cpp
+index e429d15..3a514df 100644
+--- a/src/core/visual/sdl2/BasicDrawDevice.cpp
++++ b/src/core/visual/sdl2/BasicDrawDevice.cpp
+@@ -504,7 +504,7 @@ void TJS_INTF_METHOD tTVPBasicDrawDevice::AddLayerManager(iTVPLayerManager * man
+ 	}
+ 	inherited::AddLayerManager(manager);
+ 
+-	manager->SetDesiredLayerType(ltOpaque); // ltOpaque な出力を受け取りたい
++	manager->SetDesiredLayerType(ltAlpha); // ltAlpha な出力を受け取りたい（透過対応）
+ }
+ //---------------------------------------------------------------------------
+ void TJS_INTF_METHOD tTVPBasicDrawDevice::SetTargetWindow(HWND wnd, bool is_main)
