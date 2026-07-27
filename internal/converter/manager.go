@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +27,12 @@ type Converter interface {
 	CanConvert(filePath string) bool
 	Convert(source, dest string) (ConversionResult, error)
 	SupportedExtensions() []string
+
+	// GetOutputExtension はsourcePathに対する変換後ファイルの拡張子
+	// （ドット付き小文字、例: ".png"）を返す。拡張子を変更しない場合は
+	// 空文字列を返す（Python版BaseConverter.get_output_extensionの
+	// デフォルト戻り値Noneに相当）。
+	GetOutputExtension(sourcePath string) string
 }
 
 // RetryConfig はリトライ動作を制御する設定。
@@ -297,11 +304,17 @@ func (m *ConversionManager) collectDirectoryFiles(sourceDir, destDir string, rec
 		}
 
 		path := filepath.Join(sourceDir, entry.Name())
-		if m.GetConverterForFile(path) == nil {
+		conv := m.GetConverterForFile(path)
+		if conv == nil {
 			continue
 		}
 
-		files = append(files, FileTask{Source: path, Dest: filepath.Join(destDir, entry.Name())})
+		dest := filepath.Join(destDir, entry.Name())
+		if outputExt := conv.GetOutputExtension(path); outputExt != "" {
+			dest = withExtension(dest, outputExt)
+		}
+
+		files = append(files, FileTask{Source: path, Dest: dest})
 	}
 
 	return files, nil
@@ -317,7 +330,9 @@ func (m *ConversionManager) collectDirectoryFilesRecursive(sourceDir, destDir st
 		if d.IsDir() {
 			return nil
 		}
-		if m.GetConverterForFile(path) == nil {
+
+		conv := m.GetConverterForFile(path)
+		if conv == nil {
 			return nil
 		}
 
@@ -326,7 +341,12 @@ func (m *ConversionManager) collectDirectoryFilesRecursive(sourceDir, destDir st
 			return relErr
 		}
 
-		files = append(files, FileTask{Source: path, Dest: filepath.Join(destDir, rel)})
+		dest := filepath.Join(destDir, rel)
+		if outputExt := conv.GetOutputExtension(path); outputExt != "" {
+			dest = withExtension(dest, outputExt)
+		}
+
+		files = append(files, FileTask{Source: path, Dest: dest})
 
 		return nil
 	})
@@ -335,6 +355,12 @@ func (m *ConversionManager) collectDirectoryFilesRecursive(sourceDir, destDir st
 	}
 
 	return files, nil
+}
+
+// withExtension はpathの拡張子をextへ置き換えたパスを返す（PathlibのPath.
+// with_suffixに相当）。
+func withExtension(path, ext string) string {
+	return strings.TrimSuffix(path, filepath.Ext(path)) + ext
 }
 
 // CalculateWorkers は最適なワーカー数を計算する。1ワーカーあたり

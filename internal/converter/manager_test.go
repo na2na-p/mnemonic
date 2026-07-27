@@ -17,10 +17,11 @@ import (
 // mockConverter はConversionManagerのテスト用Converter実装。
 // Python版tests/converter/test_manager.pyのMockConverterに相当する。
 type mockConverter struct {
-	extensions  []string
-	failCount   int
-	raiseError  bool
-	convertFunc func(source, dest string, callCount int) (converter.ConversionResult, error)
+	extensions      []string
+	failCount       int
+	raiseError      bool
+	convertFunc     func(source, dest string, callCount int) (converter.ConversionResult, error)
+	outputExtension string
 
 	mu        sync.Mutex
 	callCount int
@@ -31,6 +32,8 @@ func newMockConverter(extensions ...string) *mockConverter {
 }
 
 func (c *mockConverter) SupportedExtensions() []string { return c.extensions }
+
+func (c *mockConverter) GetOutputExtension(_ string) string { return c.outputExtension }
 
 func (c *mockConverter) CanConvert(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
@@ -531,6 +534,44 @@ func TestConversionManager_ConvertDirectory(t *testing.T) {
 		require.Len(t, summary.Results, 1)
 		assert.Contains(t, summary.Results[0].DestPath, "sub")
 		assert.Contains(t, summary.Results[0].DestPath, "nested")
+	})
+
+	t.Run("正常系: GetOutputExtensionが空でない場合に変換先の拡張子が変更される", func(t *testing.T) {
+		t.Parallel()
+
+		sourceDir := filepath.Join(t.TempDir(), "source")
+		mkdirAll(t, sourceDir)
+		writeFile(t, filepath.Join(sourceDir, "asset.tlg"), []byte("content"))
+
+		destDir := filepath.Join(t.TempDir(), "dest")
+
+		mc := newMockConverter(".tlg")
+		mc.outputExtension = ".png"
+		m := converter.NewConversionManager([]converter.Converter{mc}, nil, 1, nil)
+		summary, err := m.ConvertDirectory(sourceDir, destDir, true)
+
+		require.NoError(t, err)
+		require.Equal(t, 1, summary.Success)
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, filepath.Join(destDir, "asset.png"), summary.Results[0].DestPath)
+	})
+
+	t.Run("正常系: GetOutputExtensionが空の場合は変換先の拡張子が保持される", func(t *testing.T) {
+		t.Parallel()
+
+		sourceDir := filepath.Join(t.TempDir(), "source")
+		mkdirAll(t, sourceDir)
+		writeFile(t, filepath.Join(sourceDir, "file.txt"), []byte("content"))
+
+		destDir := filepath.Join(t.TempDir(), "dest")
+
+		m := converter.NewConversionManager([]converter.Converter{newMockConverter(".txt")}, nil, 1, nil)
+		summary, err := m.ConvertDirectory(sourceDir, destDir, true)
+
+		require.NoError(t, err)
+		require.Equal(t, 1, summary.Success)
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, filepath.Join(destDir, "file.txt"), summary.Results[0].DestPath)
 	})
 }
 
