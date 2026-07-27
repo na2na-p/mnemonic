@@ -30,15 +30,13 @@ type DependencyInfo struct {
 	Command     string
 	VersionFlag string
 	Required    bool
-	// MinVersionが空文字列の場合、最小バージョン指定なしを表す。
-	MinVersion string
 }
 
 // Dependencies はビルドに必要な依存ツールの一覧。
 // mnemonic自体はGoの単一バイナリとして動作するためランタイム依存を持たない。
 // ここに列挙するのはAPKビルドパイプラインが実行時に呼び出す外部ツール。
 var Dependencies = []DependencyInfo{
-	{Name: "Java JDK", Command: "java", VersionFlag: "-version", Required: true, MinVersion: "17"},
+	{Name: "Java JDK", Command: "java", VersionFlag: "-version", Required: true},
 	{Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true},
 	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
