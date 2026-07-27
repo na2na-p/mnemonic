@@ -203,9 +203,17 @@ func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 
 		return img, nil
 	case TLGVersionTLG6:
-		_, decErr := d.tlg6Decoder.Decode(data)
+		// why not: tlg6Decoder.Decode()はマジックバイトが有効な限り常に
+		// tlg.ErrTLG6NotImplemented（"TLG6デコードは未実装です"）を返す。
+		// これをErrTLGDecodeNotImplementedへさらに%wでラップすると
+		// 「TLGデコードは未実装です: TLG6デコードは未実装です」という
+		// 冗長な二重メッセージになるため、下位エラーの文言は引き継がず
+		// ErrTLGDecodeNotImplementedのみを返す。呼び出し自体は、将来
+		// tlg6Decoder.Decodeが実装された際にここを更新し忘れないための
+		// フックとして残す。
+		_, _ = d.tlg6Decoder.Decode(data)
 
-		return nil, fmt.Errorf("%w: %w", ErrTLGDecodeNotImplemented, decErr)
+		return nil, ErrTLGDecodeNotImplemented
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
 	}
@@ -227,6 +235,19 @@ func (d *TLGImageDecoder) DecodeToFile(source, dest string) error {
 }
 
 // encodeImageToFile はimgをdestの拡張子に応じた形式でファイルへ書き出す。
+//
+// why not(losslessAlphaとのパリティ差異): この関数はTLGImageDecoder.
+// DecodeToFile（ImageConverterを介さない低レベルなデコード専用ユーティリ
+// ティ）専用であり、ImageConverterのlosslessAlpha設定を受け取らない。Python
+// 参照実装のTLGImageDecoder.decode_to_fileは単に`image.save(dest)`を呼ぶ
+// のみで、Pillowの.webp保存はlossless未指定時は既定でロッシーになる
+// （ImageConverter._save_as_webpのようなhas_alpha分岐を持たない）。
+// これに対し本実装はimageHasAlpha(img)がtrueなら常にLossless=trueにする。
+// これはPillowの既定と厳密には一致しないが、losslessAlphaを設定する手段が
+// 無いこの関数の性質上、アルファ精度を暗黙に欠落させるよりも安全側に倒す
+// 意図的な選択である。ImageConverter経由の変換（Convert/ConvertFromImage）
+// は既にlosslessAlphaを正しく反映するsaveAsWebpを使うため、この差異は
+// TLGImageDecoder.DecodeToFileを直接呼ぶ経路にのみ影響する。
 func encodeImageToFile(img image.Image, dest string, quality int) error {
 	f, err := os.Create(dest) //nolint:gosec // ビルド成果物の出力用途のため妥当
 	if err != nil {
@@ -504,9 +525,14 @@ type opaquer interface {
 // 返るため、実質不透明でもhasAlpha=trueになる。Python版テスト・本パッケージの
 // テストが対象とする24bpp BMP/PNGのケースでは発生しない。
 //
-// TLG5デコード結果（internal/converter/tlg.TLG5Decoder.Decode）も常に
-// *image.NRGBAを返すため、RGB(3チャンネル)由来でアルファ255固定の画像は
-// Opaque()==trueとなり正しくhasAlpha=falseと判定される。
+// TLG5デコード結果（internal/converter/tlg.TLG5Decoder.Decode）はcolorsに
+// 応じて具象型を使い分ける（RGB(3チャンネル)は*image.RGBA、RGBA(4チャンネル)
+// は*image.NRGBA。詳細はtlg5.go createImageFromChannelsのwhy notコメント
+// 参照）。そのため本関数の判定はTLG5由来の画像に対しても2つの経路で
+// 正しく動作する: RGBA(*image.NRGBA)はColorModel()がNRGBAModelに一致し
+// 上のswitchで即座にtrue（Opaque()は評価されない）。RGB(*image.RGBA)は
+// ColorModel()がRGBAModelでありswitchに一致しないためOpaque()フォール
+// バックへ進み、A=255固定であることからOpaque()==trueとなりfalseを返す。
 func imageHasAlpha(img image.Image) bool {
 	switch img.ColorModel() {
 	case color.NRGBAModel, color.NRGBA64Model:
