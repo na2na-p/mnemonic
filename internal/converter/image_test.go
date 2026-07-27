@@ -382,6 +382,42 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		assert.Equal(t, color.NRGBA{R: tlg5FixtureR, G: tlg5FixtureG, B: tlg5FixtureB, A: tlg5FixtureA}, c)
 	})
 
+	t.Run("正常系: SDSコンテナ内のTLG5はアンラップ後の生TLG5と同一にデコードされる", func(t *testing.T) {
+		t.Parallel()
+
+		// DEFECT 1の回帰防止: 実TLGは TLG0.0\x00sds\x1a のSDSコンテナで包まれ、
+		// 内部に生のTLG5データを持つ。SDSラッパー付きファイルとアンラップ済みの
+		// 生TLG5ファイルが同一の画像にデコードされることを検証する。
+		inner := buildTLG5Fixture(2, 32)
+
+		sds := append([]byte{}, sdsMagic...)
+		sizeBuf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(inner))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
+		sds = append(sds, sizeBuf...)
+		sds = append(sds, inner...)
+
+		dir := t.TempDir()
+		rawPath := filepath.Join(dir, "raw.tlg")
+		sdsPath := filepath.Join(dir, "sds.tlg")
+		writeFile(t, rawPath, inner)
+		writeFile(t, sdsPath, sds)
+
+		decoder := converter.NewTLGImageDecoder()
+		rawImg, rawErr := decoder.Decode(rawPath)
+		require.NoError(t, rawErr)
+		sdsImg, sdsErr := decoder.Decode(sdsPath)
+		require.NoError(t, sdsErr)
+
+		require.Equal(t, rawImg.Bounds(), sdsImg.Bounds())
+		for y := range sdsImg.Bounds().Dy() {
+			for x := range sdsImg.Bounds().Dx() {
+				rawC := color.NRGBAModel.Convert(rawImg.At(x, y))
+				sdsC := color.NRGBAModel.Convert(sdsImg.At(x, y))
+				assert.Equal(t, rawC, sdsC, "pixel (%d,%d)", x, y)
+			}
+		}
+	})
+
 	t.Run("異常系: TLG6ファイルはErrTLGDecodeNotImplementedを返す", func(t *testing.T) {
 		t.Parallel()
 

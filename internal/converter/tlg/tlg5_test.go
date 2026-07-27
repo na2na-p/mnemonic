@@ -89,6 +89,92 @@ func buildTLG5(width, height, blockHeight int, colorDepth byte, channelValues []
 	return result
 }
 
+// tlg5LiteralChunk はplaneDeltaをLZSS全リテラル形式でエンコードし、
+// mark(0)+size(4)付きのチャンネルチャンクへ変換するテストヘルパー。
+func tlg5LiteralChunk(planeDelta []byte) []byte {
+	compressed := []byte{}
+	for pos := 0; pos < len(planeDelta); pos += 8 {
+		end := min(pos+8, len(planeDelta))
+		compressed = append(compressed, 0x00)
+		compressed = append(compressed, planeDelta[pos:end]...)
+	}
+
+	return tlg5Chunk(0, compressed)
+}
+
+// tlg5Chunk はmark(1)+size(4,LE)+compressedのチャンネルチャンクを組み立てる。
+func tlg5Chunk(mark byte, compressed []byte) []byte {
+	chunk := []byte{mark}
+	sizeBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sizeBuf, uint32(len(compressed))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
+	chunk = append(chunk, sizeBuf...)
+
+	return append(chunk, compressed...)
+}
+
+func TestTLG5Decoder_Decode_DictionaryPersistsAcrossBlocks(t *testing.T) {
+	t.Parallel()
+
+	// DEFECT 2の回帰防止（実アセットレベルのピン留め）: 2ブロックのTLG5画像で、
+	// ブロック2の先頭チャンネル(B)を「ブロック1の各チャンネルで辞書へ書き込まれた
+	// バイトを指すバックリファレンス」でエンコードする。スライド辞書がブロック
+	// 境界をまたいで持続する場合のみ、このバックリファレンスは正しいバイト列
+	// [10,20,30,40]を復元する。辞書をチャンクごとにリセットする旧実装では
+	// [0,0,0,0]が復元され、期待ピクセルと一致せずテストが失敗する。
+	//
+	// width=2, height=4, blockHeight=2 -> 2ブロック。colorDepth=3(RGB, 3チャンネル)。
+	// 各ブロックの1チャンネル分のプレーンは width*blockRows = 2*2 = 4バイト。
+	const width, height, blockHeight = 2, 4, 2
+
+	header := tlg5Header(3, width, height, blockHeight)
+
+	// ブロック1: 全チャンネル リテラル。辞書へ [10,20,30,40, 50,60,70,80, 90,100,110,120] が
+	// 順に書き込まれる（slidePos 0->12）。
+	block1 := tlg5LiteralChunk([]byte{10, 20, 30, 40})
+	block1 = append(block1, tlg5LiteralChunk([]byte{50, 60, 70, 80})...)
+	block1 = append(block1, tlg5LiteralChunk([]byte{90, 100, 110, 120})...)
+
+	// ブロック2 チャンネルB: フラグ0x01(マッチ) mpos=0 mlen=4。持続辞書の
+	// slide[0..3]=[10,20,30,40]を参照して復元する。
+	block2 := tlg5Chunk(0, []byte{0x01, 0x00, 0x10})
+	block2 = append(block2, tlg5LiteralChunk([]byte{1, 2, 3, 4})...)
+	block2 = append(block2, tlg5LiteralChunk([]byte{5, 6, 7, 8})...)
+
+	blockSizes := make([]byte, 8)
+	binary.LittleEndian.PutUint32(blockSizes[0:4], uint32(len(block1))) //nolint:gosec // テストフィクスチャ
+	binary.LittleEndian.PutUint32(blockSizes[4:8], uint32(len(block2))) //nolint:gosec // テストフィクスチャ
+
+	data := append(append(append(append([]byte{}, header...), blockSizes...), block1...), block2...)
+
+	d := tlg.NewTLG5Decoder()
+	img, err := d.Decode(data)
+	require.NoError(t, err)
+
+	// デルタデコード後の期待RGB値。辞書持続の効果はBチャンネル(channels[0])に
+	// 現れる: ブロック2のBプレーンは辞書のslide[0..3]=[10,20,30,40]を参照して
+	// 復元されるため、y=2,3のB値は 50,130,80,200 になる。辞書をリセットする旧実装
+	// ではブロック2のBデルタが[0,0,0,0]になり、これらB値が 40,100,40,100 に化けて
+	// 期待値と一致しなくなる（＝DEFECT 2のピン留め）。
+	expected := [8][3]uint8{
+		{90, 50, 10},   // (0,0)
+		{190, 110, 30}, // (1,0)
+		{200, 120, 40}, // (0,1)
+		{164, 4, 100},  // (1,1)
+		{205, 121, 50}, // (0,2)  B=50: 辞書持続でのみ得られる
+		{175, 7, 130},  // (1,2)  B=130: 同上
+		{212, 124, 80}, // (0,3)  B=80: 同上
+		{190, 14, 200}, // (1,3)  B=200: 同上
+	}
+
+	for i := range expected {
+		x, y := i%width, i/width
+		r, g, b, a := colorAt(t, img, x, y)
+		got := [3]uint8{r, g, b}
+		assert.Equal(t, expected[i], got, "pixel (%d,%d)", x, y)
+		assert.Equal(t, uint8(255), a, "pixel (%d,%d) alpha", x, y)
+	}
+}
+
 func TestTLG5Decoder_IsValid(t *testing.T) {
 	t.Parallel()
 
