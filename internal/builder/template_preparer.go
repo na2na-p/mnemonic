@@ -1,0 +1,523 @@
+package builder
+
+import (
+	"archive/zip"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+// センチネルエラー群。
+var (
+	// ErrTemplatePreparer はテンプレート準備に関する基本エラー。
+	ErrTemplatePreparer = errors.New("テンプレートの準備に失敗しました")
+	// ErrJniLibsNotFound はJNIライブラリが見つからない場合のエラー。
+	ErrJniLibsNotFound = errors.New("JNIライブラリが見つかりません")
+)
+
+// TemplatePreparer関連の定数。
+const (
+	// TargetSDKVersion は推奨ターゲットSDKバージョン。
+	TargetSDKVersion = 34
+	// CompileSDKVersion は推奨コンパイルSDKバージョン。
+	CompileSDKVersion = 34
+	// MinSDKVersion は推奨最小SDKバージョン。
+	MinSDKVersion = 21
+)
+
+// supportedABIs はサポートするABI一覧。
+var supportedABIs = map[string]struct{}{
+	"arm64-v8a":   {},
+	"armeabi-v7a": {},
+	"x86":         {},
+	"x86_64":      {},
+}
+
+// TemplatePreparer はAndroidプロジェクトテンプレートを準備する。
+//
+// 以下の処理を行う:
+//  1. krkrsdl2_universal.apkから.soファイルを抽出してjniLibsに配置
+//  2. KirikiriSDL2Activity.javaをassetsコピー機能付きに置き換え
+//  3. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
+//  4. AndroidManifest.xmlを更新（android:exported="true"追加）
+//  5. res/values/strings.xmlを作成（app_name設定）
+type TemplatePreparer struct {
+	projectDir string
+}
+
+// NewTemplatePreparer はTemplatePreparerを初期化する。
+func NewTemplatePreparer(projectDir string) *TemplatePreparer {
+	return &TemplatePreparer{projectDir: projectDir}
+}
+
+// Prepare はテンプレートを準備する。
+// assetsDir/iconPathが空文字列の場合、対応する処理はスキップされる
+// （iconPathはファイルが存在しない場合もスキップされる）。
+func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath string) error {
+	if err := p.extractJNILibs(); err != nil {
+		return err
+	}
+
+	if err := p.updateJavaSource(packageName); err != nil {
+		return err
+	}
+
+	if err := p.updateBuildGradle(packageName); err != nil {
+		return err
+	}
+
+	if err := p.updateManifest(); err != nil {
+		return err
+	}
+
+	if err := p.updateStringsXML(appName); err != nil {
+		return err
+	}
+
+	if assetsDir != "" {
+		if err := p.copyAssets(assetsDir); err != nil {
+			return err
+		}
+	}
+
+	if iconPath != "" {
+		if _, err := os.Stat(iconPath); err == nil {
+			if err := p.updateIcon(iconPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractJNILibs はkrkrsdl2_universal.apkから.soファイルを抽出する。
+func (p *TemplatePreparer) extractJNILibs() error {
+	baseAPK := filepath.Join(p.projectDir, "krkrsdl2_universal.apk")
+	if _, err := os.Stat(baseAPK); err != nil {
+		return fmt.Errorf("%w: ベースAPKが見つかりません: %s", ErrJniLibsNotFound, baseAPK)
+	}
+
+	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")
+	if err := os.MkdirAll(jniLibsDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	zr, err := zip.OpenReader(baseAPK)
+	if err != nil {
+		return fmt.Errorf("%w: 無効なAPKファイルです: %s", ErrTemplatePreparer, baseAPK)
+	}
+	defer func() { _ = zr.Close() }()
+
+	extracted := 0
+
+	for _, f := range zr.File {
+		if !strings.HasPrefix(f.Name, "lib/") || !strings.HasSuffix(f.Name, ".so") {
+			continue
+		}
+
+		parts := strings.Split(f.Name, "/")
+		if len(parts) < 3 {
+			continue
+		}
+
+		abi := parts[1]
+		soName := parts[2]
+
+		if _, ok := supportedABIs[abi]; !ok {
+			continue
+		}
+
+		destDir := filepath.Join(jniLibsDir, abi)
+		if err := os.MkdirAll(destDir, 0o750); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		if err := extractZipFileEntry(f, filepath.Join(destDir, soName)); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		extracted++
+	}
+
+	if extracted == 0 {
+		return fmt.Errorf("%w: APK内に.soファイルが見つかりません: %s", ErrJniLibsNotFound, baseAPK)
+	}
+
+	return nil
+}
+
+func extractZipFileEntry(f *zip.File, destPath string) error {
+	src, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+
+	dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // ABI名はsupportedABIsで許可リスト検証済みのため妥当
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dst.Close() }()
+
+	if _, err := io.Copy(dst, src); err != nil { //nolint:gosec // ベースAPKは信頼済みのビルド成果物でありサイズ上限は設けない
+		return err
+	}
+
+	return nil
+}
+
+// updateJavaSource はKirikiriSDL2Activity.javaを拡張版に置き換える。
+func (p *TemplatePreparer) updateJavaSource(packageName string) error {
+	packagePath := strings.ReplaceAll(packageName, ".", "/")
+	javaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", packagePath)
+	if err := os.MkdirAll(javaDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
+
+	oldJavaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
+	if _, err := os.Stat(oldJavaDir); err == nil {
+		if err := os.RemoveAll(oldJavaDir); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+	}
+
+	javaContent := generateActivityJava(packageName)
+	if err := os.WriteFile(javaFile, []byte(javaContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	return nil
+}
+
+// activityJavaTemplate は拡張版KirikiriSDL2Activity.javaのソースコードテンプレート。
+const activityJavaTemplate = `package %s;
+
+import android.os.Bundle;
+import android.content.res.AssetManager;
+import android.util.Log;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import org.libsdl.app.SDLActivity;
+
+/**
+ * KirikiriSDL2用のメインアクティビティ
+ *
+ * アプリ起動時にassets/data/配下のゲームファイルを
+ * 内部ストレージにコピーしてkrkrsdl2が読み込めるようにする。
+ */
+public class KirikiriSDL2Activity extends SDLActivity {
+    private static final String TAG = "KirikiriSDL2";
+    private static final String ASSETS_DATA_DIR = "data";
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        copyAssetsToInternal();
+        super.onCreate(savedInstanceState);
+    }
+
+    /**
+     * assets/data/配下のファイルを内部ストレージにコピーする
+     * 既存ファイルはスキップする（初回のみコピー）
+     */
+    private void copyAssetsToInternal() {
+        AssetManager assetManager = getAssets();
+        File destDir = getFilesDir();
+
+        try {
+            copyAssetFolder(assetManager, ASSETS_DATA_DIR, destDir);
+            Log.i(TAG, "Assets copied to: " + destDir.getAbsolutePath());
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to copy assets", e);
+        }
+    }
+
+    /**
+     * アセットフォルダを再帰的にコピーする
+     *
+     * @param assetManager アセットマネージャー
+     * @param srcPath コピー元のアセットパス
+     * @param destDir コピー先のディレクトリ
+     * @throws IOException コピーに失敗した場合
+     */
+    private void copyAssetFolder(AssetManager assetManager, String srcPath, File destDir)
+            throws IOException {
+        String[] files = assetManager.list(srcPath);
+        if (files == null || files.length == 0) {
+            // ファイルの場合
+            copyAssetFile(assetManager, srcPath, destDir);
+            return;
+        }
+
+        // ディレクトリの場合
+        for (String file : files) {
+            String srcFilePath = srcPath + "/" + file;
+            File destFile = new File(destDir, file);
+
+            String[] subFiles = assetManager.list(srcFilePath);
+            if (subFiles != null && subFiles.length > 0) {
+                // サブディレクトリ
+                destFile.mkdirs();
+                copyAssetFolder(assetManager, srcFilePath, destFile);
+            } else {
+                // ファイル
+                copyAssetFile(assetManager, srcFilePath, destDir);
+            }
+        }
+    }
+
+    /**
+     * アセットファイルを単一コピーする
+     * 既に存在するファイルはスキップする
+     *
+     * @param assetManager アセットマネージャー
+     * @param srcPath コピー元のアセットパス
+     * @param destDir コピー先のディレクトリ
+     * @throws IOException コピーに失敗した場合
+     */
+    private void copyAssetFile(AssetManager assetManager, String srcPath, File destDir)
+            throws IOException {
+        String fileName = srcPath.contains("/")
+                ? srcPath.substring(srcPath.lastIndexOf("/") + 1)
+                : srcPath;
+        File destFile = new File(destDir, fileName);
+
+        // 既存ファイルはスキップ
+        if (destFile.exists()) {
+            return;
+        }
+
+        destFile.getParentFile().mkdirs();
+
+        try (InputStream in = assetManager.open(srcPath);
+             OutputStream out = new FileOutputStream(destFile)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+        }
+    }
+}
+`
+
+func generateActivityJava(packageName string) string {
+	return fmt.Sprintf(activityJavaTemplate, packageName)
+}
+
+var (
+	buildGradleNamespaceCheckPattern = regexp.MustCompile(`namespace`)
+	androidBlockStartPattern         = regexp.MustCompile(`android\s*\{`)
+	compileSdkVersionPattern         = regexp.MustCompile(`compileSdkVersion\s+\d+`)
+	minSdkVersionPattern             = regexp.MustCompile(`minSdkVersion\s+\d+`)
+	targetSdkVersionPattern          = regexp.MustCompile(`targetSdkVersion\s+\d+`)
+	applicationIDCheckPattern        = regexp.MustCompile(`applicationId`)
+	applicationIDValuePattern        = regexp.MustCompile(`applicationId\s+"[^"]+"`)
+	cmakeExternalNativeBuildPattern  = regexp.MustCompile(`(?s)\s*externalNativeBuild\s*\{[^}]*cmake\s*\{[^}]*\}[^}]*\}`)
+	ndkExternalNativeBuildPattern    = regexp.MustCompile(`(?s)\s*externalNativeBuild\s*\{[^}]*ndk\s*\{[^}]*\}[^}]*\}`)
+	standaloneNdkAbiFiltersPattern   = regexp.MustCompile(`(?s)\s*ndk\s*\{[^}]*abiFilters[^}]*\}`)
+)
+
+// updateBuildGradle はapp/build.gradleを更新する
+// （namespace追加、SDKバージョン更新、CMake設定の削除）。
+func (p *TemplatePreparer) updateBuildGradle(packageName string) error {
+	buildGradle := filepath.Join(p.projectDir, "app", "build.gradle")
+
+	content, err := os.ReadFile(buildGradle) //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
+	if err != nil {
+		return fmt.Errorf("%w: build.gradleが見つかりません: %s", ErrTemplatePreparer, buildGradle)
+	}
+
+	text := string(content)
+
+	if !buildGradleNamespaceCheckPattern.MatchString(text) {
+		text = androidBlockStartPattern.ReplaceAllStringFunc(text, func(match string) string {
+			return match + fmt.Sprintf("\n    namespace \"%s\"", packageName)
+		})
+	}
+
+	text = compileSdkVersionPattern.ReplaceAllString(text, fmt.Sprintf("compileSdkVersion %d", CompileSDKVersion))
+	text = minSdkVersionPattern.ReplaceAllString(text, fmt.Sprintf("minSdkVersion %d", MinSDKVersion))
+	text = targetSdkVersionPattern.ReplaceAllString(text, fmt.Sprintf("targetSdkVersion %d", TargetSDKVersion))
+
+	if applicationIDCheckPattern.MatchString(text) {
+		text = applicationIDValuePattern.ReplaceAllStringFunc(text, func(string) string {
+			return fmt.Sprintf(`applicationId "%s"`, packageName)
+		})
+	}
+
+	text = cmakeExternalNativeBuildPattern.ReplaceAllString(text, "")
+	text = ndkExternalNativeBuildPattern.ReplaceAllString(text, "")
+	text = standaloneNdkAbiFiltersPattern.ReplaceAllString(text, "")
+
+	if err := os.WriteFile(buildGradle, []byte(text), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	return nil
+}
+
+var (
+	manifestPackageAttrPattern = regexp.MustCompile(`\s*package="[^"]*"`)
+	activityTagPattern         = regexp.MustCompile(`<activity[^>]*(?:>|/>)`)
+	serviceTagPattern          = regexp.MustCompile(`<service[^>]*(?:>|/>)`)
+	receiverTagPattern         = regexp.MustCompile(`<receiver[^>]*(?:>|/>)`)
+)
+
+// updateManifest はAndroidManifest.xmlを更新する
+// （package属性の削除、android:exported="true"の付与）。
+func (p *TemplatePreparer) updateManifest() error {
+	manifestPath := filepath.Join(p.projectDir, "app", "src", "main", "AndroidManifest.xml")
+
+	content, err := os.ReadFile(manifestPath) //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
+	if err != nil {
+		return fmt.Errorf("%w: AndroidManifest.xmlが見つかりません: %s", ErrTemplatePreparer, manifestPath)
+	}
+
+	text := string(content)
+	text = manifestPackageAttrPattern.ReplaceAllString(text, "")
+
+	text = activityTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
+	text = serviceTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
+	text = receiverTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
+
+	if err := os.WriteFile(manifestPath, []byte(text), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	return nil
+}
+
+// addExportedIfMissing はタグにandroid:exported属性が無い場合"true"で追加する。
+func addExportedIfMissing(tag string) string {
+	if strings.Contains(tag, "android:exported") {
+		return tag
+	}
+
+	if strings.HasSuffix(tag, "/>") {
+		return tag[:len(tag)-2] + ` android:exported="true"/>`
+	}
+
+	return tag[:len(tag)-1] + ` android:exported="true">`
+}
+
+// xmlAttrEscaper はXML属性値向けのエスケープ処理を行う。
+//
+// why not: 標準ライブラリのhtml.EscapeStringはPythonのhtml.escape(quote=True)と
+// 異なる数値文字参照を用いる（"を&#34;、'を&#39;にエスケープする）。
+// テストはPython版が生成する&quot;/&#x27;という具体的なエスケープ結果を
+// 検証しているため、Python版と同一の変換表を持つreplacerを自前で用意する。
+var xmlAttrEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	`"`, "&quot;",
+	"'", "&#x27;",
+)
+
+var stringsXMLAppNamePattern = regexp.MustCompile(`(<string name="app_name">)[^<]*(</string>)`)
+
+// updateStringsXML はres/values/strings.xmlを作成/更新する。
+func (p *TemplatePreparer) updateStringsXML(appName string) error {
+	valuesDir := filepath.Join(p.projectDir, "app", "src", "main", "res", "values")
+	if err := os.MkdirAll(valuesDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	stringsXML := filepath.Join(valuesDir, "strings.xml")
+	escapedAppName := xmlAttrEscaper.Replace(appName)
+
+	if content, err := os.ReadFile(stringsXML); err == nil { //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
+		text := stringsXMLAppNamePattern.ReplaceAllStringFunc(string(content), func(string) string {
+			return "<string name=\"app_name\">" + escapedAppName + "</string>"
+		})
+		if err := os.WriteFile(stringsXML, []byte(text), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		return nil
+	}
+
+	content := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">%s</string>
+</resources>
+`, escapedAppName)
+
+	if err := os.WriteFile(stringsXML, []byte(content), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	return nil
+}
+
+// copyAssets はゲームファイルをapp/src/main/assets/dataにコピーする（既存ファイルはマージ）。
+func (p *TemplatePreparer) copyAssets(assetsDir string) error {
+	destDir := filepath.Join(p.projectDir, "app", "src", "main", "assets", "data")
+	if err := os.MkdirAll(destDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	err := filepath.WalkDir(assetsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(assetsDir, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." {
+			return nil
+		}
+
+		destPath := filepath.Join(destDir, relPath)
+
+		if d.IsDir() {
+			return os.MkdirAll(destPath, 0o750)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
+			return err
+		}
+
+		return copyFile(path, destPath)
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	return nil
+}
+
+// iconMipmapDensities はアイコンを配置するmipmapディレクトリの解像度一覧。
+var iconMipmapDensities = []string{"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}
+
+// updateIcon はアプリアイコンを各解像度のmipmapディレクトリへコピーする。
+func (p *TemplatePreparer) updateIcon(iconPath string) error {
+	resDir := filepath.Join(p.projectDir, "app", "src", "main", "res")
+
+	for _, density := range iconMipmapDensities {
+		mipmapDir := filepath.Join(resDir, "mipmap-"+density)
+		if err := os.MkdirAll(mipmapDir, 0o750); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		destPath := filepath.Join(mipmapDir, "ic_launcher.png")
+		if err := copyFile(iconPath, destPath); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+	}
+
+	return nil
+}
