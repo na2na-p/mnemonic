@@ -315,6 +315,40 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		}
 		assert.True(t, found)
 	})
+
+	t.Run("正常系: 並列実行時も進捗コールバックはロック内で単調増加に呼ばれる", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。ProgressCallbackがcompletedCountの更新と
+		// 同じロック区間内で呼ばれることを検証する。コールバック自体には
+		// 意図的に追加のmutexを持たせず、ConversionManager側の排他制御だけで
+		// スライスへの追記が安全（-raceでクリーン）かつ1..Nの単調増加になる
+		// ことを確認する（Python版がwith lock:内でcallbackを呼ぶ挙動と同一）。
+		const fileCount = 50
+
+		dir := t.TempDir()
+		files := make([]converter.FileTask, 0, fileCount)
+		for range fileCount {
+			files = append(files, converter.FileTask{
+				Source: filepath.Join(dir, "source.txt"),
+				Dest:   filepath.Join(dir, "dest.txt"),
+			})
+		}
+
+		completions := make([]int, 0, fileCount)
+		callback := func(completed, _ int) {
+			completions = append(completions, completed)
+		}
+
+		m := converter.NewConversionManager([]converter.Converter{newMockConverter(".txt")}, nil, 8, callback)
+		summary := m.ConvertFiles(files)
+
+		assert.Equal(t, fileCount, summary.Success)
+		require.Len(t, completions, fileCount)
+		for i, v := range completions {
+			assert.Equal(t, i+1, v, "進捗コールバックはcompletedCountの単調増加順に呼ばれるはず")
+		}
+	})
 }
 
 func TestConversionManager_Retry(t *testing.T) {

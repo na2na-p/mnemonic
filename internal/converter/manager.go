@@ -158,14 +158,18 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 			for task := range tasksCh {
 				result := m.convertWithRetry(task.Source, task.Dest)
 
+				// why: Python版はwith lock: completed_count += 1; callback(...)と
+				// ロック内でコールバックを呼ぶ。ロック解放後に呼ぶと、複数の
+				// goroutineがcompletedCountの読み取り値をまたいで並行にコール
+				// バックを呼び出し得るため、コールバック側の状態（外部スライスへの
+				// 追記等）に対してデータレースや順序の非単調性を引き起こす。
+				// そのためロック区間内で呼び出し、Python版と同じ直列化を行う。
 				mu.Lock()
 				completedCount++
-				current := completedCount
-				mu.Unlock()
-
 				if m.ProgressCallback != nil {
-					m.ProgressCallback(current, summary.Total)
+					m.ProgressCallback(completedCount, summary.Total)
 				}
+				mu.Unlock()
 
 				resultsCh <- result
 			}
