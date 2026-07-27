@@ -220,7 +220,7 @@ func (c *MidiConverter) runFluidsynth(source, wavOutput string) *ConversionResul
 	defer cancel()
 
 	args := []string{
-		"-ni", // No interactive mode, no shell
+		"-ni",       // No interactive mode, no shell
 		"-g", "1.0", // Gain
 		"-r", strconv.Itoa(c.sampleRate), // Sample rate
 		"-F", wavOutput, // Output file

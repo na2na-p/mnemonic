@@ -53,34 +53,41 @@ func TestGetDefaultSoundfontPath(t *testing.T) {
 	})
 }
 
-// TestNewMidiConverter_Defaults はNewMidiConverterのデフォルト値解決をテストする。
+// TestNewMidiConverter_DefaultValues はNewMidiConverterのデフォルト値解決を
+// テストする。
 //
-// Python版 TestMidiConverterInit の移植。
-func TestNewMidiConverter_Defaults(t *testing.T) {
-	t.Run("正常系: デフォルト値での初期化", func(t *testing.T) {
-		// why: GetDefaultSoundfontPath()を経由するため、パッケージ変数を
-		// 書き換えるテストと並行実行しない。
-		c := converter.NewMidiConverter("", 0, "", 0, 0, nil)
+// why not: soundfontPath=""はGetDefaultSoundfontPath()を経由してパッケージ変数
+// MuseScoreSoundfontPath/FluidR3SoundfontPathを読む。TestGetDefaultSoundfontPath
+// がこれらを書き換えるため、このテストはt.Parallel()を呼ばず競合を避ける
+// （tparallelは「サブテストがParallelなら親も」を要求するため、混在させず
+// カスタム値のテスト(TestNewMidiConverter_CustomValues)を関数ごと分離した）。
+//
+// Python版 TestMidiConverterInit の一部（デフォルト初期化）の移植。
+func TestNewMidiConverter_DefaultValues(t *testing.T) {
+	c := converter.NewMidiConverter("", 0, "", 0, 0, nil)
 
-		assert.Equal(t, converter.GetDefaultSoundfontPath(), c.SoundfontPath())
-		assert.Equal(t, 44100, c.SampleRate())
-		assert.Equal(t, "libvorbis", c.AudioCodec())
-		assert.Equal(t, 4, c.AudioQuality())
-		assert.Equal(t, 300*time.Second, c.Timeout())
-	})
+	assert.Equal(t, converter.GetDefaultSoundfontPath(), c.SoundfontPath())
+	assert.Equal(t, 44100, c.SampleRate())
+	assert.Equal(t, "libvorbis", c.AudioCodec())
+	assert.Equal(t, 4, c.AudioQuality())
+	assert.Equal(t, 300*time.Second, c.Timeout())
+}
 
-	t.Run("正常系: カスタム値での初期化", func(t *testing.T) {
-		t.Parallel()
+// TestNewMidiConverter_CustomValues はNewMidiConverterへのカスタム値指定を
+// テストする。
+//
+// Python版 TestMidiConverterInit の一部（カスタム初期化）の移植。
+func TestNewMidiConverter_CustomValues(t *testing.T) {
+	t.Parallel()
 
-		customSF := filepath.Join(t.TempDir(), "custom.sf2")
-		c := converter.NewMidiConverter(customSF, 48000, "libopus", 6, 600*time.Second, nil)
+	customSF := filepath.Join(t.TempDir(), "custom.sf2")
+	c := converter.NewMidiConverter(customSF, 48000, "libopus", 6, 600*time.Second, nil)
 
-		assert.Equal(t, customSF, c.SoundfontPath())
-		assert.Equal(t, 48000, c.SampleRate())
-		assert.Equal(t, "libopus", c.AudioCodec())
-		assert.Equal(t, 6, c.AudioQuality())
-		assert.Equal(t, 600*time.Second, c.Timeout())
-	})
+	assert.Equal(t, customSF, c.SoundfontPath())
+	assert.Equal(t, 48000, c.SampleRate())
+	assert.Equal(t, "libopus", c.AudioCodec())
+	assert.Equal(t, 6, c.AudioQuality())
+	assert.Equal(t, 600*time.Second, c.Timeout())
 }
 
 // TestMidiConverter_SupportedExtensions はSupportedExtensionsをテストする。
@@ -124,12 +131,12 @@ func TestMidiConverter_CanConvert(t *testing.T) {
 		filename string
 		expected bool
 	}{
-		"正常系: MIDファイル":       {"music.mid", true},
-		"正常系: MIDIファイル":      {"music.midi", true},
-		"正常系: 大文字MID拡張子":     {"music.MID", true},
-		"正常系: 大文字MIDI拡張子":    {"music.MIDI", true},
-		"異常系: MP3ファイル（非対応）":  {"music.mp3", false},
-		"異常系: OGGファイル":       {"music.ogg", false},
+		"正常系: MIDファイル":      {"music.mid", true},
+		"正常系: MIDIファイル":     {"music.midi", true},
+		"正常系: 大文字MID拡張子":    {"music.MID", true},
+		"正常系: 大文字MIDI拡張子":   {"music.MIDI", true},
+		"異常系: MP3ファイル（非対応）": {"music.mp3", false},
+		"異常系: OGGファイル":      {"music.ogg", false},
 		"異常系: 画像ファイル":       {"image.png", false},
 		"異常系: テキストファイル":     {"document.txt", false},
 	}

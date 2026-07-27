@@ -29,7 +29,7 @@ func findDependency(t *testing.T, name string) doctor.DependencyInfo {
 func TestDependencies_Count(t *testing.T) {
 	t.Parallel()
 
-	assert.Len(t, doctor.Dependencies, 4)
+	assert.Len(t, doctor.Dependencies, 5)
 }
 
 func TestDependencies_ContainsRequiredTools(t *testing.T) {
@@ -72,6 +72,24 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 			assert.Equal(t, tt.expectedRequire, matched.Required)
 		})
 	}
+}
+
+// TestDependencies_ContainsOptionalTools はMIDI変換に使うFluidSynthが
+// 必須(Required=true)ではなく任意の依存として登録されていることを検証する。
+//
+// why: FluidSynthはMidiConverter（T-211）が呼び出す外部ツールだが、feat版
+// doctor.pyのDependencyInfo(name="FluidSynth", required=False)に合わせ、
+// MIDIアセットを含まないゲームのビルドをFluidSynth未インストール環境でも
+// ブロックしないようにするための意図的な設計（必須依存にすると全ゲームで
+// FluidSynthのインストールを強制することになり、Python版の意図と乖離する）。
+func TestDependencies_ContainsOptionalTools(t *testing.T) {
+	t.Parallel()
+
+	dep := findDependency(t, "FluidSynth")
+
+	assert.Equal(t, "fluidsynth", dep.Command)
+	assert.Equal(t, "--version", dep.VersionFlag)
+	assert.False(t, dep.Required)
 }
 
 func TestDependencies_AllHaveVersionFlag(t *testing.T) {
