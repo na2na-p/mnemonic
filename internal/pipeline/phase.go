@@ -1,7 +1,8 @@
-// Package pipeline はビルドパイプラインの段階を表す共有型を提供する。
+// Package pipeline はビルドパイプラインの段階を表す共有型と、
+// パイプライン本体（BuildPipeline: 各フェーズの実行制御）を提供する。
 //
-// PR2時点ではlogger（進捗表示）が参照するPhase型のみを切り出す。
-// パイプライン本体（各フェーズの実行制御）はPR7で移植する。
+// PR2でlogger（進捗表示）が参照するPhase型のみを切り出し、PR7
+// （本ファイル）でパイプライン本体を移植した。
 package pipeline
 
 // Phase はビルドパイプラインの各段階を表す。
@@ -22,3 +23,8 @@ const (
 	PhaseBuild   Phase = "build"
 	PhaseSign    Phase = "sign"
 )
+
+// AllPhases はビルドパイプラインの全フェーズを実行順で返す。
+func AllPhases() []Phase {
+	return []Phase{PhaseAnalyze, PhaseExtract, PhaseConvert, PhaseBuild, PhaseSign}
+}

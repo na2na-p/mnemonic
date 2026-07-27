@@ -31,3 +31,17 @@ func TestPhase_String(t *testing.T) {
 		})
 	}
 }
+
+func TestAllPhases(t *testing.T) {
+	t.Parallel()
+
+	want := []pipeline.Phase{
+		pipeline.PhaseAnalyze,
+		pipeline.PhaseExtract,
+		pipeline.PhaseConvert,
+		pipeline.PhaseBuild,
+		pipeline.PhaseSign,
+	}
+
+	assert.Equal(t, want, pipeline.AllPhases())
+}
