@@ -22,3 +22,8 @@ const (
 	PhaseBuild   Phase = "build"
 	PhaseSign    Phase = "sign"
 )
+
+// AllPhases はビルドパイプラインの全フェーズを実行順で返す。
+func AllPhases() []Phase {
+	return []Phase{PhaseAnalyze, PhaseExtract, PhaseConvert, PhaseBuild, PhaseSign}
+}
