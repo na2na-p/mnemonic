@@ -1,6 +1,8 @@
 package converter_test
 
 import (
+	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,7 +208,7 @@ func TestEncodingConverter_SupportedExtensions(t *testing.T) {
 	t.Parallel()
 
 	c := converter.NewEncodingConverter("", "")
-	for _, ext := range []string{".ks", ".tjs", ".txt", ".csv", ".ini"} {
+	for _, ext := range []string{".ks", ".tjs", ".txt", ".csv", ".ini", ".asd"} {
 		assert.Contains(t, c.SupportedExtensions(), ext)
 	}
 }
@@ -530,4 +532,83 @@ func TestEncodingConverter_JapanesePreservation(t *testing.T) {
 			assertFileUTF8Equals(t, dest, tc.text)
 		})
 	}
+}
+
+func TestEncodingConverter_KirikiriScriptBOM(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: 吉里吉里スクリプトファイルにはUTF-8 BOMが追加される", func(t *testing.T) {
+		t.Parallel()
+
+		for _, ext := range []string{".tjs", ".ks", ".asd"} {
+			t.Run(ext, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				source := filepath.Join(dir, "source"+ext)
+				dest := filepath.Join(dir, "dest"+ext)
+				text := "テスト文字列です。これは吉里吉里スクリプトファイルのテストです。"
+				writeSJIS(t, source, text)
+
+				c := converter.NewEncodingConverter("utf-8", "shift_jis")
+				result, err := c.Convert(source, dest)
+
+				require.NoError(t, err)
+				assert.Equal(t, converter.StatusSuccess, result.Status)
+
+				raw, readErr := os.ReadFile(dest) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+				require.NoError(t, readErr)
+				assert.True(t, bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}), "UTF-8 BOMが付与されているべき")
+			})
+		}
+	})
+
+	t.Run("正常系: 非スクリプトファイルにはUTF-8 BOMが追加されない", func(t *testing.T) {
+		t.Parallel()
+
+		for _, ext := range []string{".txt", ".csv", ".ini"} {
+			t.Run(ext, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				source := filepath.Join(dir, "source"+ext)
+				dest := filepath.Join(dir, "dest"+ext)
+				text := "テスト文字列です。これは一般的なテキストファイルのテストです。"
+				writeSJIS(t, source, text)
+
+				c := converter.NewEncodingConverter("utf-8", "shift_jis")
+				result, err := c.Convert(source, dest)
+
+				require.NoError(t, err)
+				assert.Equal(t, converter.StatusSuccess, result.Status)
+
+				raw, readErr := os.ReadFile(dest) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+				require.NoError(t, readErr)
+				assert.False(t, bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}), "UTF-8 BOMが付与されるべきではない")
+			})
+		}
+	})
+
+	t.Run("正常系: ASCIIのみの吉里吉里スクリプトファイルにもBOMが追加される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.asd")
+		dest := filepath.Join(dir, "dest.asd")
+		// why: .asdアニメーションファイルはASCIIのみの内容が一般的だが、Shift_JISとして
+		// 誤解釈されるのを防ぐためBOMが必要（isASCII短絡でsourceEncoding自動検出時に
+		// "utf-8"判定されるケースでもBOM付与ルールが正しく効くことを確認する）。
+		asciiContent := []byte("*start\r\n@wait time=150\r\n@clip left=445 top=0")
+		require.NoError(t, os.WriteFile(source, asciiContent, 0o600))
+
+		c := converter.NewEncodingConverter("utf-8", "")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+
+		raw, readErr := os.ReadFile(dest) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+		require.NoError(t, readErr)
+		assert.True(t, bytes.HasPrefix(raw, []byte{0xef, 0xbb, 0xbf}), "ASCIIスクリプトでもUTF-8 BOMが付与されるべき")
+	})
 }

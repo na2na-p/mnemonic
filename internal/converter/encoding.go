@@ -216,7 +216,18 @@ func (c *EncodingConverter) SourceEncoding() string { return c.sourceEncoding }
 
 // SupportedExtensions は対応する拡張子の一覧を返す。
 func (c *EncodingConverter) SupportedExtensions() []string {
-	return []string{".ks", ".tjs", ".txt", ".csv", ".ini"}
+	return []string{".ks", ".tjs", ".txt", ".csv", ".ini", ".asd"}
+}
+
+// kirikiriScriptExtensions は吉里吉里スクリプトファイルの拡張子一覧。
+//
+// why not: これらのファイルはUTF-8 BOMが無いとKirikiriZ側でShift_JISとして
+// 誤解釈されるため、変換先がUTF-8の場合は常にBOMを付与する必要がある
+// （ASCIIのみの内容でも例外にしない。8a188fa）。
+var kirikiriScriptExtensions = []string{".ks", ".tjs", ".asd"}
+
+func isKirikiriScriptExtension(ext string) bool {
+	return containsString(kirikiriScriptExtensions, strings.ToLower(ext))
 }
 
 // GetOutputExtension は出力ファイルの拡張子を変更しないため常に空文字列を
@@ -269,8 +280,9 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 	targetNormalized := strings.ReplaceAll(strings.ToLower(c.targetEncoding), "-", "_")
 	sourceNormalized := strings.ReplaceAll(strings.ToLower(sourceEncoding), "-", "_")
 	hasBOM := bytes.HasPrefix(data, utf8BOM)
+	isKirikiriScript := isKirikiriScriptExtension(filepath.Ext(source))
 
-	if sourceNormalized == targetNormalized && !hasBOM {
+	if sourceNormalized == targetNormalized && !hasBOM && !isKirikiriScript {
 		return ConversionResult{
 			SourcePath:  source,
 			DestPath:    dest,
@@ -293,6 +305,12 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 			Message:     fmt.Sprintf("エンコーディング変換に失敗しました: %v", convErr),
 			BytesBefore: bytesBefore,
 		}, nil
+	}
+
+	// 吉里吉里スクリプトファイル(.ks/.tjs/.asd)はUTF-8 BOMが無いとShift_JISとして
+	// 誤解釈されるため、変換先がUTF-8の場合はBOMを付与する。
+	if isKirikiriScript && targetNormalized == "utf_8" {
+		resultBytes = append(append([]byte{}, utf8BOM...), resultBytes...)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
