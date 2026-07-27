@@ -153,6 +153,11 @@ func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) 
 		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
+	// why not: Python版はtimeoutをコンストラクタ引数として保持するが、
+	// stream.run(overwrite_output=True, quiet=True)呼び出しには一切渡しておらず
+	// 実際には何の効果も持たないdead configuration。Go版ではcontext.WithTimeoutで
+	// timeoutを実際に有効化しており、これはPython版の未配線設定に対する意図的な
+	// 改善（フリーズしたffmpegプロセスを無期限に待ち続けない）である。
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
