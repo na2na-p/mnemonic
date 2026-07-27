@@ -1,6 +1,5 @@
 // Package apperr はCLI全体で共有する終了コードと操作結果の値型を提供する。
 //
-// Python版 (src/mnemonic/types.py) の ExitCode / Result をGoへ移植したもの。
 // Pythonの Result は例外機構と併用され、成功/失敗を戻り値として明示的に扱うための
 // 補助的な値だった。Goではエラーは標準的に error インターフェースで表現するため、
 // Result 自体に振る舞い（Unwrap等）は持たせず、CLI終了コードを伴う結果を表す

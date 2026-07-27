@@ -137,10 +137,10 @@ const (
 )
 
 // buildTLG5Fixture はwidth x tlg5FixtureHeightの単色TLG5画像バイト列を生成
-// するテストヘルパー（Python版tests/converter/test_image.pyの
-// create_tlg5_test_dataに相当。アルゴリズム自体のテストはinternal/converter
-// /tlg側で行うため、ここではImageConverter/TLGImageDecoder統合経路の検証に
-// 十分な単純なフィクスチャのみを生成する）。
+// するテストヘルパー（Python版のcreate_tlg5_test_dataに相当。アルゴリズム
+// 自体のテストはinternal/converter/tlg側で行うため、ここでは
+// ImageConverter/TLGImageDecoder統合経路の検証に十分な単純なフィクスチャ
+// のみを生成する）。
 func buildTLG5Fixture(width int, colorDepth byte) []byte {
 	const (
 		height      = tlg5FixtureHeight

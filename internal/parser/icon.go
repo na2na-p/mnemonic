@@ -28,8 +28,6 @@ var (
 )
 
 // IconExtractor はEXEファイルからアイコンを抽出するインターフェース。
-//
-// Python版のIconExtractorProtocol(parser/icon.py)に相当する。
 type IconExtractor interface {
 	// Extract はexePathからアイコンを抽出し、outputDir/icon.pngとして保存する。
 	Extract(exePath, outputDir string) (string, error)

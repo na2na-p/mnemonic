@@ -1,6 +1,4 @@
 // Package cache はテンプレートキャッシュディレクトリの解決と管理を提供する。
-//
-// Python版 (src/mnemonic/cache.py) をGoへ移植したもの。
 package cache
 
 import (

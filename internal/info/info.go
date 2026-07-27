@@ -1,7 +1,5 @@
 // Package info はゲームディレクトリの構成解析（エンジン検出・ファイル統計・
 // エンコーディング検出）を提供する。
-//
-// Python版 (src/mnemonic/info.py) をGoへ移植したもの。
 package info
 
 import (

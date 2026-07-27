@@ -2,6 +2,4 @@
 //
 // zipalignによるアラインメント最適化とapksignerによる署名・検証、
 // キーストアパスワードの取得を扱う。
-//
-// Python版 (src/mnemonic/signer/) をGoへ移植したもの。
 package signer

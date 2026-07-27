@@ -15,7 +15,7 @@ import (
 )
 
 // mockConverter はConversionManagerのテスト用Converter実装。
-// Python版tests/converter/test_manager.pyのMockConverterに相当する。
+// Python版のMockConverterに相当する。
 type mockConverter struct {
 	extensions      []string
 	failCount       int

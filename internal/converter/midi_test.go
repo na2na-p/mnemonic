@@ -108,7 +108,7 @@ func TestMidiConverter_SupportedExtensions(t *testing.T) {
 
 // TestMidiConverter_GetOutputExtension はGetOutputExtensionをテストする。
 //
-// why not: baseline Python版(midi.py)はBaseConverter.get_output_extensionの
+// why not: baseline Python版はBaseConverter.get_output_extensionの
 // デフォルト（拡張子を変更しない）のままだが、Go版Converterインターフェースは
 // PR9(T-209)でGetOutputExtensionを追加した際にManagerがこれを使い出力先の
 // 拡張子をリネームする設計になった。MIDI変換の出力実体は常にOGGであるため、

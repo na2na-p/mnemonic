@@ -77,8 +77,8 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 // TestDependencies_ContainsOptionalTools はMIDI変換に使うFluidSynthが
 // 必須(Required=true)ではなく任意の依存として登録されていることを検証する。
 //
-// why: FluidSynthはMidiConverter（T-211）が呼び出す外部ツールだが、feat版
-// doctor.pyのDependencyInfo(name="FluidSynth", required=False)に合わせ、
+// why: FluidSynthはMidiConverter（T-211）が呼び出す外部ツールだが、
+// Python版のDependencyInfo(name="FluidSynth", required=False)に合わせ、
 // MIDIアセットを含まないゲームのビルドをFluidSynth未インストール環境でも
 // ブロックしないようにするための意図的な設計（必須依存にすると全ゲームで
 // FluidSynthのインストールを強制することになり、Python版の意図と乖離する）。

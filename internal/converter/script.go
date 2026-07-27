@@ -32,11 +32,10 @@ type AdjustmentRule struct {
 
 // DefaultRules はScriptAdjusterのデフォルト調整ルール。
 //
-// MIDI系ルール（MIDISoundBuffer以降）はPR11'（T-211）でmidi.py+script.pyの
-// フィーチャーブランチ差分から移植した。適用順序はPython版と同一に保つ必要が
-// ある: MIDISoundBuffer→WaveSoundBuffer変換が先に走ることで、変換前の
-// "MIDISoundBuffer.midiOut(...)" 呼び出しも次のmidiOut置換ルールで捕捉される
-// （4e83a5eのtest_midi_out_converted_from_midi_sound_bufferが検証する挙動）。
+// MIDI系ルール（MIDISoundBuffer以降）はPR11'（T-211）で追加した。適用順序は
+// Python版と同一に保つ必要がある: MIDISoundBuffer→WaveSoundBuffer変換が
+// 先に走ることで、変換前の"MIDISoundBuffer.midiOut(...)" 呼び出しも次の
+// midiOut置換ルールで捕捉される。
 var DefaultRules = []AdjustmentRule{
 	{
 		Pattern:     `^(\s*)(Plugins\.link\(["'].*?\.dll["']\);)`,

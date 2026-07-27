@@ -1,6 +1,4 @@
 // Package converter はアセット変換（文字コード・スクリプト調整・画像・動画）を提供する。
-//
-// Python版 (src/mnemonic/converter/) をGoへ移植したもの。
 package converter
 
 import (

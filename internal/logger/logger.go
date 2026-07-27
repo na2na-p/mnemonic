@@ -1,6 +1,5 @@
 // Package logger は進捗表示およびログ出力を提供する。
 //
-// Python版 (src/mnemonic/logger.py) をGoへ移植したもの。
 // VerboseLevelに応じた出力制御を行い、CLIでのビルド進捗をユーザーにわかりやすく
 // 表示するために使用される。
 package logger
