@@ -1,0 +1,125 @@
+# Release
+# vX.Y.Z タグのプッシュ時に、タグ版を埋め込んだクロスプラットフォームバイナリを
+# ビルドして GitHub Release を作成する。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: App CI (Go)
+    uses: ./.github/workflows/app-ci-go.yml
+    secrets: inherit
+
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # タグ名 vX.Y.Z から先頭の v を除いた値を version.value へ埋め込む。
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          name="mnemonic_${GITHUB_REF_NAME}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${name}"
+          bin="mnemonic"
+          if [ "${GOOS}" = "windows" ]; then bin="mnemonic.exe"; fi
+          # CGOを無効化して各プラットフォームで単一の静的バイナリにする。
+          CGO_ENABLED=0 go build \
+            -ldflags "-s -w -X github.com/na2na-p/mnemonic/internal/version.value=${version}" \
+            -o "dist/${name}/${bin}" \
+            ./cmd/mnemonic
+          cp README.md "dist/${name}/"
+          if [ "${GOOS}" = "windows" ]; then
+            (cd dist && zip -qr "${name}.zip" "${name}")
+          else
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mnemonic-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # プレリリース（vX.Y.Z-rc.1 等）はタグに応じて自動判定する。
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease_flag=""
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease_flag="--prerelease" ;;
+          esac
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            ${prerelease_flag} \
+            artifacts/*.tar.gz artifacts/*.zip artifacts/SHA256SUMS.txt
