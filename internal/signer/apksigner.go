@@ -21,6 +21,25 @@ type KeystoreConfig struct {
 	KeyPassword      *string
 }
 
+// String はfmt.Stringerを実装し、パスワードをマスクした表現を返す。
+//
+// why not: KeystoreConfigをそのまま%v/%+vでログ出力すると、構造体の全フィールド
+// （KeystorePassword/KeyPasswordの平文）がそのまま出力されてしまう。将来
+// この値をログに渡すコードが追加されても平文パスワードが漏れないよう、
+// value receiverでStringerを実装しておく（%v/%+vはvalue/pointerどちらでも
+// value receiverのStringerを使う）。
+func (c KeystoreConfig) String() string {
+	keyPassword := "<nil>"
+	if c.KeyPassword != nil {
+		keyPassword = "***"
+	}
+
+	return fmt.Sprintf(
+		"KeystoreConfig{KeystorePath:%q, KeyAlias:%q, KeystorePassword:***, KeyPassword:%s}",
+		c.KeystorePath, c.KeyAlias, keyPassword,
+	)
+}
+
 // ApkSignerRunner はapksignerコマンドを実行するためのインターフェース。
 //
 // APKファイルの署名と検証を行うapksignerコマンドの実行機能を抽象化する。

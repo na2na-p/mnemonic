@@ -231,6 +231,25 @@ func TestDefaultZipalignRunner_IsAligned(t *testing.T) {
 	})
 }
 
+func TestDefaultZipalignRunner_FindZipalign(t *testing.T) {
+	t.Run("正常系: 複数バージョンから最新を選択", func(t *testing.T) {
+		androidHome := t.TempDir()
+		for _, v := range []string{"30.0.0", "33.0.0", "34.0.0"} {
+			dir := filepath.Join(androidHome, "build-tools", v)
+			require.NoError(t, os.MkdirAll(dir, 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "zipalign"), nil, 0o600))
+		}
+		t.Setenv("ANDROID_HOME", androidHome)
+
+		r := signer.NewDefaultZipalignRunner(nil)
+
+		result, ok := r.FindZipalign()
+
+		require.True(t, ok)
+		assert.Contains(t, result, "34.0.0")
+	})
+}
+
 // writeFakeTool はtoolNameを含むbuild-toolsディレクトリ構造をtempディレクトリ配下に
 // 作成し、ANDROID_HOMEに設定すべきパスを返す。
 func writeFakeTool(t *testing.T, toolName string) string {

@@ -5,6 +5,7 @@ package signer_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,6 +40,44 @@ func TestKeystoreConfig_KeyPasswordDefaultsToNil(t *testing.T) {
 	}
 
 	assert.Nil(t, cfg.KeyPassword)
+}
+
+// KeystoreConfigのStringメソッドのテスト。%v/%+vでの誤ったログ出力による
+// パスワード漏洩を防ぐため、fmt経由でも平文パスワードが現れないことをピン留めする。
+func TestKeystoreConfig_String_RedactsPasswords(t *testing.T) {
+	keyPassword := "key_pass_should_not_leak"
+	cfg := signer.KeystoreConfig{
+		KeystorePath:     "keystore.jks",
+		KeyAlias:         "my_alias",
+		KeystorePassword: "keystore_pass_should_not_leak",
+		KeyPassword:      &keyPassword,
+	}
+
+	cases := map[string]string{
+		"%v ローカル変数(値)":  fmt.Sprintf("%v", cfg),
+		"%+v ローカル変数(値)": fmt.Sprintf("%+v", cfg),
+		"%v ポインタ経由":     fmt.Sprintf("%v", &cfg),
+		"%+v ポインタ経由":    fmt.Sprintf("%+v", &cfg),
+		"Sprintln":      fmt.Sprintln(cfg),
+	}
+
+	for name, out := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.NotContains(t, out, "keystore_pass_should_not_leak")
+			assert.NotContains(t, out, "key_pass_should_not_leak")
+			// StringerがKeystoreConfig{...}形式で呼ばれていること自体も確認する
+			// （呼ばれずデフォルトのフィールド列挙にフォールバックしていないか）。
+			assert.Contains(t, out, "KeystoreConfig{")
+		})
+	}
+
+	// key_passwordが未設定(nil)の場合の表現も確認する。
+	cfgNoKeyPassword := signer.KeystoreConfig{
+		KeystorePath:     "keystore.jks",
+		KeyAlias:         "my_alias",
+		KeystorePassword: "keystore_pass_should_not_leak",
+	}
+	assert.Contains(t, cfgNoKeyPassword.String(), "KeyPassword:<nil>")
 }
 
 func TestDefaultApkSignerRunner_Sign(t *testing.T) {
@@ -353,7 +392,7 @@ func TestDefaultApkSignerRunner_Verify(t *testing.T) {
 	})
 }
 
-func TestDefaultApkSignerRunner_FindApksigner(t *testing.T) {
+func TestDefaultApkSignerRunner_FindApkSigner(t *testing.T) {
 	t.Run("正常系: 複数バージョンから最新を選択", func(t *testing.T) {
 		androidHome := t.TempDir()
 		for _, v := range []string{"30.0.0", "33.0.0", "34.0.0"} {
