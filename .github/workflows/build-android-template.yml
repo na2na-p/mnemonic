@@ -77,7 +77,9 @@ jobs:
         id: cache-krkrsdl2
         with:
           path: krkrsdl2
-          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}
+          # パッチ適用後のツリーをキャッシュするため、パッチ内容をキーに含める。
+          # パッチを更新したらキャッシュを破棄して再クローン・再適用させる必要がある。
+          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}-${{ hashFiles('patches/krkrsdl2-alpha-transparency.patch') }}
 
       - name: Clone krkrsdl2
         if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
@@ -86,6 +88,19 @@ jobs:
             https://github.com/${{ env.KRKRSDL2_REPO }}.git krkrsdl2
           cd krkrsdl2
           git submodule update --init --recursive
+
+      # why not(上流のkrkrsdl2をそのまま使わない理由): krkrsdl2のSDL2描画は
+      # 不透明(ltOpaque/RGB888)前提の実装で、layopt type=alphaを使う作品は
+      # オーバーレイ表示時に画面が真っ黒になる。上流への取り込みが未了のため
+      # テンプレートビルド時にパッチを当てて回避する。
+      #
+      # why not(キャッシュヒット時も適用しない理由): 復元されるツリーは
+      # 適用済みで、二重適用は git apply が失敗するため。
+      - name: Apply alpha transparency patch
+        if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
+        working-directory: krkrsdl2
+        run: |
+          git apply --verbose "${GITHUB_WORKSPACE}/patches/krkrsdl2-alpha-transparency.patch"
 
       - name: Build Android project
         working-directory: krkrsdl2/android-project
@@ -145,6 +160,10 @@ jobs:
           echo "krkrsdl2_commit=$(git rev-parse HEAD)" > ../template-output/VERSION
           echo "krkrsdl2_ref=${{ github.event.inputs.krkrsdl2_ref || 'main' }}" >> ../template-output/VERSION
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ../template-output/VERSION
+          # why not(krkrsdl2_commitだけで十分としない理由): パッチ未適用の
+          # テンプレートはlayopt type=alpha使用時に画面が真っ黒になるため、
+          # 配布物から適用状況を追跡できる必要がある。
+          echo "patches=krkrsdl2-alpha-transparency@$(git hash-object "${GITHUB_WORKSPACE}/patches/krkrsdl2-alpha-transparency.patch")" >> ../template-output/VERSION
 
       - name: Create template archive
         run: |
