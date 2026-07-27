@@ -15,22 +15,31 @@ import (
 
 	"github.com/gen2brain/webp"
 	"golang.org/x/image/bmp"
+
+	"github.com/na2na-p/mnemonic/internal/converter/tlg"
 )
 
 // ErrTLGDecodeNotImplemented はTLG画像のデコードが未実装であることを示す
 // センチネルエラー。
 //
-// why not: TLG5/TLG6の完全なデコード実装はPR4のスコープ外
-// （Python版もNotImplementedErrorを送出し、ヘッダのマジックバイト判定のみ実装する）。
+// why not: TLG6の本体デコード実装は本PRのスコープ外（Python版もTLG6Decoder.
+// decode()でNotImplementedErrorを送出し、ヘッダのマジックバイト判定と
+// ヘッダ解析のみ実装する）。TLG5は本PRで実装済みのため、このエラーは
+// TLG6形式のファイルに対してのみ返る。
 var ErrTLGDecodeNotImplemented = errors.New("TLGデコードは未実装です")
 
 // ErrUnsupportedImageFormat はstdlib/x-imageで対応していない画像拡張子を
 // 指定した場合のエラー。
 var ErrUnsupportedImageFormat = errors.New("サポートされていない画像形式です")
 
+// ErrTLGInvalidFormat はTLG5/TLG6/SDSのいずれのマジックバイトにも一致しない
+// データに対するエラー。
+var ErrTLGInvalidFormat = errors.New("TLG形式ではありません")
+
 var (
-	tlg5Magic = []byte("TLG5.0\x00raw\x1a")
-	tlg6Magic = []byte("TLG6.0\x00raw\x1a")
+	tlg5Magic = tlg.TLG5Magic
+	tlg6Magic = tlg.TLG6Magic
+	sdsMagic  = []byte("TLG0.0\x00sds\x1a")
 )
 
 // TLGVersion はTLG画像のバージョンを表す。
@@ -53,6 +62,18 @@ const (
 	QualityLow    QualityPreset = 70
 )
 
+// OutputFormat は画像出力形式を表す。
+//
+// krkrsdl2がWebP未対応のため、PNG出力をデフォルトとする
+// （feat/exe-icon-extraction 77634b1の設計意図）。
+type OutputFormat string
+
+// OutputFormatの各値。
+const (
+	OutputFormatWebP OutputFormat = "webp"
+	OutputFormatPNG  OutputFormat = "png"
+)
+
 // TLGInfo はTLG画像のメタ情報を表す不変値。
 type TLGInfo struct {
 	Version  TLGVersion
@@ -61,17 +82,23 @@ type TLGInfo struct {
 	HasAlpha bool
 }
 
-// TLGImageDecoder はTLG形式の画像ファイルのマジックバイト判定を行う。
-//
-// デコード自体はPython版と同様に未実装（ErrTLGDecodeNotImplementedを返す）。
-type TLGImageDecoder struct{}
+// TLGImageDecoder はTLG形式の画像ファイルを読み込み、image.Imageへ変換する。
+// TLG5およびTLG6形式に対応（TLG6は本体デコード未実装）。SDSコンテナ形式も
+// サポートする。
+type TLGImageDecoder struct {
+	tlg5Decoder *tlg.TLG5Decoder
+	tlg6Decoder *tlg.TLG6Decoder
+}
 
 // NewTLGImageDecoder はTLGImageDecoderを初期化する。
 func NewTLGImageDecoder() *TLGImageDecoder {
-	return &TLGImageDecoder{}
+	return &TLGImageDecoder{
+		tlg5Decoder: tlg.NewTLG5Decoder(),
+		tlg6Decoder: tlg.NewTLG6Decoder(),
+	}
 }
 
-// IsTLGFile はfilePathがTLG5/TLG6形式かどうかをマジックバイトで判定する。
+// IsTLGFile はfilePathがTLG5/TLG6/SDS形式かどうかをマジックバイトで判定する。
 func (d *TLGImageDecoder) IsTLGFile(filePath string) bool {
 	f, err := os.Open(filePath) //nolint:gosec // 呼び出し側が指定したアセットパスを読む用途のため妥当
 	if err != nil {
@@ -84,47 +111,192 @@ func (d *TLGImageDecoder) IsTLGFile(filePath string) bool {
 		return false
 	}
 
-	return bytes.Equal(header, tlg5Magic) || bytes.Equal(header, tlg6Magic)
+	return bytes.Equal(header, tlg5Magic) || bytes.Equal(header, tlg6Magic) || bytes.Equal(header, sdsMagic)
 }
 
-// GetInfo はTLG画像のメタ情報を取得する。未実装のためErrTLGDecodeNotImplementedを返す。
-func (d *TLGImageDecoder) GetInfo(_ string) (TLGInfo, error) {
-	return TLGInfo{}, ErrTLGDecodeNotImplemented
+// unwrapSDS はSDSコンテナから内部のTLGデータを抽出する。
+//
+// SDSコンテナ構造: マジック(11バイト) + チャンクサイズ(4バイト、リトル
+// エンディアン) + 内部TLGデータ(TLG5またはTLG6)。
+func unwrapSDS(data []byte) []byte {
+	if !bytes.HasPrefix(data, sdsMagic) {
+		return data
+	}
+
+	const sdsHeaderSize = 15 // マジック(11) + チャンクサイズ(4)
+	if len(data) < sdsHeaderSize {
+		return data
+	}
+
+	return data[sdsHeaderSize:]
 }
 
-// Decode はTLG画像をデコードする。未実装のためErrTLGDecodeNotImplementedを返す。
-func (d *TLGImageDecoder) Decode(_ string) (image.Image, error) {
-	return nil, ErrTLGDecodeNotImplemented
+// detectVersion はTLGデータのバージョンを判別する。
+func detectVersion(data []byte) TLGVersion {
+	switch {
+	case bytes.HasPrefix(data, tlg5Magic):
+		return TLGVersionTLG5
+	case bytes.HasPrefix(data, tlg6Magic):
+		return TLGVersionTLG6
+	default:
+		return TLGVersionUnknown
+	}
+}
+
+// readTLGSource はfilePathを読み込み、SDSコンテナを解いた生データを返す。
+// ファイルが存在しない場合はErrSourceNotFoundを返す。
+func readTLGSource(filePath string) ([]byte, error) {
+	data, err := os.ReadFile(filePath) //nolint:gosec // 呼び出し側が指定したアセットパスを読む用途のため妥当
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrSourceNotFound, filePath)
+	}
+
+	return unwrapSDS(data), nil
+}
+
+// GetInfo はTLG画像のメタ情報を取得する。
+//
+// why not: Python版はTLG6に対してもparse_headerのみを呼びメタ情報取得に
+// 成功する（decode()のみがNotImplementedErrorを送出する）。Go版も同様に
+// TLG6のヘッダ解析は実装済みのTLG6Decoder.ParseHeaderで完結するため、
+// GetInfoはTLG5/TLG6のいずれでもErrTLGDecodeNotImplementedを返さない。
+func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
+	data, err := readTLGSource(filePath)
+	if err != nil {
+		return TLGInfo{}, err
+	}
+
+	switch detectVersion(data) {
+	case TLGVersionTLG5:
+		header, parseErr := d.tlg5Decoder.ParseHeader(data)
+		if parseErr != nil {
+			return TLGInfo{}, parseErr
+		}
+
+		return TLGInfo{Version: TLGVersionTLG5, Width: header.Width, Height: header.Height, HasAlpha: header.Colors == 4}, nil
+	case TLGVersionTLG6:
+		header, parseErr := d.tlg6Decoder.ParseHeader(data)
+		if parseErr != nil {
+			return TLGInfo{}, parseErr
+		}
+
+		return TLGInfo{Version: TLGVersionTLG6, Width: header.Width, Height: header.Height, HasAlpha: header.Colors == 4}, nil
+	default:
+		return TLGInfo{}, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
+	}
+}
+
+// Decode はTLG画像をデコードしてimage.Imageを返す。
+// TLG6形式の場合はErrTLGDecodeNotImplementedを返す（本体デコード未実装）。
+func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
+	data, err := readTLGSource(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	switch detectVersion(data) {
+	case TLGVersionTLG5:
+		img, decErr := d.tlg5Decoder.Decode(data)
+		if decErr != nil {
+			return nil, decErr
+		}
+
+		return img, nil
+	case TLGVersionTLG6:
+		_, decErr := d.tlg6Decoder.Decode(data)
+
+		return nil, fmt.Errorf("%w: %w", ErrTLGDecodeNotImplemented, decErr)
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
+	}
 }
 
 // DecodeToFile はTLG画像をデコードしてファイルに保存する。
-// 未実装のためErrTLGDecodeNotImplementedを返す。
-func (d *TLGImageDecoder) DecodeToFile(_, _ string) error {
-	return ErrTLGDecodeNotImplemented
+// dest拡張子から出力形式を決定する（.png/.webpに対応）。
+func (d *TLGImageDecoder) DecodeToFile(source, dest string) error {
+	img, err := d.Decode(source)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
+	}
+
+	return encodeImageToFile(img, dest, int(QualityHigh))
 }
 
-// ImageConverter はBMP/JPG/PNG/TLG形式の画像をWebP形式に変換するConverter。
+// encodeImageToFile はimgをdestの拡張子に応じた形式でファイルへ書き出す。
+func encodeImageToFile(img image.Image, dest string, quality int) error {
+	f, err := os.Create(dest) //nolint:gosec // ビルド成果物の出力用途のため妥当
+	if err != nil {
+		return fmt.Errorf("出力ファイルの作成に失敗しました: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	ext := strings.ToLower(filepath.Ext(dest))
+
+	switch ext {
+	case ".png":
+		if err := png.Encode(f, img); err != nil {
+			return fmt.Errorf("PNGエンコードに失敗しました: %w", err)
+		}
+	case ".webp":
+		opts := webp.Options{Quality: quality, Method: webp.DefaultMethod}
+		if imageHasAlpha(img) {
+			opts.Lossless = true
+		}
+
+		if err := webp.Encode(f, img, opts); err != nil {
+			return fmt.Errorf("WebPエンコードに失敗しました: %w", err)
+		}
+	default:
+		return fmt.Errorf("%w: %s", ErrUnsupportedImageFormat, ext)
+	}
+
+	return nil
+}
+
+// ImageConverter はBMP/JPG/PNG/TLG形式の画像をPNG/WebP形式に変換するConverter。
 type ImageConverter struct {
+	outputFormat  OutputFormat
 	quality       int
 	losslessAlpha bool
 	tlgDecoder    *TLGImageDecoder
 }
 
-// NewImageConverter はImageConverterを初期化する。
+// NewImageConverter はImageConverterを初期化する。出力形式はPNG固定
+// （krkrsdl2互換のためのデフォルト。WebP出力が必要な場合はNewImageConverter
+// WithFormatを使う）。
 // qualityはQualityPresetの値（95/85/70）または任意の0-100の整数を指定する。
 // qualityが0以下の場合はQualityHigh（Python版のデフォルト引数
 // quality: QualityPreset | int = QualityPreset.HIGHに相当）を使用する。
 func NewImageConverter(quality int, losslessAlpha bool) *ImageConverter {
+	return NewImageConverterWithFormat(OutputFormatPNG, quality, losslessAlpha)
+}
+
+// NewImageConverterWithFormat はoutputFormatを明示的に指定してImageConverter
+// を初期化する。
+//
+// why not(呼び出し元互換): 既存呼び出し元(internal/pipeline)はNewImage
+// Converter(quality, losslessAlpha)の2引数シグネチャに依存しているため、
+// 出力形式選択はこの別コンストラクタとして追加し、既存シグネチャを変更
+// しない。
+func NewImageConverterWithFormat(outputFormat OutputFormat, quality int, losslessAlpha bool) *ImageConverter {
 	if quality <= 0 {
 		quality = int(QualityHigh)
 	}
 
 	return &ImageConverter{
+		outputFormat:  outputFormat,
 		quality:       quality,
 		losslessAlpha: losslessAlpha,
 		tlgDecoder:    NewTLGImageDecoder(),
 	}
 }
+
+// OutputFormat は出力形式を返す。
+func (c *ImageConverter) OutputFormat() OutputFormat { return c.outputFormat }
 
 // Quality はWebP品質値を返す。
 func (c *ImageConverter) Quality() int { return c.quality }
@@ -133,8 +305,21 @@ func (c *ImageConverter) Quality() int { return c.quality }
 func (c *ImageConverter) LosslessAlpha() bool { return c.losslessAlpha }
 
 // SupportedExtensions は対応する拡張子の一覧を返す。
+//
+// JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため変換対象外
+// （feat/exe-icon-extraction 680b27fより。誤ってPNGに変換されたJPEGを
+// krkrsdl2のTVPLoadJPEGへ渡すとSIGSEGVでクラッシュする不具合の修正）。
 func (c *ImageConverter) SupportedExtensions() []string {
-	return []string{".tlg", ".bmp", ".jpg", ".jpeg", ".png"}
+	return []string{".tlg"}
+}
+
+// GetOutputExtension は出力形式に応じた拡張子（.pngまたは.webp）を返す。
+func (c *ImageConverter) GetOutputExtension(_ string) string {
+	if c.outputFormat == OutputFormatPNG {
+		return ".png"
+	}
+
+	return ".webp"
 }
 
 // CanConvert はfilePathが変換可能かを拡張子で判定する。
@@ -144,12 +329,18 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 	return containsString(c.SupportedExtensions(), ext)
 }
 
-// Convert は画像ファイルをWebP形式に変換し、destへ出力する。
+// Convert は画像ファイルを指定された形式に変換し、destへ出力する。
 //
 // why not: Python版のImageConverter.convert()は_validate_source・TLG未実装
 // エラー・PIL.Image.openの失敗を自身で捕捉せず呼び出し元(ConversionManager)へ
 // 伝播させる（他のConverterと異なりtry/exceptで囲まれていない）。Go版もこれに
 // 倣い、これらの失敗はConversionResultではなくerrとして返す。
+//
+// why not(decodeSourceの対応拡張子): can_convert/SupportedExtensionsは.tlg
+// のみだが、convert()自体はPython版と同様に.bmp/.jpg/.jpeg/.png/.tlgを
+// 直接処理できる（ConversionManager経由では.tlg以外はルーティングされない
+// が、convert_from_image等、呼び出し元がConvertを直接呼ぶ経路のために
+// decodeSourceの分岐は維持する）。
 func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := validateSource(source); err != nil {
 		return ConversionResult{}, err
@@ -162,12 +353,20 @@ func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) 
 		return ConversionResult{}, err
 	}
 
+	if c.outputFormat == OutputFormatPNG {
+		return c.saveAsPNG(img, dest, source, bytesBefore)
+	}
+
 	return c.saveAsWebp(img, dest, source, bytesBefore)
 }
 
-// ConvertFromImage はメモリ上のimage.ImageをWebP形式で保存する。
+// ConvertFromImage はメモリ上のimage.Imageを設定済み出力形式で保存する。
 // TLGデコード後の画像変換等、既にデコード済みの画像を直接保存する用途。
 func (c *ImageConverter) ConvertFromImage(img image.Image, dest string) (ConversionResult, error) {
+	if c.outputFormat == OutputFormatPNG {
+		return c.saveAsPNG(img, dest, dest, 0)
+	}
+
 	return c.saveAsWebp(img, dest, dest, 0)
 }
 
@@ -208,6 +407,36 @@ func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedImageFormat, ext)
 	}
+}
+
+// saveAsPNG は画像をPNG形式で保存する内部メソッド。
+//
+// why not: PythonのPillowはmodeが"RGB"/"RGBA"/"L"等の範囲外の場合のみ
+// convert()を呼ぶモード変換分岐を持つが、Goのimage/png.Encodeは任意の
+// image.Imageを受け付けそのカラーモデルに応じて適切なPNGを書き出すため、
+// Go版に相当するモード変換分岐は不要（image/pngが吸収する）。
+func (c *ImageConverter) saveAsPNG(img image.Image, dest, source string, bytesBefore int64) (ConversionResult, error) {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
+	}
+
+	f, err := os.Create(dest) //nolint:gosec // ビルド成果物の出力用途のため妥当
+	if err != nil {
+		return ConversionResult{}, fmt.Errorf("出力ファイルの作成に失敗しました: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := png.Encode(f, img); err != nil {
+		return ConversionResult{}, fmt.Errorf("PNGエンコードに失敗しました: %w", err)
+	}
+
+	return ConversionResult{
+		SourcePath:  source,
+		DestPath:    dest,
+		Status:      StatusSuccess,
+		BytesBefore: bytesBefore,
+		BytesAfter:  getFileSize(dest),
+	}, nil
 }
 
 // saveAsWebp は画像をWebP形式で保存する内部メソッド。
@@ -274,6 +503,10 @@ type opaquer interface {
 // (golang.org/x/image/bmp decodeNRGBAのallowAlpha=false)も*image.NRGBAで
 // 返るため、実質不透明でもhasAlpha=trueになる。Python版テスト・本パッケージの
 // テストが対象とする24bpp BMP/PNGのケースでは発生しない。
+//
+// TLG5デコード結果（internal/converter/tlg.TLG5Decoder.Decode）も常に
+// *image.NRGBAを返すため、RGB(3チャンネル)由来でアルファ255固定の画像は
+// Opaque()==trueとなり正しくhasAlpha=falseと判定される。
 func imageHasAlpha(img image.Image) bool {
 	switch img.ColorModel() {
 	case color.NRGBAModel, color.NRGBA64Model:
