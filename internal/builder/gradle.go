@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -335,22 +336,50 @@ func (b *GradleBuilder) CheckGradleWrapper() bool {
 
 // GetAPKPath は生成されたAPKファイルのパスを取得する。
 // buildTypeが空文字列の場合は"release"を使用する。
-// ファイルが存在しない場合はnilを返す。
+// 出力ディレクトリが存在しない、またはAPKファイルが1つも無い場合はnilを返す。
+//
+// 標準的なファイル名（release: app-release-unsigned.apk → app-release.apkの順、
+// それ以外: app-<buildType>.apk）を優先して探し、どれも無ければディレクトリ内の
+// APKファイルを1つ返す（Python版get_apk_pathの標準名優先→globフォールバックと
+// 同じ設計）。
+//
+// why not: krkrsdl2テンプレートのapp/build.gradleはoutputFileNameを
+// "${app_name}_${architecture}.apk"のようにカスタマイズしており、標準名では
+// 見つからないAPKが生成されることがある（実ゲーム資産でのE2Eビルドで判明した
+// 回帰）。標準名チェックのみに戻すとGradleビルド自体は成功しているのに
+// nilが返り、パイプラインが誤って失敗扱いになる。
 func (b *GradleBuilder) GetAPKPath(buildType string) *string {
 	if buildType == "" {
 		buildType = "release"
 	}
 
-	apkName := fmt.Sprintf("app-%s.apk", buildType)
-	if buildType == "release" {
-		apkName = "app-release-unsigned.apk"
-	}
+	apkDir := filepath.Join(b.projectPath, "app", "build", "outputs", "apk", buildType)
 
-	apkPath := filepath.Join(b.projectPath, "app", "build", "outputs", "apk", buildType, apkName)
-
-	if _, err := os.Stat(apkPath); err != nil {
+	if _, err := os.Stat(apkDir); err != nil {
 		return nil
 	}
 
-	return &apkPath
+	standardNames := []string{fmt.Sprintf("app-%s.apk", buildType)}
+	if buildType == "release" {
+		standardNames = []string{"app-release-unsigned.apk", "app-release.apk"}
+	}
+
+	for _, name := range standardNames {
+		apkPath := filepath.Join(apkDir, name)
+		if _, err := os.Stat(apkPath); err == nil {
+			return &apkPath
+		}
+	}
+
+	// why not: filepath.Globが返す順序はOS/ファイルシステム依存で非決定的なため、
+	// テストの再現性を保つ目的でソートしてから先頭を採用する（Python版のglob()は
+	// 順序を保証しないが、テストはAPKが1つのみのケースしか要求しないため実害はない）。
+	matches, err := filepath.Glob(filepath.Join(apkDir, "*.apk"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+
+	sort.Strings(matches)
+
+	return &matches[0]
 }
