@@ -25,3 +25,7 @@ venv/
 # Coverage
 .coverage
 htmlcov/
+
+# Go
+coverage.out
+/mnemonic

@@ -7,3 +7,10 @@ indent_size = 4
 end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
+
+# gofmt はタブインデントを強制するため [*] の space 設定を上書きする
+[*.go]
+indent_style = tab
+
+[*.{yml,yaml}]
+indent_size = 2

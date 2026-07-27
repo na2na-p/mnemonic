@@ -3,10 +3,10 @@
 
 name: CI
 
+# Goリプレイス移行はスタックPR（baseがmain以外）で進めるため、
+# branchesフィルタを付けず全baseのPRでCIを実行する
 on:
   pull_request:
-    branches:
-      - main
     types:
       - opened
       - reopened
@@ -21,4 +21,9 @@ jobs:
   app-ci:
     name: App CI
     uses: ./.github/workflows/app-ci.yml
+    secrets: inherit
+
+  app-ci-go:
+    name: App CI (Go)
+    uses: ./.github/workflows/app-ci-go.yml
     secrets: inherit
