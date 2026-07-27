@@ -4,9 +4,11 @@ import "encoding/binary"
 
 // このファイルはicon_test.go専用のBITMAPINFOHEADERベースDIB(ICO内RT_ICON
 // 生データ)フィクスチャビルダー。decodeDIB(icon_dib.go)が対応する
-// 1/8/24/32bppそれぞれについて、テストが必要とする最小限のビルダーのみを
-// 用意する(タスク指示: フィクスチャは小さく保つ。共通化より各ビット深度の
-// 素直な実装を優先し可読性を優先する)。
+// 1/4/8/24/32bppそれぞれについて、Windows Icon(ICO/CUR)仕様のDIB構造
+// (BITMAPINFOHEADER + パレット + XORビットマップ + ANDマスク、行は
+// 4バイト境界パディング)に沿った最小のビルダーのみを用意する。ビット深度
+// ごとに行フォーマット(パレット索引のビットパッキング幅、パディング量)が
+// 異なり共通化すると却って読みにくくなるため、各関数は素直に書く。
 
 func dibRowStrideFixture(width, bitsPerPixel int) int {
 	return ((width*bitsPerPixel + 31) / 32) * 4
@@ -95,6 +97,66 @@ func build8bppDIB(width, height int, paletteRGB [][3]byte, idx func(x, y int) by
 			}
 		}
 	}
+
+	return buf
+}
+
+// build4bppDIB はpalette(索引→RGB、最大16色)・idx(画素ごとの索引0-15、
+// 上位ニブルが偶数x・下位ニブルが奇数xに詰められる)・transparent(画素
+// ごとの透明フラグ、ANDマスクへ反映)から4bpp DIBを組み立てる。
+func build4bppDIB(width, height int, paletteRGB [][3]byte, idx func(x, y int) byte, transparent func(x, y int) bool) []byte {
+	const bitCount = 4
+	xorStride := dibRowStrideFixture(width, bitCount)
+	andStride := dibRowStrideFixture(width, 1)
+	paletteBytes := len(paletteRGB) * 4
+	xorSize := xorStride * height
+	andSize := andStride * height
+
+	buf := make([]byte, 40+paletteBytes+xorSize+andSize)
+	putDIBHeader(buf, width, height*2, bitCount)
+	binary.LittleEndian.PutUint32(buf[32:36], uint32(len(paletteRGB))) // biClrUsed
+
+	for i, c := range paletteRGB {
+		e := buf[40+i*4 : 40+(i+1)*4]
+		e[0], e[1], e[2] = c[2], c[1], c[0]
+	}
+
+	xorOffset := 40 + paletteBytes
+	andOffset := xorOffset + xorSize
+
+	for y := range height {
+		destRow := height - 1 - y
+		xorRow := buf[xorOffset+destRow*xorStride : xorOffset+(destRow+1)*xorStride]
+		andRow := buf[andOffset+destRow*andStride : andOffset+(destRow+1)*andStride]
+
+		for x := range width {
+			v := idx(x, y) & 0x0f
+			if x%2 == 0 {
+				xorRow[x/2] |= v << 4
+			} else {
+				xorRow[x/2] |= v
+			}
+			if transparent(x, y) {
+				andRow[x/8] |= 1 << (7 - x%8)
+			}
+		}
+	}
+
+	return buf
+}
+
+// buildRawDIBHeader はピクセルデータを一切含まないBITMAPINFOHEADER
+// (40バイト)のみを組み立てる。DIBデコーダの入力検証(次元上限・
+// オーバーフロー・未対応圧縮/ビット深度・biHeight奇数)を、実際のピクセル
+// データを用意せずに検証するためのテスト専用ヘルパー。
+func buildRawDIBHeader(width, height int32, bitCount uint16, compression uint32) []byte {
+	buf := make([]byte, 40)
+	binary.LittleEndian.PutUint32(buf[0:4], 40)
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(width))
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(height))
+	binary.LittleEndian.PutUint16(buf[12:14], 1)
+	binary.LittleEndian.PutUint16(buf[14:16], bitCount)
+	binary.LittleEndian.PutUint32(buf[16:20], compression)
 
 	return buf
 }

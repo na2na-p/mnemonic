@@ -13,6 +13,18 @@ const (
 	dibCompressionRGB = 0  // biCompression: 0=BI_RGB(無圧縮)
 
 	dibPaletteEntrySize = 4 // RGBQUAD: B, G, R, Reserved
+
+	// maxICODimension はDIBのwidth/heightに許容する上限。ICO/CURフォーマット
+	// 仕様上、1フレームの実サイズはbWidth/bHeight(1バイト、0は256を表す)で
+	// 表現できる256x256が事実上の上限だが、GRPICONDIRENTRYのbWidth/bHeightと
+	// 実際のDIB(BITMAPINFOHEADER.biWidth/biHeight)が食い違う壊れた/悪意ある
+	// 入力を弾くため、仕様上限より余裕を持たせた1024を採用する。この上限が
+	// 無いと、biWidth/biHeightに攻撃的な値(例:
+	// 2147483646、int32の最大値付近)を書き込んだ壊れたEXEに対し
+	// image.NewNRGBAがmakeslice panicを起こすか、実データサイズに見合わない
+	// 数GB単位のメモリ確保を試みる(レビューで実証済み)。1024×1024×4byte
+	// (32bpp)は4MiB強で、通常のビルド処理において無視できるサイズ。
+	maxICODimension = 1024
 )
 
 // ErrIconUnsupportedDIB はDIBが本パッケージの対応範囲外(圧縮あり・
@@ -61,6 +73,14 @@ func decodeDIB(data []byte) (image.Image, error) {
 
 	height := rawHeight / 2
 
+	// image.NewNRGBAへwidth/heightを渡す前に上限を検査する。ここで弾かない
+	// と、後続のパレット/ストライド計算がlen(data)に対する境界検査を通る
+	// 前の時点でimage.NewNRGBAのallocateがバイト長に依存せず実行されるため、
+	// makeslice panicやOOMを引き起こしうる(maxICODimensionのコメント参照)。
+	if width > maxICODimension || height > maxICODimension {
+		return nil, ErrIconInvalidDIB
+	}
+
 	palette, offset, err := readDIBPalette(data, int(headerSize), bitCount, clrUsed)
 	if err != nil {
 		return nil, err
@@ -76,9 +96,11 @@ func decodeDIB(data []byte) (image.Image, error) {
 	if bitCount != 32 {
 		// 32bpp以外はXORビットマップにアルファチャンネルを持たないため、
 		// 後続のANDマスク(1bpp、ビットが立っている画素を透明とする)で
-		// アルファを決定する。32bppはXORのアルファチャンネルをそのまま
-		// 使う(タスク指示: 32bppはANDマスクを見ずアルファチャンネルを
-		// 直接使う)。
+		// アルファを決定する。32bppはXORのアルファチャンネルをそのまま使う
+		// (Windows Icon仕様上32bppはXOR側に既にアルファを持つため、AND
+		// マスクは後方互換用の冗長データに過ぎない。Pillow/icoextractが
+		// 依存するWindows ICOデコーダも32bppではANDマスクを無視して
+		// XORのアルファを採用しており、本実装はそれと同じ挙動にする)。
 		applyDIBAndMask(img, data, offset, width, height)
 	}
 
@@ -88,6 +110,15 @@ func decodeDIB(data []byte) (image.Image, error) {
 // readDIBPalette はBITMAPINFOHEADER直後のカラーテーブル(1/4/8bppのみ)を
 // 読み取り、パレットと読み取り後のオフセットを返す。24/32bppはパレットを
 // 持たない。
+//
+// why not(numColorsをbiClrUsedの値そのまま使わない理由): biClrUsedは
+// attacker-controlledなuint32(最大約42億)であり、そのままnumColors*
+// dibPaletteEntrySizeを計算するとint幅(32bit環境)を超えうるうえ、
+// make([]color.NRGBA, numColors)に巨大な値を渡すOOM/panicの入口になる。
+// BITMAPINFOHEADER仕様上biClrUsedが2^biBitCountを超える値を取ることは
+// 本来無い(golang.org/x/image/bmpのdecodeConfigも同じ理由で同じ上限
+// 検査をしている)ため、超過を「不正なDIB」として上限側で拒否すれば
+// 以降の乗算がオーバーフローする余地自体が無くなる。
 func readDIBPalette(data []byte, headerSize int, bitCount uint16, clrUsed uint32) ([]color.NRGBA, int, error) {
 	switch bitCount {
 	case 1, 4, 8:
@@ -97,13 +128,18 @@ func readDIBPalette(data []byte, headerSize int, bitCount uint16, clrUsed uint32
 		return nil, 0, ErrIconUnsupportedDIB
 	}
 
+	maxColors := 1 << bitCount
+
 	numColors := int(clrUsed)
-	if numColors == 0 {
-		numColors = 1 << bitCount
+	switch {
+	case numColors == 0:
+		numColors = maxColors
+	case numColors > maxColors:
+		return nil, 0, ErrIconInvalidDIB
 	}
 
-	paletteBytes := numColors * dibPaletteEntrySize
-	if headerSize+paletteBytes > len(data) {
+	paletteBytes, ok := safeMulInt(numColors, dibPaletteEntrySize)
+	if !ok || headerSize+paletteBytes > len(data) {
 		return nil, 0, ErrIconInvalidDIB
 	}
 
@@ -114,6 +150,23 @@ func readDIBPalette(data []byte, headerSize int, bitCount uint16, clrUsed uint32
 	}
 
 	return palette, headerSize + paletteBytes, nil
+}
+
+// safeMulInt はa*bをオーバーフロー検査付きで計算する。DIBの行ストライド/
+// パレットサイズ計算はwidth・height・biClrUsedといった攻撃者制御可能な値に
+// 由来するため、Goのint幅(32bit環境では特に)を超える積になっていないかを
+// 都度確認する。a・bは常に非負の値としてのみ呼ばれる想定。
+func safeMulInt(a, b int) (int, bool) {
+	if a == 0 || b == 0 {
+		return 0, true
+	}
+
+	p := a * b
+	if p < 0 || p/a != b {
+		return 0, false
+	}
+
+	return p, true
 }
 
 // decodeDIBColorData はXORビットマップ(色情報)をimgへ書き込み、読み取り後の
@@ -140,8 +193,9 @@ func dibRowStride(width, bitsPerPixel int) int {
 
 func decodeDIBPaletted(img *image.NRGBA, data []byte, offset, width, height, bitCount int, palette []color.NRGBA) (int, error) {
 	stride := dibRowStride(width, bitCount)
-	size := stride * height
-	if offset+size > len(data) {
+
+	size, ok := safeMulInt(stride, height)
+	if !ok || offset+size > len(data) {
 		return 0, ErrIconInvalidDIB
 	}
 
@@ -173,8 +227,9 @@ func decodeDIBPaletted(img *image.NRGBA, data []byte, offset, width, height, bit
 
 func decodeDIB24(img *image.NRGBA, data []byte, offset, width, height int) (int, error) {
 	stride := dibRowStride(width, 24)
-	size := stride * height
-	if offset+size > len(data) {
+
+	size, ok := safeMulInt(stride, height)
+	if !ok || offset+size > len(data) {
 		return 0, ErrIconInvalidDIB
 	}
 
@@ -194,9 +249,13 @@ func decodeDIB24(img *image.NRGBA, data []byte, offset, width, height int) (int,
 }
 
 func decodeDIB32(img *image.NRGBA, data []byte, offset, width, height int) (int, error) {
-	stride := width * 4
-	size := stride * height
-	if offset+size > len(data) {
+	stride, ok := safeMulInt(width, 4)
+	if !ok {
+		return 0, ErrIconInvalidDIB
+	}
+
+	size, ok := safeMulInt(stride, height)
+	if !ok || offset+size > len(data) {
 		return 0, ErrIconInvalidDIB
 	}
 
@@ -226,8 +285,9 @@ func decodeDIB32(img *image.NRGBA, data []byte, offset, width, height int) (int,
 // 「不透明として扱う」フォールバックにとどめる。
 func applyDIBAndMask(img *image.NRGBA, data []byte, offset, width, height int) {
 	stride := ((width+7)/8 + 3) &^ 3
-	size := stride * height
-	if offset+size > len(data) {
+
+	size, ok := safeMulInt(stride, height)
+	if !ok || offset+size > len(data) {
 		return
 	}
 

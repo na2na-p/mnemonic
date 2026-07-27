@@ -27,19 +27,52 @@ type fixtureIconImage struct {
 }
 
 // buildMinimalPE はrsrcDataを唯一のセクション".rsrc"として持つ最小PE32
-// バイナリを組み立てる。debug/pe.NewFileが要求するDOSヘッダー・PE署名・
-// FileHeader・OptionalHeader32(データディレクトリ0件)・SectionHeader32の
-// みを書き込み、コード/インポート等ビルド成果物として不要な部分は省略する。
+// バイナリを組み立てる。OptionalHeaderのリソースデータディレクトリは
+// 設定しない(NumberOfRvaAndSizes=0)ため、locateResourceSectionは
+// セクション名".rsrc"によるフォールバック経路を通る(データディレクトリ
+// 経由の経路はbuildMinimalPEWithSectionで別途検証する)。
 func buildMinimalPE(t *testing.T, rsrcData []byte) []byte {
 	t.Helper()
 
+	return buildMinimalPEWithSection(t, ".rsrc", rsrcData, false)
+}
+
+// buildMinimalPEWithSection はrsrcDataを唯一のセクションsectionNameとして
+// 持つ最小PE32バイナリを組み立てる。setResourceDataDirectoryがtrueの場合、
+// OptionalHeader32のデータディレクトリ(IMAGE_DIRECTORY_ENTRY_RESOURCE、
+// インデックス2)にそのセクションのRVA/サイズを設定する。
+//
+// why not(sectionNameを".rsrc"以外にできる理由): Windowsローダー・pefile・
+// icoextractはリソーステーブルをこのデータディレクトリのRVAで解決し、
+// セクション名は見ない。sectionNameを変えてもRVAを正しく設定していれば
+// 解決できることを確認するのが目的(locateResourceSection参照)。
+func buildMinimalPEWithSection(t *testing.T, sectionName string, rsrcData []byte, setResourceDataDirectory bool) []byte {
+	t.Helper()
+
+	if len(sectionName) > 8 {
+		t.Fatalf("セクション名はIMAGE_SECTION_HEADER.Name(8バイト)に収まる必要があります: %q", sectionName)
+	}
+
 	const (
-		dosHeaderSize     = 96
-		peSigSize         = 4
-		fileHeaderSize    = 20
-		optHeaderSize     = 96 // NumberOfRvaAndSizes=0のため固定部のみ
-		sectionHeaderSize = 40
+		dosHeaderSize      = 96
+		peSigSize          = 4
+		fileHeaderSize     = 20
+		optHeaderFixedSize = 96 // OptionalHeader32のDataDirectory配列を除く固定部
+		sectionHeaderSize  = 40
+		resourceDirIndex   = 2 // IMAGE_DIRECTORY_ENTRY_RESOURCE(PE/COFF仕様)
+
+		// dataDirCount はフィクスチャが書き出すデータディレクトリの件数。
+		// 本来は16件(IMAGE_NUMBEROF_DIRECTORY_ENTRIES)だが、
+		// resourceDirIndex(2)を含む先頭3件だけ書けば十分で、
+		// debug/peはNumberOfRvaAndSizes分しかファイルから読まない
+		// (残りはゼロ値のまま)。
+		dataDirCount = resourceDirIndex + 1
 	)
+
+	optHeaderSize := uint32(optHeaderFixedSize)
+	if setResourceDataDirectory {
+		optHeaderSize += dataDirCount * 8
+	}
 
 	peOffset := uint32(dosHeaderSize)
 	fileHeaderOffset := peOffset + peSigSize
@@ -62,10 +95,18 @@ func buildMinimalPE(t *testing.T, rsrcData []byte) []byte {
 
 	oh := buf[optHeaderOffset:]
 	binary.LittleEndian.PutUint16(oh[0:2], 0x10b) // Magic: PE32
-	binary.LittleEndian.PutUint32(oh[92:96], 0)   // NumberOfRvaAndSizes: データディレクトリ無し
+
+	if setResourceDataDirectory {
+		binary.LittleEndian.PutUint32(oh[92:96], dataDirCount) // NumberOfRvaAndSizes
+		ddOffset := optHeaderFixedSize + resourceDirIndex*8
+		binary.LittleEndian.PutUint32(oh[ddOffset:ddOffset+4], fixtureRsrcVA)
+		binary.LittleEndian.PutUint32(oh[ddOffset+4:ddOffset+8], uint32(len(rsrcData)))
+	} else {
+		binary.LittleEndian.PutUint32(oh[92:96], 0) // NumberOfRvaAndSizes: データディレクトリ無し
+	}
 
 	sh := buf[sectionHeaderOffset:]
-	copy(sh[0:8], []byte(".rsrc\x00\x00\x00"))
+	copy(sh[0:8], []byte(sectionName))                              // bufはmakeでゼロ初期化済みのため8バイト未満は自動的にゼロ埋めされる
 	binary.LittleEndian.PutUint32(sh[8:12], uint32(len(rsrcData)))  // VirtualSize
 	binary.LittleEndian.PutUint32(sh[12:16], fixtureRsrcVA)         // VirtualAddress
 	binary.LittleEndian.PutUint32(sh[16:20], uint32(len(rsrcData))) // SizeOfRawData
@@ -90,8 +131,10 @@ const fixtureLangID = 0x0409
 // RT_ICON(imagesそれぞれの生データ)を持つ.rsrcセクションのバイト列を組み立てる。
 //
 // リソースディレクトリの階層はPE/COFF仕様どおりType→Name/ID→Languageの3階層。
+// 本パッケージのextractBestIconは先頭グループ・先頭言語のみを見るため、
+// 複数グループ/複数言語を持つフィクスチャは選択ロジックの検証に寄与しない。
 // 本フィクスチャは常に単一言語(fixtureLangID)・単一グループ(fixtureGroupID)
-// のみを持つ最小構成にする(タスク指示: フィクスチャは小さく保つ)。
+// のみを持つ最小構成にする。
 func buildRsrcWithIconGroup(t *testing.T, images []fixtureIconImage) []byte {
 	t.Helper()
 

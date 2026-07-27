@@ -253,6 +253,162 @@ func TestExeIconExtractor_Extract(t *testing.T) {
 		assertNRGBAEqual(t, img, 0, 0, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 		assertNRGBAEqual(t, img, 1, 0, color.NRGBA{R: 0, G: 0, B: 0, A: 255})
 	})
+
+	t.Run("正常系: 4bppアイコンはANDマスクの透明画素を反映する", func(t *testing.T) {
+		t.Parallel()
+
+		palette := [][3]byte{{255, 0, 0}, {0, 255, 0}}
+		idx := func(x, y int) byte {
+			if x == 1 && y == 1 {
+				return 1
+			}
+
+			return 0
+		}
+		transparent := func(x, y int) bool { return x == 1 && y == 1 }
+
+		images := []fixtureIconImage{
+			{id: 101, width: 2, height: 2, bitCount: 4, data: build4bppDIB(2, 2, palette, idx, transparent)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		outputDir := filepath.Join(t.TempDir(), "out")
+		extractor := parser.NewExeIconExtractor()
+
+		result, err := extractor.Extract(exePath, outputDir)
+
+		require.NoError(t, err)
+		img := decodePNGFile(t, result)
+		assertNRGBAEqual(t, img, 0, 0, color.NRGBA{R: 255, G: 0, B: 0, A: 255})
+		assertNRGBAEqual(t, img, 1, 1, color.NRGBA{R: 0, G: 255, B: 0, A: 0})
+	})
+
+	t.Run("正常系: リソースをセクション名でなくデータディレクトリRVAで解決する", func(t *testing.T) {
+		t.Parallel()
+
+		// Windowsローダー/pefile/icoextractはIMAGE_DIRECTORY_ENTRY_RESOURCEの
+		// RVAでリソーステーブルを解決し、セクション名は見ない。セクションを
+		// ".rsrc"以外(".data")へリネームしても、データディレクトリを
+		// 正しく設定していれば抽出できることを確認する回帰テスト
+		// (レビューで実証: 名前だけで探す実装は同じPEのセクションを
+		// リネームしただけで抽出に失敗していた)。
+		images := []fixtureIconImage{{id: 101, width: 16, height: 16, bitCount: 32, data: build32bppDIB(16, 16, solidColor(9, 8, 7, 255))}}
+		rsrc := buildRsrcWithIconGroup(t, images)
+		peBytes := buildMinimalPEWithSection(t, ".data", rsrc, true)
+		exePath := writeExeFixture(t, peBytes)
+		outputDir := filepath.Join(t.TempDir(), "out")
+		extractor := parser.NewExeIconExtractor()
+
+		result, err := extractor.Extract(exePath, outputDir)
+
+		require.NoError(t, err)
+		img := decodePNGFile(t, result)
+		assertNRGBAEqual(t, img, 0, 0, color.NRGBA{R: 9, G: 8, B: 7, A: 255})
+	})
+
+	t.Run("異常系: 攻撃的なbiWidth/biHeightでもpanicせずErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		// biWidth/biHeightにint32上限付近の値(2147483646)を書き込んだ
+		// 壊れたDIB。次元チェックがimage.NewNRGBAより前に無いと、
+		// makeslice panicまたは実データサイズに見合わない巨大確保を
+		// 引き起こす(レビューで実証済みのケース)。
+		const attackDimension = 2147483646
+		images := []fixtureIconImage{
+			{id: 101, width: 32, height: 32, bitCount: 32, data: buildRawDIBHeader(attackDimension, attackDimension, 32, 0)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
+
+	t.Run("異常系: DIBの次元が上限を超える場合ErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		// maxICODimension(1024)を超えるが、int32の乗算オーバーフローは
+		// 起こさない程度の値。上限チェック自体を単独で検証する。
+		const overCapDimension = 5000
+		images := []fixtureIconImage{
+			{id: 101, width: 32, height: 32, bitCount: 32, data: buildRawDIBHeader(overCapDimension, overCapDimension, 32, 0)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
+
+	t.Run("異常系: ピクセルデータが不足している場合ErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		// ヘッダーのみでXORピクセルデータを含まない32bpp DIB。
+		// decodeDIBのエラー(ErrIconInvalidDIB)がExtract()の3種類の
+		// センチネルエラー契約(ErrEXENotFound/ErrIconInvalidPEFile/
+		// ErrNoIconsAvailable)から漏れずErrIconInvalidPEFileへ
+		// 包まれることを確認する。
+		images := []fixtureIconImage{
+			{id: 101, width: 8, height: 8, bitCount: 32, data: buildRawDIBHeader(8, 16, 32, 0)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
+
+	t.Run("異常系: 未対応ビット深度(16bpp)でErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		images := []fixtureIconImage{
+			{id: 101, width: 8, height: 8, bitCount: 16, data: buildRawDIBHeader(8, 16, 16, 0)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
+
+	t.Run("異常系: 圧縮あり(RLE)DIBでErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		const biRLE8 = 1
+		images := []fixtureIconImage{
+			{id: 101, width: 8, height: 8, bitCount: 8, data: buildRawDIBHeader(8, 16, 8, biRLE8)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
+
+	t.Run("異常系: biHeightが奇数の場合ErrIconInvalidPEFile", func(t *testing.T) {
+		t.Parallel()
+
+		images := []fixtureIconImage{
+			{id: 101, width: 8, height: 8, bitCount: 32, data: buildRawDIBHeader(8, 17, 32, 0)},
+		}
+		peBytes := buildMinimalPE(t, buildRsrcWithIconGroup(t, images))
+		exePath := writeExeFixture(t, peBytes)
+		extractor := parser.NewExeIconExtractor()
+
+		_, err := extractor.Extract(exePath, filepath.Join(t.TempDir(), "out"))
+
+		require.ErrorIs(t, err, parser.ErrIconInvalidPEFile)
+	})
 }
 
 // solidColor はテスト用の単色32bpp DIBを塗りつぶすための画素関数を返す。

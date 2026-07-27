@@ -155,6 +155,96 @@ func descendToData(rsrc []byte, rsrcVA uint32, parentDir []resourceDirEntry) ([]
 	return data, nil
 }
 
+// locateResourceSection はリソースディレクトリ(RT_GROUP_ICON/RT_ICONを含む
+// ツリー全体)の生データと、そのRVA(readResourceDataEntryのRVA→オフセット
+// 変換に使う基準値)を返す。
+//
+// why not(セクション名".rsrc"だけで探さない理由): Windowsローダー・pefile・
+// icoextractはいずれもOptionalHeaderのデータディレクトリ
+// (IMAGE_DIRECTORY_ENTRY_RESOURCE、インデックス2)が指すRVAを正とし、
+// セクション名では探さない——セクション名は単なるラベルであり、パッカーや
+// 難読化ツールが自由にリネームできる。名前だけで探すと、リンカ後に
+// セクションをリネーム/パックしたEXEに対してだけ本パッケージが
+// アイコンを取りこぼす(レビューで実証: 同一PEの.rsrcを.dataへ
+// リネームしただけでPython版[pefile経由]は抽出に成功するがセクション名
+// 探索は失敗する)。データディレクトリが無い/空(サイズ0)の場合のみ、
+// フォールバックとしてセクション名".rsrc"で探す。
+func locateResourceSection(peFile *pe.File) (rsrc []byte, rsrcVA uint32, err error) {
+	if dir, ok := resourceDataDirectory(peFile); ok && dir.Size > 0 {
+		data, va, findErr := sectionDataContainingRVA(peFile, dir.VirtualAddress)
+		if findErr != nil {
+			return nil, 0, findErr
+		}
+		if data != nil {
+			return data, va, nil
+		}
+		// データディレクトリはあるがどのセクションにも収まらない(壊れた
+		// PE)。実在するEXEでは起こらない想定だが、フォールバックへ進む。
+	}
+
+	section := peFile.Section(".rsrc")
+	if section == nil {
+		return nil, 0, ErrNoIconsAvailable
+	}
+
+	data, err := section.Data()
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", ErrIconInvalidPEFile, err)
+	}
+
+	return data, section.VirtualAddress, nil
+}
+
+// resourceDataDirectory はOptionalHeader32/64いずれの場合もIMAGE_DIRECTORY_
+// ENTRY_RESOURCEエントリを取り出す。NumberOfRvaAndSizesがそのインデックス
+// に満たない(古い/縮小された最適化ヘッダー)場合はfalseを返す。
+func resourceDataDirectory(peFile *pe.File) (pe.DataDirectory, bool) {
+	const idx = pe.IMAGE_DIRECTORY_ENTRY_RESOURCE
+
+	switch oh := peFile.OptionalHeader.(type) {
+	case *pe.OptionalHeader32:
+		if int(oh.NumberOfRvaAndSizes) <= idx || idx >= len(oh.DataDirectory) {
+			return pe.DataDirectory{}, false
+		}
+
+		return oh.DataDirectory[idx], true
+	case *pe.OptionalHeader64:
+		if int(oh.NumberOfRvaAndSizes) <= idx || idx >= len(oh.DataDirectory) {
+			return pe.DataDirectory{}, false
+		}
+
+		return oh.DataDirectory[idx], true
+	default:
+		return pe.DataDirectory{}, false
+	}
+}
+
+// sectionDataContainingRVA はrvaを含むセクションのデータとそのセクションの
+// VirtualAddress(rva変換の基準値)を返す。該当セクションが無い場合は
+// (nil, 0, nil)を返す(呼び出し元がフォールバックへ進めるようにするため、
+// エラーではなくnilで「見つからなかった」ことを表す)。
+func sectionDataContainingRVA(peFile *pe.File, rva uint32) ([]byte, uint32, error) {
+	for _, sec := range peFile.Sections {
+		if rva < sec.VirtualAddress || rva >= sec.VirtualAddress+sec.VirtualSize {
+			continue
+		}
+
+		data, err := sec.Data()
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %w", ErrIconInvalidPEFile, err)
+		}
+
+		offset := rva - sec.VirtualAddress
+		if uint64(offset) > uint64(len(data)) {
+			return nil, 0, fmt.Errorf("%w: リソースディレクトリRVAがセクション範囲外です", ErrIconInvalidPEFile)
+		}
+
+		return data[offset:], sec.VirtualAddress, nil
+	}
+
+	return nil, 0, nil
+}
+
 // extractBestIcon はpeFileのRT_GROUP_ICON/RT_ICONリソースから先頭の
 // アイコングループを取得し、その中で最大サイズのフレームをデコードして返す。
 //
@@ -165,17 +255,13 @@ func descendToData(rsrc []byte, rsrcVA uint32, parentDir []resourceDirEntry) ([]
 // とおりPEリソースディレクトリのエントリは名前付き→ID昇順で格納されるため、
 // 「先頭エントリ」を選べばicoextractの既定選択と一致する。
 func extractBestIcon(peFile *pe.File) (image.Image, error) {
-	section := peFile.Section(".rsrc")
-	if section == nil {
+	rsrc, rsrcVA, err := locateResourceSection(peFile)
+	if err != nil {
+		return nil, err
+	}
+	if rsrc == nil {
 		return nil, ErrNoIconsAvailable
 	}
-
-	rsrc, err := section.Data()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrIconInvalidPEFile, err)
-	}
-
-	rsrcVA := section.VirtualAddress
 
 	root, err := readResourceDirectory(rsrc, 0)
 	if err != nil {
@@ -232,10 +318,17 @@ func extractBestIcon(peFile *pe.File) (image.Image, error) {
 
 // decodeIconImage はRT_ICONの生データをimage.Imageへデコードする。
 //
-// why not: Vista以降のICOは256x256等の大サイズフレームをPNG形式で埋め込める
-// (icoextract/Pillowも同様にフォールバックする)ため、PNGマジックバイトで
-// 判定しPNGならstdlib image/pngへ、そうでなければBITMAPINFOHEADER系DIBとして
-// decodeDIB(icon_dib.go)へ委譲する。
+// why not(PNG判定): Vista以降のICOは256x256等の大サイズフレームをPNG形式で
+// 埋め込める(icoextract/Pillowも同様にフォールバックする)ため、PNGマジック
+// バイトで判定しPNGならstdlib image/pngへ、そうでなければBITMAPINFOHEADER系
+// DIBとしてdecodeDIB(icon_dib.go)へ委譲する。
+//
+// why not(decodeDIBのエラーをErrIconInvalidPEFileでラップする理由):
+// Extract()が公開する契約はErrEXENotFound/ErrIconInvalidPEFile/
+// ErrNoIconsAvailableの3種類のみ(icon.goのExtractドキュメント参照)。
+// decodeDIBが返すErrIconInvalidDIB/ErrIconUnsupportedDIBをそのまま
+// 伝播させるとこの契約から漏れるため、ここでErrIconInvalidPEFileへ
+// %wで包む(errors.Isは両方に対しtrueを返せる)。
 func decodeIconImage(data []byte) (image.Image, error) {
 	if bytes.HasPrefix(data, pngSignature) {
 		img, err := png.Decode(bytes.NewReader(data))
@@ -246,5 +339,10 @@ func decodeIconImage(data []byte) (image.Image, error) {
 		return img, nil
 	}
 
-	return decodeDIB(data)
+	img, err := decodeDIB(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrIconInvalidPEFile, err)
+	}
+
+	return img, nil
 }
