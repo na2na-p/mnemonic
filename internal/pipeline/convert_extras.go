@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -182,6 +183,25 @@ func copyFontFile(systemDir string, fontFetcher *builder.FontFetcher) error {
 	return copyFile(fontInfo.Path, fontDest)
 }
 
+// MIDI変換に関するセンチネルエラー群。
+var (
+	// ErrMidiConversionUnavailable はMIDIアセットを含むゲームに対し、変換に
+	// 必要なFluidSynthまたはサウンドフォントが利用できない場合のエラー。
+	ErrMidiConversionUnavailable = errors.New("MIDI変換に必要な環境が利用できません")
+	// ErrMidiConversionFailed は1つ以上のMIDIファイルの変換に失敗した場合のエラー。
+	ErrMidiConversionFailed = errors.New("MIDIファイルの変換に失敗しました")
+)
+
+// midiRequirementGuide はMIDI変換の前提条件を満たせなかった場合に、
+// 利用者が復旧するための手順を示す案内文。
+const midiRequirementGuide = "ゲーム内にMIDIアセット(.mid/.midi)が含まれています。" +
+	"krkrsdl2はMIDIを再生できず、スクリプト内の参照は必ず.oggへ書き換えられるため、" +
+	"MIDI変換にはFluidSynthとサウンドフォントの両方が必須です。" +
+	"インストール例: Debian/Ubuntu系は `apt-get install fluidsynth fluid-soundfont-gm`、" +
+	"macOSは `brew install fluid-synth`。" +
+	"なお--skip-videoのようなスキップ指定はMIDIには適用できません" +
+	"（変換を省略するとBGMが一切鳴らないAPKが出来上がるため）。"
+
 // convertMidiFiles はdirectory配下のMIDIファイルをOGG Vorbis形式に変換する。
 //
 // krkrsdl2はMIDI再生未対応のため、MIDIファイルをOGG Vorbisに変換する。
@@ -197,10 +217,28 @@ func (b *BuildPipeline) convertMidiFiles(directory string) error {
 }
 
 func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter) error {
-	if !midiConverter.IsFluidsynthAvailable() {
+	midiFiles, err := findMidiFiles(directory)
+	if err != nil {
+		return err
+	}
+
+	// why not: 可用性の検査をMIDIの実在確認より先に行うと、MIDIを持たない
+	// ゲームのビルドまでFluidSynthのインストールを強制することになる
+	// （internal/doctorがFluidSynthをRequired=falseとしているのと同じ理由）。
+	// 検査は必ずMIDIが実在する場合に限る。
+	if len(midiFiles) == 0 {
 		return nil
 	}
 
+	if err := ensureMidiConversionAvailable(midiConverter); err != nil {
+		return err
+	}
+
+	return convertMidiFileList(midiFiles, midiConverter)
+}
+
+// findMidiFiles はdirectory配下の.mid/.midiファイルを再帰的に列挙する。
+func findMidiFiles(directory string) ([]string, error) {
 	var midiFiles []string
 
 	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
@@ -219,16 +257,72 @@ func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConver
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("MIDIファイルの走査に失敗しました: %w", err)
+		return nil, fmt.Errorf("MIDIファイルの走査に失敗しました: %w", err)
 	}
+
+	return midiFiles, nil
+}
+
+// ensureMidiConversionAvailable はMIDI変換の前提条件（FluidSynthの実行可能性と
+// サウンドフォントの実在）を検査する。
+//
+// why not: 以前は前提条件を満たさない場合に変換自体を黙ってスキップしていたが、
+// スクリプトの.mid→.ogg書き換えは無条件に走るため、存在しない.oggを指す参照が
+// 残りBGMが無音のAPKが完成してしまう（実機で確認済み）。前提条件の欠如は
+// 「やることが無い」ではなくビルドの失敗として扱う。
+//
+// why not: サウンドフォントの実在確認をここで行うのは、converter.
+// GetDefaultSoundfontPathがFluidR3のパスへ実在確認なしにフォールバックし、
+// MidiConverter.Convertが不在をファイル単位のStatusFailedとしてしか報告
+// しないため。全ファイルを試して初めて原因が判明するより、着手前に一度だけ
+// 検査して単一のエラーへまとめる方が原因を特定しやすい。
+func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error {
+	if !midiConverter.IsFluidsynthAvailable() {
+		return fmt.Errorf(
+			"%w: fluidsynthコマンドを実行できません。%s",
+			ErrMidiConversionUnavailable, midiRequirementGuide,
+		)
+	}
+
+	soundfontPath := midiConverter.SoundfontPath()
+	if _, err := os.Stat(soundfontPath); err != nil {
+		return fmt.Errorf(
+			"%w: サウンドフォントが見つかりません: %s。%s",
+			ErrMidiConversionUnavailable, soundfontPath, midiRequirementGuide,
+		)
+	}
+
+	return nil
+}
+
+// convertMidiFileList はmidiFilesを順にOGGへ変換し、失敗を集約して返す。
+//
+// why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
+// 失敗した全ファイルを把握できるようにするため。ただし1件でも失敗した場合は
+// エラーを返し、変換されなかったMIDIを指す.ogg参照がAPKへ混入するのを防ぐ。
+func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter) error {
+	var failures []string
 
 	for _, midiFile := range midiFiles {
 		oggFile := withSuffix(midiFile, ".ogg")
 
-		result, _ := midiConverter.Convert(midiFile, oggFile)
-		if result.Status == converter.StatusSuccess {
-			_ = os.Remove(midiFile)
+		result, err := midiConverter.Convert(midiFile, oggFile)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, err))
+
+			continue
 		}
+		if result.Status != converter.StatusSuccess {
+			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, result.Message))
+
+			continue
+		}
+
+		_ = os.Remove(midiFile)
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("%w: %s", ErrMidiConversionFailed, strings.Join(failures, " / "))
 	}
 
 	return nil

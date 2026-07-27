@@ -30,6 +30,9 @@ type DependencyInfo struct {
 	Command     string
 	VersionFlag string
 	Required    bool
+	// Note はRequired=falseのツールが必要になる条件の説明。
+	// 空文字列の場合、条件付きの説明を持たないことを表す。
+	Note string
 }
 
 // Dependencies はビルドに必要な依存ツールの一覧。
@@ -40,10 +43,15 @@ var Dependencies = []DependencyInfo{
 	{Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true},
 	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
-	// why not: MidiConverter(T-211)が呼び出すFluidSynthはMIDIアセットを含む
-	// ゲームでのみ必要なため、Required=falseとする。必須にするとMIDI資産を
-	// 持たないゲームのビルドまでFluidSynthのインストールを強制してしまう。
-	{Name: "FluidSynth", Command: "fluidsynth", VersionFlag: "--version", Required: false},
+	// why not: FluidSynthはMIDIアセットを含むゲームのビルドでは必須
+	// （T-220以降、MIDIがあるのにFluidSynthが無い場合はビルドを失敗させる）
+	// だが、含まないゲームでは不要なためRequired=trueにはしない。必須にすると
+	// MIDI資産を持たないゲームのビルドまでインストールを強制してしまう。
+	// 代わりにNoteで条件を伝え、未インストール時に利用者が判断できるようにする。
+	{
+		Name: "FluidSynth", Command: "fluidsynth", VersionFlag: "--version", Required: false,
+		Note: "MIDIアセット(.mid/.midi)を含むゲームのビルドには必須です（サウンドフォントも併せて必要）",
+	},
 }
 
 // versionPatterns はコマンド出力からバージョン番号を抽出する正規表現の候補。
@@ -91,21 +99,11 @@ func CheckDependency(info DependencyInfo) CheckResult {
 			Version:  ExtractVersion(output),
 		}
 	case ctx.Err() != nil:
-		return CheckResult{
-			Name:     info.Name,
-			Required: info.Required,
-			Found:    false,
-			Message:  "コマンド '" + info.Command + "' がタイムアウトしました",
-		}
+		return notFoundResult(info, "コマンド '"+info.Command+"' がタイムアウトしました")
 	default:
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
-			return CheckResult{
-				Name:     info.Name,
-				Required: info.Required,
-				Found:    false,
-				Message:  "コマンド '" + info.Command + "' が見つかりません",
-			}
+			return notFoundResult(info, "コマンド '"+info.Command+"' が見つかりません")
 		}
 
 		// 非ゼロ終了コード（例: javaは-versionの出力を標準エラーへ書きつつ
@@ -119,6 +117,22 @@ func CheckDependency(info DependencyInfo) CheckResult {
 			Found:    true,
 			Version:  ExtractVersion(output),
 		}
+	}
+}
+
+// notFoundResult はツールを検出できなかった場合のCheckResultを組み立てる。
+// info.Noteが設定されていれば、そのツールが必要になる条件をreasonへ併記する。
+func notFoundResult(info DependencyInfo, reason string) CheckResult {
+	message := reason
+	if info.Note != "" {
+		message = reason + "。" + info.Note
+	}
+
+	return CheckResult{
+		Name:     info.Name,
+		Required: info.Required,
+		Found:    false,
+		Message:  message,
 	}
 }
 

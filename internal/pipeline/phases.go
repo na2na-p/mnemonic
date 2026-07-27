@@ -147,10 +147,14 @@ func (b *BuildPipeline) executeConvert() error {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
-	// MIDI変換（.mid/.midi → .ogg）。ScriptAdjusterの参照書き換えより先に
-	// 実行する必要はないが、Python版と同じ順序（MIDI変換→プラグインdll
-	// ディレクトリ削除→polyfillコピー→スクリプト調整→ファイル名正規化）を
-	// 踏襲する。
+	// MIDI変換（.mid/.midi → .ogg）。
+	//
+	// why not: この呼び出しを後段のadjustScriptsより後ろへ動かしてはならない。
+	// ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、MIDI変換が
+	// 先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを指す
+	// スクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
+	// 順序自体はPython版（MIDI変換→プラグインdllディレクトリ削除→polyfill
+	// コピー→スクリプト調整→ファイル名正規化）と同じ。
 	if err := b.convertMidiFiles(b.convertDir); err != nil {
 		return fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}

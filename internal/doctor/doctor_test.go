@@ -75,13 +75,14 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 }
 
 // TestDependencies_ContainsOptionalTools はMIDI変換に使うFluidSynthが
-// 必須(Required=true)ではなく任意の依存として登録されていることを検証する。
+// 条件付き依存（Required=false かつ 条件を説明するNote付き）として登録されて
+// いることを検証する。
 //
-// why: FluidSynthはMidiConverter（T-211）が呼び出す外部ツールだが、
-// Python版のDependencyInfo(name="FluidSynth", required=False)に合わせ、
-// MIDIアセットを含まないゲームのビルドをFluidSynth未インストール環境でも
-// ブロックしないようにするための意図的な設計（必須依存にすると全ゲームで
-// FluidSynthのインストールを強制することになり、Python版の意図と乖離する）。
+// why: FluidSynthはMIDIアセットを含むゲームのビルドでは必須だが、含まない
+// ゲームでは不要である。doctor全体をブロックしないためRequired=falseのまま
+// 据え置き、代わりにNoteで「MIDIを含むゲームでは必須」という条件を利用者へ
+// 伝える。Required=trueにするとMIDIを持たないゲームのビルドまで
+// FluidSynthのインストールを強制することになる。
 func TestDependencies_ContainsOptionalTools(t *testing.T) {
 	t.Parallel()
 
@@ -90,6 +91,57 @@ func TestDependencies_ContainsOptionalTools(t *testing.T) {
 	assert.Equal(t, "fluidsynth", dep.Command)
 	assert.Equal(t, "--version", dep.VersionFlag)
 	assert.False(t, dep.Required)
+	assert.Contains(t, dep.Note, "MIDI")
+}
+
+// TestCheckDependency_NoteIsSurfacedWhenMissing は条件付き依存が見つからない
+// 場合、その条件（Note）が利用者向けメッセージへ現れることを検証する。
+//
+// why: doctorが「オプション」とだけ表示すると、MIDIを含むゲームでビルドが
+// 失敗する理由を利用者が事前に知る手段が無くなる（T-220の無音APK問題）。
+func TestCheckDependency_NoteIsSurfacedWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		command     string
+		note        string
+		wantInMsg   string
+		wantMissing bool
+	}{
+		{
+			name:        "正常系: 見つからない場合はNoteがメッセージに含まれる",
+			command:     "nonexistent_command_xyz123",
+			note:        "MIDIを含むゲームのビルドには必須です",
+			wantInMsg:   "MIDIを含むゲームのビルドには必須です",
+			wantMissing: true,
+		},
+		{
+			name:        "正常系: Noteが空なら見つからない場合もメッセージに追記しない",
+			command:     "nonexistent_command_xyz123",
+			note:        "",
+			wantInMsg:   "",
+			wantMissing: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info := doctor.DependencyInfo{
+				Name: "Test", Command: tt.command, VersionFlag: "--version", Required: false, Note: tt.note,
+			}
+
+			result := doctor.CheckDependency(info)
+
+			require.Equal(t, !tt.wantMissing, result.Found)
+			require.NotEmpty(t, result.Message)
+			if tt.wantInMsg != "" {
+				assert.Contains(t, result.Message, tt.wantInMsg)
+			}
+		})
+	}
 }
 
 func TestDependencies_AllHaveVersionFlag(t *testing.T) {
