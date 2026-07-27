@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // AdjustmentRule はスクリプト調整ルールを表す不変値。
@@ -79,6 +80,21 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 	content, err := os.ReadFile(source) //nolint:gosec // 存在確認済みの変換元ファイルを読む用途のため妥当
 	if err != nil {
 		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
+	}
+
+	// why: Python版はsource.read_text(encoding="utf-8")でUTF-8として厳密に
+	// デコードし、不正なバイト列（例: Shift_JISのままのファイル）は
+	// UnicodeDecodeErrorとしてtry/exceptに捕捉されStatus: FAILEDになる。
+	// Goのstring(content)はUTF-8を検証しないため、この検証を省略すると
+	// 不正なバイト列を含む内容がそのままSUCCESSとして書き出されてしまう
+	// （文字化けの温存）。utf8.Validで同じ失敗パスを再現する。
+	if !utf8.Valid(content) {
+		return ConversionResult{
+			SourcePath:  source,
+			Status:      StatusFailed,
+			Message:     fmt.Sprintf("UTF-8として読み込めませんでした: %s", source),
+			BytesBefore: int64(len(content)),
+		}, nil
 	}
 
 	bytesBefore := int64(len(content))

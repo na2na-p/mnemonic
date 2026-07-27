@@ -263,6 +263,28 @@ func TestScriptAdjuster_AddStartupDirective(t *testing.T) {
 func TestScriptAdjuster_Convert(t *testing.T) {
 	t.Parallel()
 
+	t.Run("異常系: Shift_JISのままの非UTF-8ファイルはFAILEDを返す", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。Python版はsource.read_text(encoding="utf-8")
+		// がUnicodeDecodeErrorを送出しtry/exceptでFAILEDになる。Go版がstring()への
+		// 変換前にUTF-8妥当性を検証していないと、不正なバイト列がそのまま
+		// SUCCESSとして書き出されてしまう（文字化けの温存）ため、この失敗パスを
+		// ピン留めする。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "sjis.ks")
+		dest := filepath.Join(dir, "output", "sjis.ks")
+
+		writeSJIS(t, source, "Plugins.link(\"test.dll\");\n[message text=\"日本語テスト\"]\n")
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.NoFileExists(t, dest)
+	})
+
 	t.Run("正常系: プラグイン呼び出しを含む.ksファイルを変換できる", func(t *testing.T) {
 		t.Parallel()
 
