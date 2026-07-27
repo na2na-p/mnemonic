@@ -425,8 +425,10 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 // （readChunkでstream残量にクランプ済み）の長さを28で割った件数だけを対象にする。
 // これによりPython版の`len(segm_data) // segment_size`と同じく、末尾の
 // 28バイト未満の断片は自然に無視され、宣言セグメント数がどれほど巨大でも
-// 実データ長を超えて処理することはない（segmData自体が既にstream残量で
-// クランプ済みのため、追加のOOM対策は不要）。
+// 実データ長を超えて処理することはない。ただしこれは「セグメントレコードの
+// パース時」に確保する[]XP3Segmentのメモリ量に関する主張に過ぎず、展開時に
+// 同一オフセットを指す大量のセグメントを積み重ねる攻撃までは防げない
+// （そちらの対策はextractEntryのbudgetに関するwhy not参照）。
 func parseSegments(segmData []byte) []XP3Segment {
 	const segmentRecordSize = 28
 
@@ -439,14 +441,27 @@ func parseSegments(segmData []byte) []XP3Segment {
 	for i := range numSegments {
 		record := segmData[i*segmentRecordSize : (i+1)*segmentRecordSize]
 
+		// why not: OffsetがsafeInt64で範囲外と判定された場合、Size/OriginalSize
+		// と同じくゼロ値へフォールバックすると「オフセット0（=アーカイブヘッダー
+		// 付近）からSize/OriginalSizeで示されるバイト数を読む」動作になり、
+		// 本来無関係なアーカイブヘッダーのバイト列を展開結果に混入させてしまう
+		// （reviewer実測）。Size/OriginalSizeのゼロ値フォールバックは最悪でも
+		// 「空読みになるだけ」で実害がないが、Offsetは読み取り位置そのものを
+		// 決めるため同列には扱えない。そのためOffsetが範囲外のセグメントは
+		// 丸ごと破棄する（このエントリの他のセグメントには影響しない。全セグ
+		// メントが破棄された場合はparseSingleEntry側のname/segments判定により
+		// エントリ自体が破棄される）。
+		offset, ok := safeInt64(binary.LittleEndian.Uint64(record[4:12]))
+		if !ok {
+			continue
+		}
+
 		var segment XP3Segment
+		segment.Offset = offset
 
 		flags := binary.LittleEndian.Uint32(record[0:4])
 		// safeInt64がfalseの場合、対応フィールドはゼロ値のまま
 		// （セグメント自体は破棄せず、パース可能な範囲の情報を活かす）。
-		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[4:12])); ok {
-			segment.Offset = v
-		}
 		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[12:20])); ok {
 			segment.Size = v
 		}
@@ -604,6 +619,15 @@ func (a *XP3Archive) findEntry(filename string) (XP3FileEntry, bool) {
 
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
 // outputPathへ書き出す（Python版delta 3a17127の複数セグメント連結展開に相当）。
+//
+// why not: 個々のセグメントはreadSegment内でfileSizeによりオフセット以降の
+// 実際の残量へクランプされるが、それだけでは「同一オフセットを指す大量の
+// セグメント」を積み重ねる攻撃を防げない（各セグメントは独立にfileSize近くまで
+// 読めてしまうため、セグメント数×fileSizeでアロケーション総量が膨れ上がる。
+// reviewer実測: 52KBの細工アーカイブ・同一オフセットのセグメント20,000件で
+// 5.1GB RSS）。正当なアーカイブでは各バイトは高々1つのセグメントにしか
+// 属さないため、エントリ全体で読み取れる生バイト数の総量をbudgetとして
+// fileSizeを上限に管理し、セグメントをまたいで消費させる。
 func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
@@ -614,12 +638,15 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 		return err
 	}
 
+	budget := fileSize
+
 	var data []byte
 	for _, segment := range entry.Segments {
-		segmentData, err := readSegment(f, segment, fileSize)
+		segmentData, consumed, err := readSegment(f, segment, fileSize, budget)
 		if err != nil {
 			return err
 		}
+		budget -= consumed
 		data = append(data, segmentData...)
 	}
 
@@ -635,8 +662,10 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 // why not: 各セグメントのSize宣言値はアーカイブバイナリ由来で信頼できず、
 // safeInt64の範囲チェックを通過していても実ファイルサイズを大幅に超える
 // 値になりうる（int64範囲内の巨大値の宣言は防げない）。事前にファイル全体の
-// サイズを取得しておき、readSegmentでオフセット以降の実際の残量にSizeを
-// クランプすることで、巨大なSize宣言によるmake([]byte, size)でのOOMを防ぐ。
+// サイズを取得しておき、readSegmentでオフセット以降の実際の残量・エントリ
+// 全体のbudgetにSizeをクランプすることで、巨大なSize宣言や大量セグメントの
+// 積み重ねによるmake([]byte, size)でのOOMを防ぐ（詳細はextractEntry・
+// readSegmentのwhy not参照）。
 func streamSize(f io.ReadSeeker) (int64, error) {
 	size, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -647,32 +676,38 @@ func streamSize(f io.ReadSeeker) (int64, error) {
 }
 
 // readSegment は1セグメント分のデータを読み取り、圧縮されていれば解凍する。
+// 戻り値のconsumedは実際にファイルから読み取った生バイト数（解凍前）であり、
+// 呼び出し元はこれをbudgetから差し引いてエントリ全体の累積読み取り量を管理する
+// （budgetの必要性はextractEntryのwhy not参照）。
 //
 // fileSizeでセグメントのSize宣言値をクランプする理由はstreamSizeのwhy not参照。
-func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64) ([]byte, error) {
+// readSizeはsegment.Size（safeInt64通過済みで非負）とremaining（fileSize由来で
+// 非負にクランプ済み）の小さい方であり常に非負のため、負値ガードは不要。
+func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([]byte, int64, error) {
 	if _, err := f.Seek(segment.Offset, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
+		return nil, 0, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
 	}
 
 	remaining := fileSize - segment.Offset
 	if remaining < 0 {
 		remaining = 0
 	}
+	if remaining > budget {
+		remaining = budget
+	}
 
 	readSize := segment.Size
 	if readSize > remaining {
 		readSize = remaining
 	}
-	if readSize < 0 {
-		readSize = 0
-	}
 
 	buf := make([]byte, readSize)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
+		return nil, 0, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
 	}
 	buf = buf[:n]
+	consumed := int64(n)
 
 	if segment.IsCompressed && segment.Size != segment.OriginalSize {
 		if decompressed, err := decompressZlib(buf); err == nil {
@@ -680,7 +715,7 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64) ([]byte, e
 		}
 	}
 
-	return buf, nil
+	return buf, consumed, nil
 }
 
 // safeJoin はbaseDir配下にentryNameを結合する。

@@ -420,11 +420,15 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 		writeChunkHeader(&entryBody, "info", info.Bytes())
 
 		// segmサブチャンク（セグメントごとに28バイトのレコードを連結）。
+		// フラグは0x07（Python版delta 3a17127のテストフィクスチャ
+		// `flags = 0x07 if is_comp else 0x00`に合わせたマルチビット値）。
+		// パース側の判定はflags&0x07 != 0のため0x01でも判定結果は同じだが、
+		// Python版フィクスチャとバイト列レベルで一致させる。
 		var segm bytes.Buffer
 		for _, seg := range entrySegments[i] {
 			var segmFlags uint32
 			if seg.compressFlag {
-				segmFlags |= 0x01
+				segmFlags |= 0x07
 			}
 			writeUint32(&segm, segmFlags)
 			writeUint64(&segm, uint64(seg.offset)) //nolint:gosec // テストヘルパーであり非負であることが既知
@@ -653,25 +657,25 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 	})
 }
 
-func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *testing.T) {
+// TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice は
+// segmのoffsetがint64範囲を超える（safeInt64が失敗する）ケース。
+//
+// 修正前はOffsetもSize/OriginalSizeと同じくゼロ値（オフセット0）へ
+// フォールバックしていたため、「オフセット0（=アーカイブヘッダー付近）から
+// Size/OriginalSizeバイト読む」動作になり、無関係なアーカイブヘッダーの
+// バイト列を展開結果に混入させていた（reviewer実測の情報漏えい）。
+// 修正後はOffsetが範囲外の場合そのセグメントを丸ごと破棄する。この例では
+// エントリが持つ唯一のセグメントが破棄されるため、name/segments判定により
+// エントリ自体も破棄され、ヘッダーバイト列を含むファイルは一切生成されない。
+func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *testing.T) {
 	t.Parallel()
 
-	// "info"で正当な名前を確定させた後、"segm"がint64範囲を超えるoffset/size/
-	// original_sizeを宣言するケース。修正前はint64(uint64)の素朴なキャストで
-	// 符号が反転して負値になり、ExtractAll時のmake([]byte, entry.Size)が
-	// makeslice: len out of range でパニックしていた。
-	// また、そのpanicを避けるために（誤って）Seek失敗時にエントリ全体を
-	// 破棄していたため、既に読み取れていたnameまで失われていた。
-	// 修正後はsafeInt64で範囲外の値のみ無視し、nameは保持する。複数セグメント
-	// 対応後は個々のフィールドがXP3Segmentのゼロ値（0）にフォールバックする
-	// （Python版delta 3a17127以降、infoチャンクはsize/original_sizeを持たない
-	// ためinfo側へのフォールバックは存在しない）。
 	nameUTF16 := utf16.Encode([]rune("secret.dat"))
 
 	var info bytes.Buffer
 	writeUint32(&info, 0)                      // flags
-	writeUint64(&info, 5)                      // originalSize
-	writeUint64(&info, 5)                      // size
+	writeUint64(&info, 5)                      // originalSize（Python版delta以降読み飛ばされる）
+	writeUint64(&info, 5)                      // size（同上）
 	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
 	for _, u := range nameUTF16 {
 		writeUint16(&info, u)
@@ -679,7 +683,62 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 
 	var segm bytes.Buffer
 	writeUint32(&segm, 0)              // flags
-	writeUint64(&segm, math.MaxUint64) // offset（int64範囲超過）
+	writeUint64(&segm, math.MaxUint64) // offset（int64範囲超過 → セグメント自体が破棄される）
+	writeUint64(&segm, 5)              // size（範囲内だがoffset破棄により無関係）
+	writeUint64(&segm, 5)              // originalSize（同上）
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+
+	path := filepath.Join(t.TempDir(), "corrupt_segm_offset.xp3")
+	writeFile(t, path, archiveBytes)
+
+	archive, err := parser.NewXP3Archive(path)
+	require.NoError(t, err)
+
+	// セグメントが1つも残らないため、エントリ自体が破棄されている。
+	assert.Empty(t, archive.ListFiles())
+
+	// 展開してもパニックせず、（存在しないエントリの）ファイルも作られないこと。
+	outputDir := t.TempDir()
+	require.NoError(t, archive.ExtractAll(outputDir))
+	assert.NoFileExists(t, filepath.Join(outputDir, "secret.dat"))
+}
+
+// TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice は
+// offsetは範囲内だがsize/original_sizeがint64範囲を超えるケース。
+//
+// 修正前はint64(uint64)の素朴なキャストで符号が反転して負値になり、
+// ExtractAll時のmake([]byte, entry.Size)がmakeslice: len out of rangeで
+// パニックしていた。また、そのpanicを避けるために（誤って）Seek失敗時に
+// エントリ全体を破棄していたため、既に読み取れていたnameまで失われていた。
+// 修正後はsafeInt64で範囲外の値のみゼロ値へフォールバックする。Size/
+// OriginalSizeのフォールバックは（Offsetと異なり）最悪でも空読みになる
+// だけで実害がないため、Offsetのように破棄はしない
+// （詳細はparseSegmentsのwhy not参照）。
+func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *testing.T) {
+	t.Parallel()
+
+	nameUTF16 := utf16.Encode([]rune("secret.dat"))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)                      // flags
+	writeUint64(&info, 5)                      // originalSize（Python版delta以降読み飛ばされる）
+	writeUint64(&info, 5)                      // size（同上）
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0)              // flags
+	writeUint64(&segm, 0)              // offset（範囲内・破棄されない）
 	writeUint64(&segm, math.MaxUint64) // size（int64範囲超過）
 	writeUint64(&segm, math.MaxUint64) // originalSize（int64範囲超過）
 
@@ -698,11 +757,11 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 	archive, err := parser.NewXP3Archive(path)
 	require.NoError(t, err)
 
-	// エントリが破棄されず、nameが保持されていること。
+	// オフセットが範囲内のためセグメント・エントリともに破棄されず、nameが保持されていること。
 	require.Equal(t, []string{"secret.dat"}, archive.ListFiles())
 
 	// 展開してもmakesliceパニックせずに完了すること
-	// （segmの値がint64安全域外のためゼロ値にフォールバックし、空データとして書き出される）。
+	// （size/originalSizeがint64安全域外のためゼロ値にフォールバックし、空データとして書き出される）。
 	outputDir := t.TempDir()
 	err = archive.ExtractAll(outputDir)
 	require.NoError(t, err)
@@ -961,4 +1020,230 @@ func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
 	extracted, err := os.ReadFile(filepath.Join(outputDir, "hostile.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 	require.NoError(t, err)
 	assert.Equal(t, dataSection, extracted)
+}
+
+// TestXP3Archive_EntryWithoutSegments_IsDiscarded は、infoチャンクは正常に
+// nameを確定できるがsegmチャンクを欠く（あるいは28バイト未満で1件も有効な
+// セグメントを構成できない）場合に、エントリ自体が破棄されることをpinする。
+//
+// parseSingleEntryの「name == "" || len(segments) == 0」判定
+// （Python版の`if name and segments:`に対応）はこれまでテストされておらず、
+// reviewerがlen(segments)==0の条件を取り除くミューテーションを入れても
+// 全テストが通過することを確認していた。
+func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
+	t.Parallel()
+
+	buildInfoOnlyEntry := func(name string) []byte {
+		nameUTF16 := utf16.Encode([]rune(name))
+
+		var info bytes.Buffer
+		writeUint32(&info, 0) // flags
+		writeUint64(&info, 0)
+		writeUint64(&info, 0)
+		writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+		for _, u := range nameUTF16 {
+			writeUint16(&info, u)
+		}
+
+		return info.Bytes()
+	}
+
+	t.Run("異常系: infoは正常だがsegmチャンクが存在しない場合エントリは破棄される", func(t *testing.T) {
+		t.Parallel()
+
+		var entryBody bytes.Buffer
+		writeChunkHeader(&entryBody, "info", buildInfoOnlyEntry("no_segm.bin"))
+		// segmチャンクを意図的に書かない。
+
+		var table bytes.Buffer
+		writeChunkHeader(&table, "File", entryBody.Bytes())
+
+		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+
+		path := filepath.Join(t.TempDir(), "no_segm.xp3")
+		writeFile(t, path, archiveBytes)
+
+		archive, err := parser.NewXP3Archive(path)
+		require.NoError(t, err)
+
+		assert.Empty(t, archive.ListFiles())
+	})
+
+	t.Run("異常系: segmチャンクが28バイト未満の場合エントリは破棄される", func(t *testing.T) {
+		t.Parallel()
+
+		var entryBody bytes.Buffer
+		writeChunkHeader(&entryBody, "info", buildInfoOnlyEntry("short_segm.bin"))
+		// 27バイトの不完全なsegmレコード（28バイト未満で1件も構成できない）。
+		writeChunkHeader(&entryBody, "segm", make([]byte, 27))
+
+		var table bytes.Buffer
+		writeChunkHeader(&table, "File", entryBody.Bytes())
+
+		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+
+		path := filepath.Join(t.TempDir(), "short_segm.xp3")
+		writeFile(t, path, archiveBytes)
+
+		archive, err := parser.NewXP3Archive(path)
+		require.NoError(t, err)
+
+		assert.Empty(t, archive.ListFiles())
+	})
+}
+
+// TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes は、
+// segmのis_compressedフラグ（0x07）が立っていてもSize==OriginalSizeの場合は
+// 「圧縮後サイズ==元サイズ」つまり実質未圧縮を意味するため解凍を試みず、
+// アーカイブ上の生バイト列をそのまま採用すること（Python版の
+// `is_compressed and size != original_size`ガードと同じ）をpinする。
+//
+// 生バイト列自体を「たまたま正当なzlibストリームだが別の内容を指す」もの
+// にしておくことで、ガード条件（Size != OriginalSize）が取り除かれた場合
+// （解凍が誤って実行された場合）に解凍が成功してしまい、期待値と異なる
+// 内容（別内容の解凍結果）が出力されて検出できるようにしている
+// （単なる非zlibバイト列だと、解凍失敗時にdecompressZlibのエラーが
+// 握りつぶされ元のバイト列がそのまま残るため、ガード除去のミューテーションを
+// 検出できない）。
+func TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes(t *testing.T) {
+	t.Parallel()
+
+	const headerSize = 19
+
+	// 「別の内容」をzlib圧縮したバイト列を、そのままアーカイブ上の生データ
+	// として配置する。ガードが正しく機能していれば、このzlib圧縮済みバイト列
+	// 自体がそのまま展開結果になるはず（内部のinnerContentへ解凍されない）。
+	innerContent := []byte("THIS_SHOULD_NOT_BE_DECOMPRESSED")
+	rawPayload := compressZlib(t, innerContent)
+	offset := int64(headerSize)
+
+	nameUTF16 := utf16.Encode([]rune("raw_passthrough.bin"))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)
+	writeUint64(&info, uint64(len(rawPayload)))
+	writeUint64(&info, uint64(len(rawPayload)))
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0x07)                    // is_compressed = true（Python版フィクスチャと同じ多ビットフラグ）
+	writeUint64(&segm, uint64(offset))          //nolint:gosec // テストヘルパーであり非負であることが既知
+	writeUint64(&segm, uint64(len(rawPayload))) // size
+	writeUint64(&segm, uint64(len(rawPayload))) // original_size（sizeと同一 → 解凍を試みてはいけない）
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	compressedTable := compressZlib(t, table.Bytes())
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	indexOffset := int64(headerSize) + int64(len(rawPayload))
+	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	buf.Write(rawPayload)
+
+	buf.WriteByte(0x00) // flag: バージョン1
+	writeUint64(&buf, uint64(len(compressedTable)))
+	writeUint64(&buf, uint64(table.Len()))
+	buf.Write(compressedTable)
+
+	path := filepath.Join(t.TempDir(), "raw_passthrough.xp3")
+	writeFile(t, path, buf.Bytes())
+
+	archive, err := parser.NewXP3Archive(path)
+	require.NoError(t, err)
+
+	outputDir := t.TempDir()
+	require.NoError(t, archive.ExtractAll(outputDir))
+
+	extracted, err := os.ReadFile(filepath.Join(outputDir, "raw_passthrough.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+	require.NoError(t, err)
+	assert.Equal(t, rawPayload, extracted)
+	assert.NotEqual(t, innerContent, extracted)
+}
+
+// TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize は、悪意ある
+// アーカイブが同一オフセットを指す大量のsegmレコードを持つケース。
+//
+// 修正前は各セグメントが個別に「オフセット以降の残量」でのみクランプされて
+// おり、エントリ全体での累積読み取り量には上限がなかった。同一オフセットの
+// セグメントを大量に積み重ねると、セグメント数×クランプ後サイズ分の
+// アロケーションが発生しうる（reviewer実測: 52KBの細工アーカイブ・同一
+// オフセットのセグメント20,000件で5.1GB RSS）。修正後はextractEntryが
+// エントリ全体でbudget（=fileSize）を管理し、セグメントをまたいで消費させる
+// ため、累積読み取り量はfileSizeを超えない。
+func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
+	t.Parallel()
+
+	const headerSize = 19
+	const numSegments = 2000
+	const segmentDeclaredSize = 500 // 実ファイルサイズよりずっと大きい宣言値
+
+	payload := []byte("SHARED_OFFSET_PAYLOAD")
+	offset := int64(headerSize)
+
+	nameUTF16 := utf16.Encode([]rune("many_segments.bin"))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)
+	writeUint64(&info, uint64(len(payload)))
+	writeUint64(&info, uint64(len(payload)))
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	for range numSegments {
+		writeUint32(&segm, 0)                           // flags（非圧縮）
+		writeUint64(&segm, uint64(offset))              //nolint:gosec // テストヘルパーであり非負であることが既知
+		writeUint64(&segm, uint64(segmentDeclaredSize)) //nolint:gosec // テストヘルパーであり非負であることが既知
+		writeUint64(&segm, uint64(segmentDeclaredSize)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	}
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	compressedTable := compressZlib(t, table.Bytes())
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	indexOffset := int64(headerSize) + int64(len(payload))
+	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	buf.Write(payload)
+
+	buf.WriteByte(0x00) // flag: バージョン1
+	writeUint64(&buf, uint64(len(compressedTable)))
+	writeUint64(&buf, uint64(table.Len()))
+	buf.Write(compressedTable)
+
+	path := filepath.Join(t.TempDir(), "many_segments_same_offset.xp3")
+	writeFile(t, path, buf.Bytes())
+	fileSize := int64(len(buf.Bytes()))
+
+	archive, err := parser.NewXP3Archive(path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"many_segments.bin"}, archive.ListFiles())
+
+	outputDir := t.TempDir()
+	require.NoError(t, archive.ExtractAll(outputDir))
+
+	extracted, err := os.ReadFile(filepath.Join(outputDir, "many_segments.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+	require.NoError(t, err)
+
+	// budgetがなければ最大 numSegments * segmentDeclaredSize ≈ 1,000,000バイト
+	// 分読まれうるが、budget導入後はエントリ全体でfileSizeを超えて読まれない。
+	assert.LessOrEqual(t, int64(len(extracted)), fileSize)
+	assert.Less(t, len(extracted), numSegments*segmentDeclaredSize)
 }
