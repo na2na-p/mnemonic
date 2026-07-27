@@ -1,0 +1,155 @@
+// VideoOverlay_stub.tjs - VideoOverlay Stub for krkrsdl2
+// Part of the Mnemonic project (MIT License)
+// https://github.com/na2na-p/mnemonic
+//
+// Note: Video playback (krmovie) is not supported on Android/krkrsdl2.
+// This stub provides a no-op implementation to prevent errors.
+// When a video is "played", it immediately fires onStatusChanged with "stop"
+// to allow the game to continue without hanging.
+
+class VideoOverlay
+{
+	var visible = false;
+	var left = 0;
+	var top = 0;
+	var width = 0;
+	var height = 0;
+	var position = 0;
+	var volume = 100000;
+	var volume2 = 100000;
+	var playing = false;
+	var period = 0;
+	var frame = 0;
+	var fps = 0;
+	var numberOfFrame = 0;
+	var originalWidth = 0;
+	var originalHeight = 0;
+	var status = "unload";
+	var mode = "ovl";
+	var loop = false;
+	var layer1 = void;
+	var layer2 = void;
+	var segmentLoopStartFrame = 0;
+	var segmentLoopEndFrame = 0;
+
+	var _owner;
+
+	function VideoOverlay(owner)
+	{
+		_owner = owner;
+	}
+
+	function finalize()
+	{
+	}
+
+	function open(storage)
+	{
+		// Pretend we loaded the video successfully
+		status = "stop";
+		// Simulate a minimal video size
+		originalWidth = 640;
+		originalHeight = 480;
+		numberOfFrame = 1;
+		period = 1000; // 1 second
+	}
+
+	function play()
+	{
+		playing = true;
+		status = "play";
+		// Immediately signal completion since we can't actually play
+		// Use async call to allow the game loop to process
+		if (typeof(global.System.getTickCount) === "Object")
+		{
+			// Schedule the stop event for next tick
+			global.Scripts.exec("global.VideoOverlay_signalStop(this)");
+		}
+		else
+		{
+			_signalStop();
+		}
+	}
+
+	function _signalStop()
+	{
+		playing = false;
+		status = "stop";
+		position = period;
+		frame = numberOfFrame;
+		onStatusChanged("stop");
+	}
+
+	function stop()
+	{
+		playing = false;
+		status = "stop";
+		position = 0;
+		frame = 0;
+	}
+
+	function rewind()
+	{
+		position = 0;
+		frame = 0;
+	}
+
+	function pause()
+	{
+		playing = false;
+	}
+
+	function prepare()
+	{
+		// No-op
+	}
+
+	function cancelSegmentLoop()
+	{
+		loop = false;
+	}
+
+	function setSegmentLoop(start, end)
+	{
+		segmentLoopStartFrame = start;
+		segmentLoopEndFrame = end;
+	}
+
+	function setPos(l, t, w, h)
+	{
+		left = l;
+		top = t;
+		width = w;
+		height = h;
+	}
+
+	function setSize(w, h)
+	{
+		width = w;
+		height = h;
+	}
+
+	function onStatusChanged(status)
+	{
+		// Event handler - can be overridden by game
+	}
+
+	function onCallbackCommand(command, argument)
+	{
+		// Event handler - can be overridden by game
+	}
+
+	function onPeriod()
+	{
+		// Event handler - can be overridden by game
+	}
+}
+
+// Helper function to signal stop from async context
+global.VideoOverlay_signalStop = function(vo)
+{
+	if (vo !== void && typeof(vo._signalStop) === "Object")
+	{
+		vo._signalStop();
+	}
+};

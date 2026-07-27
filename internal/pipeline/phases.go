@@ -147,6 +147,37 @@ func (b *BuildPipeline) executeConvert() error {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
+	// MIDI変換（.mid/.midi → .ogg）。ScriptAdjusterの参照書き換えより先に
+	// 実行する必要はないが、Python版と同じ順序（MIDI変換→プラグインdll
+	// ディレクトリ削除→polyfillコピー→スクリプト調整→ファイル名正規化）を
+	// 踏襲する。
+	if err := b.convertMidiFiles(b.convertDir); err != nil {
+		return fmt.Errorf("MIDI変換に失敗しました: %w", err)
+	}
+
+	// プラグインディレクトリを削除（Windows DLLはAndroidで使用不可。
+	// extrans/wuvorbisはBUILDフェーズでjniLibs経由の.soとして別途配置される）
+	if err := b.removePluginDirectory(b.convertDir); err != nil {
+		return err
+	}
+
+	// krkrsdl2 polyfillファイルをコピー
+	if err := b.copyPolyfillFiles(b.convertDir); err != nil {
+		return err
+	}
+
+	// スクリプト調整（startup.tjsへのpolyfill読み込み追加、loadplugin書き換え等）
+	if err := b.adjustScripts(b.convertDir); err != nil {
+		return err
+	}
+
+	// Androidのファイルシステムは大文字小文字を区別するため、重要な
+	// ファイル名を正規化（小文字化）する。変換処理の後に行う必要がある
+	// （変換が元のケースでファイルを作成するため）。
+	if err := b.normalizeCriticalFilenames(b.convertDir); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -188,8 +219,15 @@ func (b *BuildPipeline) executeBuild() error {
 		appName = baseName
 	}
 
-	preparer := builder.NewTemplatePreparer(projectDir)
-	if err := preparer.Prepare(packageName, appName, b.convertDir, b.findGameIcon()); err != nil {
+	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
+	plugins := b.fetchPlugins()
+
+	// why not: Python版のBuildPipelineもTemplatePreparer(self._project_dir)を
+	// sdl2_cache未指定（None）で呼び出しており、パイプライン経由のビルドでは
+	// SDL2 Javaソースのキャッシュを使わない（都度ダウンロードする）。この
+	// デフォルト挙動を踏襲する。
+	preparer := builder.NewTemplatePreparer(projectDir, nil)
+	if err := preparer.Prepare(packageName, appName, b.convertDir, b.findGameIcon(), plugins); err != nil {
 		return err
 	}
 

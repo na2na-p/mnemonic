@@ -1,0 +1,114 @@
+﻿// PolyfillInitialize.tjs - krkrsdl2 Polyfill Initialization
+// Source: https://github.com/krkrsdl2/kag3
+// Based on KAG3 (Kirikiri Adventure Game System)
+// Copyright (C) W.Dee and contributors - 改変・配布は自由です
+
+@if (kirikiriz)
+property _dummyProp { getter {} setter (v) {} }
+with(global.Window)
+{
+	&.innerSunken    = &_dummyProp;
+	&.showScrollBars = &_dummyProp;
+}
+@endif
+
+{
+	if (typeof(global.KirikiriPolyfillRoot) !== "String")
+	{
+		global.KirikiriPolyfillRoot = "system/";
+	}
+
+	// Try loading menu.dll plugin
+	if (typeof(global.MenuItem) !== "Object")
+	{
+		if ((typeof(global.Storages.isExistentPlugin) !== "Object") || global.Storages.isExistentPlugin("menu.dll"))
+		{
+			try
+			{
+				global.Plugins.link("menu.dll");
+			}
+			catch (e)
+			{
+				// pass
+			}
+		}
+	}
+	// Load MenuItem stub if MenuItem object is not set
+	if (typeof(global.MenuItem) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "menuitem_stub.tjs");
+	}
+
+	// Try loading KAGParser.dll plugin
+	if (typeof(global.KAGParser) !== "Object")
+	{
+		if ((typeof(global.Storages.isExistentPlugin) !== "Object") || global.Storages.isExistentPlugin("KAGParser.dll"))
+		{
+			try
+			{
+				global.Plugins.link("KAGParser.dll");
+			}
+			catch (e)
+			{
+				// pass
+			}
+		}
+	}
+	// Load KAGParser implementation if KAGParser object is not set
+	if (typeof(global.KAGParser) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "kagparser.tjs");
+	}
+
+	// Load MIDISoundBuffer stub if not available (MIDI not supported on Android)
+	if (typeof(global.MIDISoundBuffer) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "midisoundbuffer_stub.tjs");
+	}
+
+	// Load VideoOverlay stub if not available (Video not supported on Android/krkrsdl2)
+	if (typeof(global.VideoOverlay) !== "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "videooverlay_stub.tjs");
+	}
+
+	// Enable alpha channel hold for better transparency handling
+	// This ensures proper alpha blending on Android/krkrsdl2
+	if (typeof(global.System.setArgument) === "Object")
+	{
+		try
+		{
+			global.System.setArgument("-holdalpha", "yes");
+		}
+		catch (e)
+		{
+			// pass - argument may already be set via command line
+		}
+	}
+
+	// Load font and set it as default
+	if (typeof(global.Font) === "Object" && typeof(global.Font.addFont) === "Object")
+	{
+		var font_to_add = "";
+		var paths_to_check = [
+			global.KirikiriPolyfillRoot + "font.ttf",
+			global.KirikiriPolyfillRoot + "font.otf",
+		];
+		for (var i = 0; i < paths_to_check.count; i += 1)
+		{
+			var font_to_check = paths_to_check[i];
+			if (font_to_check !== void)
+			{
+				if (global.Storages.isExistentStorage(font_to_check))
+				{
+					font_to_add = font_to_check;
+					break;
+				}
+			}
+		}
+		if (font_to_add !== "")
+		{
+			global.System.setArgument("-deffont", global.Font.addFont(font_to_add)[0]);
+		}
+	}
+}
