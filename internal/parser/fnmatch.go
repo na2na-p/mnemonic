@@ -10,7 +10,7 @@ import (
 //
 // why not: Go標準の path.Match / filepath.Match は"*"が"/"を越えてマッチしない
 // （シェルのグロブ相当）が、Pythonのfnmatchは"*"がパス区切りを含む任意の文字列に
-// マッチする（正規表現の".*"相当）。assets.pyのexclude/conversion_rulesパターン
+// マッチする（正規表現の".*"相当）。exclude/conversion_rulesパターン
 // （例: "voice/*.ogg"）はfnmatchのこの性質に依存しているため、Go版では
 // fnmatch.translateのロジックを再実装したうえでregexpに変換して判定する。
 func matchGlob(name, pattern string) bool {

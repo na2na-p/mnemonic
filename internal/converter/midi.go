@@ -119,7 +119,7 @@ func (c *MidiConverter) SupportedExtensions() []string {
 
 // GetOutputExtension は変換後ファイルの拡張子".ogg"を返す。
 //
-// why not: baseline Python版(midi.py)にget_output_extensionの実装は無いが、
+// why not: baseline Python版にget_output_extensionの実装は無いが、
 // Converterインターフェース（PR9/T-209でGetOutputExtensionを追加）はこれを
 // 使い出力パスの拡張子を書き換える。MIDI変換の出力実体は常にOGGであるため、
 // 空文字列（拡張子不変）を返すと出力先が".mid"のままになり誤りとなる。

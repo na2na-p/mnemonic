@@ -1,7 +1,5 @@
 // Package parser はゲーム入力ファイル（EXE / XP3アーカイブ）の解析、
 // ゲームエンジン構成の検出、アセットファイルの分類を行う。
-//
-// Python版 (src/mnemonic/parser/*.py) をGoへ移植したもの。
 package parser
 
 import (

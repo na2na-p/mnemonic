@@ -314,9 +314,8 @@ func TestXP3EncryptionChecker_RaiseIfEncrypted(t *testing.T) {
 // のみの最小ファイルで検証している）。しかしXP3Archiveの本体ロジック
 // （zlib解凍・チャンク解析・オフセット算出）はこのパスを通らないと一切
 // 検証されないため、Go移植では独自にビルダーを追加している。
-// 複数セグメント関連（xp3SegmentSpec.segments経由）は、Python版delta
-// 3a17127のtests/parser/test_xp3.py `_create_xp3_with_multiple_segments`
-// に相当するフィクスチャとして、このビルダーへ統合した。
+// 複数セグメント関連（xp3SegmentSpec.segments経由）についても、同様の
+// 理由からこのビルダーへ統合した。
 //
 // xp3SegmentSpec は1セグメント分の実データと圧縮有無を表す。
 // compressFlagがtrueの場合、dataはzlib圧縮した上でデータ領域に書き込まれる

@@ -385,10 +385,9 @@ func (r fakeCommandRunner) Run(_ context.Context, name string, _ ...string) ([]b
 	return resp.output, resp.err
 }
 
-// TestBuildPipeline_ConvertMidiFiles はPython版pipeline.pyの
-// _convert_midi_filesに相当する挙動をテストする
-// （converter.MidiConverterのCommandRunner注入口を使い、実プロセスの
-// fluidsynth/ffmpegに触れずに検証する）。
+// TestBuildPipeline_ConvertMidiFiles はPython版の_convert_midi_filesに
+// 相当する挙動をテストする（converter.MidiConverterのCommandRunner注入口を
+// 使い、実プロセスのfluidsynth/ffmpegに触れずに検証する）。
 func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 	t.Parallel()
 

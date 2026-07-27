@@ -14,8 +14,7 @@ import (
 
 // buildRunner はbuildコマンドが必要とするBuildPipelineの振る舞いを表す
 // インターフェース。テストで実際のGradle/ffmpeg/keytool実行を伴わない
-// スタブに差し替えるために定義する（Python版test_cli.pyがpatch("mnemonic.
-// cli.BuildPipeline")でモック化するのと同じ目的）。
+// スタブに差し替えるために定義する。
 type buildRunner interface {
 	Validate() []string
 	Run(pipeline.ProgressCallback) pipeline.Result

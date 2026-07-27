@@ -1,6 +1,4 @@
 // Package config は mnemonic.yml 設定ファイルの読み込みとデフォルト値マージを提供する。
-//
-// Python版 (src/mnemonic/config.py) の MnemonicConfig 一式をGoへ移植したもの。
 package config
 
 // Config はビルド設定のルート値。

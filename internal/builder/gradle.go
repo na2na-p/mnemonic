@@ -1,7 +1,5 @@
 // Package builder はkrkrsdl2テンプレートからAndroidプロジェクトを生成し、
 // Gradleでビルドするための機能を提供する。
-//
-// Python版 (src/mnemonic/builder/) をGoへ移植したもの。
 package builder
 
 import (

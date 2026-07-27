@@ -7,7 +7,7 @@ import (
 )
 
 // TestCalculateWorkersFor はcalculateWorkersForをCPUコア数を固定して検証する
-// white-boxテスト。Python版test_manager.pyのTestCalculateWorkersに相当する
+// white-boxテスト。Python版のTestCalculateWorkersに相当する
 // （os.cpu_countのpatchに相当する処理をcpuCount引数の直接指定で代替する）。
 func TestCalculateWorkersFor(t *testing.T) {
 	t.Parallel()

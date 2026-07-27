@@ -36,8 +36,8 @@ func TestSystemPolyfillFS_ContainsAllEmbeddedFiles(t *testing.T) {
 func TestSystemPolyfillFiles_MatchesPythonCopyList(t *testing.T) {
 	t.Parallel()
 
-	// why: Python版pipeline.pyの_copy_polyfill_filesがコピーする5ファイルの
-	// 一覧・順序をピン留めする。SaveDataPath_patch.tjsは同梱されているが
+	// why: Python版の_copy_polyfill_filesがコピーする5ファイルの一覧・順序を
+	// ピン留めする。SaveDataPath_patch.tjsは同梱されているが
 	// コピー対象には含まれない（resources.goのwhy notコメント参照）。
 	want := []string{
 		"PolyfillInitialize.tjs",
