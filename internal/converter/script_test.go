@@ -447,3 +447,197 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		assert.Contains(t, string(converted), "日本語コメント")
 	})
 }
+
+// TestScriptAdjuster_MidiRules はMIDIファイル参照の変換ルール
+// （MIDISoundBuffer→WaveSoundBuffer、拡張子.mid/.midi→.ogg）をテストする。
+//
+// Python版 TestScriptAdjusterMidiRules の移植。
+func TestScriptAdjuster_MidiRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: MIDISoundBufferをWaveSoundBufferに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var bgm = new MIDISoundBuffer("bgm/title.mid");`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "WaveSoundBuffer")
+		assert.NotContains(t, adjusted, "MIDISoundBuffer")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: .mid参照をダブルクォートで.oggに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var bgm = new WaveSoundBuffer("bgm/title.mid");`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"bgm/title.ogg"`)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: .mid参照をシングルクォートで.oggに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "var bgm = new WaveSoundBuffer('bgm/title.mid');"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "'bgm/title.ogg'")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: .midi参照を.oggに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var bgm = new WaveSoundBuffer("bgm/title.midi");`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"bgm/title.ogg"`)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: MIDISoundBufferと.mid拡張子の両方を変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var bgm = new MIDISoundBuffer("bgm/title.mid");`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "WaveSoundBuffer")
+		assert.NotContains(t, adjusted, "MIDISoundBuffer")
+		assert.Contains(t, adjusted, `"bgm/title.ogg"`)
+		assert.GreaterOrEqual(t, count, 2)
+	})
+
+	t.Run("正常系: 複数のMIDI参照を変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "var bgm1 = new MIDISoundBuffer(\"bgm/title.mid\");\n" +
+			"var bgm2 = new MIDISoundBuffer(\"bgm/battle.midi\");\n" +
+			"var se = new WaveSoundBuffer(\"se/click.wav\");\n"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Equal(t, 3, strings.Count(adjusted, "WaveSoundBuffer"))
+		assert.NotContains(t, adjusted, "MIDISoundBuffer")
+		assert.Contains(t, adjusted, `"bgm/title.ogg"`)
+		assert.Contains(t, adjusted, `"bgm/battle.ogg"`)
+		assert.Contains(t, adjusted, `"se/click.wav"`) // WAVはそのまま
+	})
+
+	t.Run("正常系: クォートされていないコンテキストではMIDが変換されない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "var midpoint = calculateMidpoint();"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "midpoint")
+	})
+
+	t.Run("正常系: storageのMIDI検索パターンを修正する（.mid.ogg→.ogg）", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var path = storage + ".mid.ogg";`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `storage + ".ogg"`)
+		assert.NotContains(t, adjusted, ".mid.ogg")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+}
+
+// TestScriptAdjuster_MidiOutRule はWaveSoundBuffer.midiOut呼び出しの
+// 空文置換ルールをテストする。
+//
+// Python版 TestScriptAdjusterMidiOutRule の移植。
+func TestScriptAdjuster_MidiOutRule(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: WaveSoundBuffer.midiOut呼び出しを空文に置換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "WaveSoundBuffer.midiOut(midiInitialMessage);"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.True(t, strings.HasPrefix(adjusted, "; // "))
+		assert.Contains(t, adjusted, "// WaveSoundBuffer.midiOut(midiInitialMessage);")
+		assert.Contains(t, adjusted, "Disabled: midiOut not available in WaveSoundBuffer")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: インデント付きのWaveSoundBuffer.midiOut呼び出しを空文に置換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "    WaveSoundBuffer.midiOut(midiInitialMessage);"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.True(t, strings.HasPrefix(adjusted, "    ; // "))
+		assert.Contains(t, adjusted, "Disabled: midiOut not available in WaveSoundBuffer")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: 異なる引数のWaveSoundBuffer.midiOut呼び出しを空文に置換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `WaveSoundBuffer.midiOut("some_message");`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "; // ")
+		assert.Contains(t, adjusted, "Disabled: midiOut not available in WaveSoundBuffer")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: MIDISoundBuffer.midiOutが変換後に空文に置換される", func(t *testing.T) {
+		t.Parallel()
+
+		// MIDISoundBuffer → WaveSoundBuffer 変換後に midiOut が空文に置換されるべき
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "MIDISoundBuffer.midiOut(midiInitialMessage);"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.NotContains(t, adjusted, "MIDISoundBuffer")
+		assert.Contains(t, adjusted, "; // WaveSoundBuffer.midiOut(midiInitialMessage);")
+		assert.Contains(t, adjusted, "Disabled: midiOut not available in WaveSoundBuffer")
+		assert.GreaterOrEqual(t, count, 2) // MIDISoundBuffer変換 + midiOut置換
+	})
+
+	t.Run("正常系: 複数のmidiOut呼び出しを空文に置換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "WaveSoundBuffer.midiOut(msg1);\n    WaveSoundBuffer.midiOut(msg2);\nWaveSoundBuffer.midiOut(msg3);\n"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, 3, strings.Count(adjusted, "Disabled: midiOut not available in WaveSoundBuffer"))
+
+		for _, line := range strings.Split(adjusted, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			assert.True(t, strings.HasPrefix(strings.TrimLeft(line, " \t"), "; // WaveSoundBuffer.midiOut"))
+		}
+		assert.GreaterOrEqual(t, count, 3)
+	})
+}
