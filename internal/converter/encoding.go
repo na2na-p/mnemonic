@@ -47,6 +47,21 @@ var encodingAliases = map[string]string{
 	"ascii":     "utf-8",
 }
 
+// isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
+//
+// why not: ESC(0x1B)はISO-2022-JP等7bitエンコーディングの制御文字であり、
+// これを含む入力をASCIIと即断するとchardetの正しいISO-2022-JP判定を
+// 潰してしまうため除外する（internal/parser/detector.goのisASCIIと同じ理由）。
+func isASCII(data []byte) bool {
+	for _, b := range data {
+		if b >= 0x80 || b == 0x1b {
+			return false
+		}
+	}
+
+	return true
+}
+
 // normalizeEncoding はエンコーディング名を正規化する。
 func normalizeEncoding(enc string) string {
 	lower := strings.ToLower(strings.ReplaceAll(enc, "_", "-"))
@@ -106,6 +121,21 @@ func (d *EncodingDetector) Detect(filePath string) (EncodingDetectionResult, err
 func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 	if len(data) == 0 {
 		return EncodingDetectionResult{Encoding: "", Confidence: 0.0, IsSupported: false}
+	}
+
+	// why not: github.com/saintfish/chardetには専用のASCII判定器が無く、純ASCII
+	// バイト列に対しても単バイト系のフォールバック候補（例: "ISO-8859-1"、低信頼度）
+	// を返すことがある（internal/parser/detector.goのdetectCharsetと同じ既知差異）。
+	// Python版chardetは全バイトが0x7F以下の場合に専用の高速パスで必ず"ascii"を
+	// 返し、_ENCODING_ALIASESでutf-8に正規化される。この差を放置すると、
+	// ASCIIのみの.ini/.txt/.ks/.csvがGo版ではsupportedEncodingsに含まれない
+	// エンコーディング名として検出されConvertがFAILEDを返してしまう
+	// （Python版はSKIPPEDになる）。そのためGo側でも同じ判定を先に行い、
+	// chardetの推定より優先する。ESC(0x1B)はISO-2022-JP等7bitエンコーディングの
+	// 制御文字であり、これを含む入力をASCII短絡させるとchardetの正しい
+	// ISO-2022-JP判定を潰してしまうため除外する。
+	if isASCII(data) {
+		return EncodingDetectionResult{Encoding: "utf-8", Confidence: 1.0, IsSupported: true}
 	}
 
 	result, err := chardet.NewTextDetector().DetectBest(data)

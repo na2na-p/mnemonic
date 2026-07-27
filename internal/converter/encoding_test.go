@@ -110,6 +110,20 @@ func TestEncodingDetector_DetectBytes(t *testing.T) {
 		assert.Empty(t, result.Encoding)
 		assert.False(t, result.IsSupported)
 	})
+
+	t.Run("正常系: 純ASCIIバイト列はutf-8として検出される", func(t *testing.T) {
+		t.Parallel()
+
+		// why: github.com/saintfish/chardetは専用のASCII判定器を持たず、純ASCII
+		// バイト列に対しても"ISO-8859-1"等の低信頼度フォールバックを返すことが
+		// あるため、isASCII短絡が効いていることをピン留めする。
+		result := detector.DetectBytes([]byte("key=value\nname=example\n"))
+
+		assert.Equal(t, "utf-8", result.Encoding)
+		assert.InDelta(t, 1.0, result.Confidence, 1e-9)
+		assert.True(t, result.IsSupported)
+	})
+
 }
 
 func TestEncodingDetector_IsTextFile(t *testing.T) {
@@ -311,6 +325,25 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusSkipped, result.Status)
 	})
 
+	t.Run("正常系: ASCIIのみの.iniファイルはSKIPPEDになる", func(t *testing.T) {
+		t.Parallel()
+
+		// why: レビュー指摘の回帰防止。ASCII短絡が無いと自動検出が
+		// utf-8ではないエンコーディング名を返しFAILEDになってしまう
+		// （Python版はchardetが"ascii"を返しutf-8へ正規化されてSKIPPEDになる）。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "config.ini")
+		dest := filepath.Join(dir, "dest.ini")
+
+		writeFile(t, source, []byte("[section]\nkey=value\nname=example\n"))
+
+		c := converter.NewEncodingConverter("", "")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+
 	t.Run("正常系: 指定されたソースエンコーディングを使用する", func(t *testing.T) {
 		t.Parallel()
 
@@ -408,6 +441,19 @@ func TestEncodingConverter_ConvertBytes(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, text, string(resultBytes))
+	})
+
+	t.Run("正常系: ASCIIのみのバイトデータはutf-8としてそのまま通過する", func(t *testing.T) {
+		t.Parallel()
+
+		asciiBytes := []byte("key=value\nname=example\n")
+
+		c := converter.NewEncodingConverter("", "")
+		resultBytes, detected, err := c.ConvertBytes(asciiBytes)
+
+		require.NoError(t, err)
+		assert.Equal(t, asciiBytes, resultBytes)
+		assert.Equal(t, "utf-8", detected)
 	})
 
 	t.Run("正常系: 指定されたソースエンコーディングを使用する", func(t *testing.T) {
