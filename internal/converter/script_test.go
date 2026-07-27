@@ -1,6 +1,7 @@
 package converter_test
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -225,7 +226,7 @@ func TestScriptAdjuster_AdjustContent(t *testing.T) {
 func TestScriptAdjuster_AddStartupDirective(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: startup.tjsにエンコーディングディレクティブを追加できる", func(t *testing.T) {
+	t.Run("正常系: startup.tjsにポリフィル初期化ディレクティブを追加できる", func(t *testing.T) {
 		t.Parallel()
 
 		adjuster := converter.NewScriptAdjuster(nil, true)
@@ -233,9 +234,8 @@ func TestScriptAdjuster_AddStartupDirective(t *testing.T) {
 
 		result := adjuster.AddStartupDirective(content)
 
-		assert.Contains(t, result, "@if (kirikiriz)")
-		assert.Contains(t, result, `System.setArgument("-readencoding", "UTF-8");`)
-		assert.Contains(t, result, "@endif")
+		assert.Contains(t, result, "// krkrsdl2 polyfill initialization")
+		assert.Contains(t, result, `Scripts.execStorage("system/polyfillinitialize.tjs");`)
 		assert.Contains(t, result, "// Original script")
 	})
 
@@ -245,7 +245,7 @@ func TestScriptAdjuster_AddStartupDirective(t *testing.T) {
 		adjuster := converter.NewScriptAdjuster(nil, true)
 		result := adjuster.AddStartupDirective("var x = 1;")
 
-		assert.True(t, strings.HasPrefix(result, "@if (kirikiriz)"))
+		assert.True(t, strings.HasPrefix(result, "// krkrsdl2 polyfill initialization"))
 	})
 
 	t.Run("正常系: 元の内容が保持される", func(t *testing.T) {
@@ -340,8 +340,8 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 		converted := readFile(t, dest)
-		assert.Contains(t, string(converted), "@if (kirikiriz)")
-		assert.Contains(t, string(converted), `System.setArgument("-readencoding", "UTF-8");`)
+		assert.Contains(t, string(converted), "// krkrsdl2 polyfill initialization")
+		assert.Contains(t, string(converted), `Scripts.execStorage("system/polyfillinitialize.tjs");`)
 	})
 
 	t.Run("正常系: addEncodingDirective無効時はディレクティブを追加しない", func(t *testing.T) {
@@ -360,7 +360,7 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 		converted := readFile(t, dest)
-		assert.NotContains(t, string(converted), "@if (kirikiriz)")
+		assert.NotContains(t, string(converted), "// krkrsdl2 polyfill initialization")
 		assert.Contains(t, string(converted), "// Disabled for Android")
 	})
 
@@ -446,7 +446,50 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		assert.Contains(t, string(converted), "日本語テスト")
 		assert.Contains(t, string(converted), "日本語コメント")
 	})
+
+	t.Run("正常系: 変換後のファイルにはUTF-8 BOMが付与される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.ks")
+		dest := filepath.Join(dir, "output", "test.ks")
+
+		writeFile(t, source, []byte(`Plugins.link("test.dll");`))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		converted := readFile(t, dest)
+		assert.True(t, bytes.HasPrefix(converted, utf8BOMBytes), "UTF-8 BOMが付与されているべき")
+	})
+
+	t.Run("正常系: 入力のUTF-8 BOMは読み込み時に自動除去される", func(t *testing.T) {
+		t.Parallel()
+
+		// why: Python版はsource.read_text(encoding="utf-8-sig")でBOMを自動除去する。
+		// 入力側に既にBOMが付いていても、出力に二重付与されないことを確認する。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.ks")
+		dest := filepath.Join(dir, "output", "test.ks")
+
+		content := append(append([]byte{}, utf8BOMBytes...), []byte("Plugins.link(\"test.dll\");\n[message text=\"Hello\"]\n")...)
+		writeFile(t, source, content)
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		converted := readFile(t, dest)
+		assert.True(t, bytes.HasPrefix(converted, utf8BOMBytes))
+		// BOMが本文中に二重に残っていないことを確認する
+		assert.Equal(t, 1, bytes.Count(converted, utf8BOMBytes))
+	})
 }
+
+var utf8BOMBytes = []byte{0xef, 0xbb, 0xbf}
 
 // TestScriptAdjuster_MidiRules はMIDIファイル参照の変換ルール
 // （MIDISoundBuffer→WaveSoundBuffer、拡張子.mid/.midi→.ogg）をテストする。
@@ -640,4 +683,347 @@ func TestScriptAdjuster_MidiOutRule(t *testing.T) {
 		}
 		assert.GreaterOrEqual(t, count, 3)
 	})
+}
+
+// TestScriptAdjuster_SaveDataLocationRule はセーブデータパスをdataPathに
+// 変更するルール（Android対応）をテストする。
+func TestScriptAdjuster_SaveDataLocationRule(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: saveDataLocationをSystem.dataPathに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `saveDataLocation = System.exePath + saveDataLocation;`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "saveDataLocation = System.dataPath")
+		assert.NotContains(t, adjusted, "System.exePath")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: 一致しない場合は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `var x = System.exePath;`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+		assert.Equal(t, 0, count)
+	})
+}
+
+// TestScriptAdjuster_LoadpluginRules はloadpluginタグのDLL参照を
+// krkrsdl2向けの.soへ変換する、または未対応プラグインをコメントアウトする
+// ルール群をテストする。Python版 TestScriptAdjusterLoadpluginRules の移植。
+func TestScriptAdjuster_LoadpluginRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: extrans.dllをlibextrans.soに変換する（Android krkrsdl2対応）", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[loadplugin module="extrans.dll"]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `[loadplugin module="libextrans.so"]`)
+		assert.NotContains(t, adjusted, "extrans.dll")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: wuvorbis.dllをlibwuvorbis.soに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[loadplugin module="wuvorbis.dll"]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `[loadplugin module="libwuvorbis.so"]`)
+		assert.NotContains(t, adjusted, "wuvorbis.dll")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: krmovie.dllをコメントアウトする", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[loadplugin module="krmovie.dll"]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, ";#")
+		assert.Contains(t, adjusted, "not supported on krkrsdl2")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: その他のDLLプラグインをコメントアウトする", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[loadplugin module="layerexdraw.dll"]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, ";#")
+		assert.Contains(t, adjusted, "Disabled for Android")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: 複数のloadpluginタグを処理する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[loadplugin module=\"wuvorbis.dll\"]\n" +
+			"[loadplugin module=\"extrans.dll\"]\n" +
+			"[loadplugin module=\"krmovie.dll\"]\n" +
+			"[loadplugin module=\"something.dll\"]\n"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `[loadplugin module="libextrans.so"]`)
+		assert.Contains(t, adjusted, `[loadplugin module="libwuvorbis.so"]`)
+		assert.Contains(t, adjusted, "not supported on krkrsdl2")
+		assert.Contains(t, adjusted, "Disabled for Android")
+		assert.GreaterOrEqual(t, count, 4)
+	})
+
+	t.Run("正常系: 変換後のlibextrans.soタグは再変換されない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[loadplugin module="libextrans.so"]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+		assert.NotContains(t, adjusted, ";#")
+		assert.Equal(t, 0, count)
+	})
+}
+
+// TestScriptAdjuster_LayerAlphaRule はレイヤー透過修正
+// （[layopt layer=N]へのtype=alpha自動追加、krkrsdl2対応）をテストする。
+// Python版 TestScriptAdjusterLayerAlphaRules の移植。
+func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: type=未指定の[layopt layer=N]にtype=alphaを追加する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 page=back visible=true]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt layer=0 page=back visible=true type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: hittype=のような単語境界を伴わないtype=部分文字列は本物のtype=とみなさない", func(t *testing.T) {
+		t.Parallel()
+
+		// why: strings.Contains(attrs, "type=")は"hittype="のような、直前が
+		// 単語構成文字であるため実際にはtype属性ではない部分文字列にも誤って
+		// 一致してしまう。Python版の\btype=（単語境界付き）と同じ判定に
+		// する必要がある（レビュー指摘）。
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt hittype=foo layer=0]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt hittype=foo layer=0 type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: subtype=のような単語境界を伴わないtype=部分文字列は本物のtype=とみなさない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 subtype=q]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt layer=0 subtype=q type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: type=風の部分文字列がlayer=より前にあっても追加される", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt subtype=q layer=0]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, "[layopt subtype=q layer=0 type=alpha]", adjusted)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: layer=数値の後に他の文字が続いてもtype=alphaが追加される", func(t *testing.T) {
+		t.Parallel()
+
+		// why: Python版のlayer=[0-9]+には後続の単語境界(\b)要求が無いため、
+		// "layer=12abc"のように数字の後に他の文字が続いてもマッチする。
+		// Go版がlayer=[0-9]+\bのように末尾に\bを付けると"layer=12abc"に
+		// マッチしなくなりPython版と乖離する（レビュー指摘）。
+		testCases := []struct {
+			name    string
+			content string
+			want    string
+		}{
+			{
+				name:    "layer=12abc",
+				content: "[layopt layer=12abc visible=true]",
+				want:    "[layopt layer=12abc visible=true type=alpha]",
+			},
+			{
+				name:    "layer=1x",
+				content: "[layopt layer=1x visible=true]",
+				want:    "[layopt layer=1x visible=true type=alpha]",
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				adjuster := converter.NewScriptAdjuster(nil, true)
+
+				adjusted, count := adjuster.AdjustContent(tc.content)
+
+				assert.Equal(t, tc.want, adjusted)
+				assert.GreaterOrEqual(t, count, 1)
+			})
+		}
+	})
+
+	t.Run("正常系: 既にtype=が指定されている場合は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 type=opaque visible=true]"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+		assert.Equal(t, 1, strings.Count(adjusted, "type="))
+	})
+
+	t.Run("正常系: 既にtype=alphaが指定されている場合は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 type=alpha visible=true]"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Equal(t, 1, strings.Count(adjusted, "type=alpha"))
+	})
+
+	t.Run("正常系: layer=base（背景レイヤー）は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=base visible=true]"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.NotContains(t, adjusted, "type=alpha")
+		assert.Equal(t, content, adjusted)
+	})
+
+	t.Run("正常系: layer=message（メッセージレイヤー）は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=message visible=true]"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.NotContains(t, adjusted, "type=alpha")
+		assert.Equal(t, content, adjusted)
+	})
+
+	t.Run("正常系: 複数の数字レイヤーにtype=alphaを追加する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[layopt layer=0 visible=true]\n[layopt layer=1 visible=true]\n[layopt layer=2 page=back visible=true]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, 3, strings.Count(adjusted, "type=alpha"))
+		assert.GreaterOrEqual(t, count, 3)
+	})
+
+	t.Run("正常系: 実際のKAGスクリプトパターンを処理できる", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[backlay]\n" +
+			"[image storage=\"title-base\" layer=base page=back]\n" +
+			"[layopt layer=0 page=back visible=true]\n" +
+			"[image storage=\"title-fore\" layer=0 page=back top=0 left=0]\n" +
+			"[trans method=crossfade time=2000]\n" +
+			"[wt]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "[layopt layer=0 page=back visible=true type=alpha]")
+		assert.Contains(t, adjusted, `[image storage="title-base" layer=base page=back]`)
+		assert.Contains(t, adjusted, "[trans method=crossfade time=2000]")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: クォート付きlayer値は処理しない（数字パターンのため）", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[layopt layer="0" visible=true]`
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+	})
+}
+
+// TestScriptAdjuster_DefaultRulesOrder はDefaultRulesの並び順がPython版
+// DEFAULT_RULESの最終状態と一致することをピン留めする。
+//
+// why: MIDISoundBuffer→WaveSoundBuffer変換ルールが先に走ることで、
+// 変換前の"MIDISoundBuffer.midiOut(...)"呼び出しも次のmidiOut置換ルールで
+// 捕捉される（T-211由来の順序制約）。今回追加するsaveDataLocationルールは
+// Plugins.link無効化ルールの直後、MIDISoundBuffer変換ルールの直前に位置する
+// 必要がある（他のルールと干渉しない独立したルールのため、この位置自体に
+// 機能的な依存はないが、Python版DEFAULT_RULESの宣言順と一致させることで
+// 差分レビューを容易にする）。loadplugin系・layopt系ルールは末尾に追加される。
+func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
+	t.Parallel()
+
+	wantDescriptions := []string{
+		"プラグインDLL読み込みの無効化",
+		"セーブデータパスをdataPathに変更（Android対応）",
+		"MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+		"WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
+		"MIDI参照をOGGに変換（.mid → .ogg）",
+		"MIDI参照をOGGに変換（.midi → .ogg）",
+		"MIDI検索パターンを修正（.mid.ogg → .ogg）",
+		"extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
+		"wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
+		"krmovie.dllをコメントアウト（krkrsdl2未対応）",
+		"その他のDLLプラグインをコメントアウト",
+		"レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
+	}
+
+	descriptions := make([]string, 0, len(converter.DefaultRules))
+	for _, r := range converter.DefaultRules {
+		descriptions = append(descriptions, r.Description)
+	}
+
+	assert.Equal(t, wantDescriptions, descriptions)
 }

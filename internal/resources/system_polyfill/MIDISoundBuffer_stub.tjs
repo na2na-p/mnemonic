@@ -1,0 +1,70 @@
+// MIDISoundBuffer_stub.tjs - MIDISoundBuffer Stub for krkrsdl2
+// Source: https://github.com/krkrsdl2/kag3
+// Based on KAG3 (Kirikiri Adventure Game System)
+// Copyright (C) W.Dee and contributors - 改変・配布は自由です
+//
+// Note: MIDI playback is not supported on Android/krkrsdl2.
+// This stub provides a no-op implementation to prevent errors.
+
+class MIDISoundBuffer
+{
+	var volume = 100000;
+	var pan = 0;
+	var position = 0;
+	var paused = false;
+	var looping = false;
+	var status = "unload";
+	var totalTime = 0;
+
+	function MIDISoundBuffer(owner)
+	{
+	}
+
+	function finalize()
+	{
+	}
+
+	function open(storage)
+	{
+		status = "stop";
+	}
+
+	function play()
+	{
+		status = "play";
+	}
+
+	function stop()
+	{
+		status = "stop";
+		position = 0;
+	}
+
+	function pause()
+	{
+		paused = true;
+	}
+
+	function resume()
+	{
+		paused = false;
+	}
+
+	function fade(to, time, delay = 0)
+	{
+	}
+
+	function stopFade()
+	{
+	}
+
+	function midiOut(data)
+	{
+		// MIDI output not supported on Android
+	}
+
+	function onStatusChanged(status)
+	{
+		// Event handler - can be overridden
+	}
+}

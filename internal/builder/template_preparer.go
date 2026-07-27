@@ -4,6 +4,10 @@ import (
 	"archive/zip"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io"
 	"io/fs"
 	"os"
@@ -18,6 +22,8 @@ var (
 	ErrTemplatePreparer = errors.New("テンプレートの準備に失敗しました")
 	// ErrJniLibsNotFound はJNIライブラリが見つからない場合のエラー。
 	ErrJniLibsNotFound = errors.New("JNIライブラリが見つかりません")
+	// ErrSDL2SourceFetch はSDL2 Javaソースの取得に失敗した場合のエラー。
+	ErrSDL2SourceFetch = errors.New("SDL2 Javaソースの取得に失敗しました")
 )
 
 // TemplatePreparer関連の定数。
@@ -42,24 +48,44 @@ var supportedABIs = map[string]struct{}{
 //
 // 以下の処理を行う:
 //  1. krkrsdl2_universal.apkから.soファイルを抽出してjniLibsに配置
-//  2. KirikiriSDL2Activity.javaをassetsコピー機能付きに置き換え
-//  3. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
-//  4. AndroidManifest.xmlを更新（android:exported="true"追加）
-//  5. res/values/strings.xmlを作成（app_name設定）
+//  2. SDL2 Javaソースをダウンロードして配置
+//  3. krkrsdl2プラグイン(.so)をjniLibsに配置
+//  4. KirikiriSDL2Activity.javaをassetsコピー機能付きに置き換え
+//  5. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
+//  6. AndroidManifest.xmlを更新（android:exported="true"追加）
+//  7. res/values/strings.xmlを作成（app_name設定）
 type TemplatePreparer struct {
 	projectDir string
+	sdl2Cache  *SDL2SourceCache
 }
 
 // NewTemplatePreparer はTemplatePreparerを初期化する。
-func NewTemplatePreparer(projectDir string) *TemplatePreparer {
-	return &TemplatePreparer{projectDir: projectDir}
+// sdl2CacheがnilでもSDL2 Javaソースの取得自体は行われる（キャッシュ未使用で
+// 毎回ダウンロードする）。
+func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *TemplatePreparer {
+	return &TemplatePreparer{projectDir: projectDir, sdl2Cache: sdl2Cache}
 }
 
 // Prepare はテンプレートを準備する。
 // assetsDir/iconPathが空文字列の場合、対応する処理はスキップされる
-// （iconPathはファイルが存在しない場合もスキップされる）。
-func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath string) error {
+// （iconPathはファイルが存在しない場合もスキップされ、代わりにデフォルト
+// アイコンを生成する）。pluginsInfoがnilの場合、プラグインのjniLibs配置は
+// スキップされる（呼び出し元が事前にPluginFetcherで取得したものを渡す
+// 想定。why not: Python版は_copy_plugins_to_jnilibsがplugins_info=None時に
+// 自前でPluginFetcher().get_plugins()を呼びダウンロードを試みるが、Go版は
+// テストが実ネットワークに触れないようにするため、この不利ダウンロード
+// フォールバックを持たない。呼び出し元（internal/pipeline）が明示的に
+// fetchPlugins()の結果を渡す設計に一本化した）。
+func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath string, pluginsInfo *PluginsInfo) error {
 	if err := p.extractJNILibs(); err != nil {
+		return err
+	}
+
+	if err := p.fetchSDL2Sources(); err != nil {
+		return err
+	}
+
+	if err := p.copyPluginsToJNILibs(pluginsInfo); err != nil {
 		return err
 	}
 
@@ -87,8 +113,59 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 
 	if iconPath != "" {
 		if _, err := os.Stat(iconPath); err == nil {
-			if err := p.updateIcon(iconPath); err != nil {
-				return err
+			return p.updateIcon(iconPath)
+		}
+	}
+
+	return p.createDefaultIcon()
+}
+
+// fetchSDL2Sources はSDL2のJavaソースファイル（SDLActivity.java等）を取得して
+// 配置する。キャッシュが有効な場合はキャッシュから復元する。
+func (p *TemplatePreparer) fetchSDL2Sources() error {
+	javaDir := filepath.Join(p.projectDir, "app", "src", "main", "java")
+	if err := os.MkdirAll(javaDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	fetcher := NewSDL2SourceFetcher(0, p.sdl2Cache)
+	if err := fetcher.Fetch(javaDir); err != nil {
+		return fmt.Errorf("%w: %w: %w", ErrTemplatePreparer, ErrSDL2SourceFetch, err)
+	}
+
+	return nil
+}
+
+// copyPluginsToJNILibs はkrkrsdl2プラグインをjniLibsディレクトリにコピーする。
+//
+// プラグイン(.so)を各ABI用のjniLibsディレクトリに配置する。jniLibsに配置
+// されたプラグインはAPKビルド時に自動的にlib/{abi}/配下に含まれ、
+// System.loadLibraryで読み込み可能になる。スクリプト変換時にlibプレフィックス
+// 付きのフルファイル名を指定するため、libプレフィックス付きのファイルのみ
+// 配置すれば良い。pluginsInfoがnilの場合は何も行わない（Prepareのdocコメント
+// 参照）。プラグインファイルが見つからない場合はスキップする
+// （ベストエフォート、Python版のlogger.warningに相当する握りつぶし）。
+func (p *TemplatePreparer) copyPluginsToJNILibs(pluginsInfo *PluginsInfo) error {
+	if pluginsInfo == nil {
+		return nil
+	}
+
+	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")
+
+	for _, abi := range SupportedABIs {
+		abiDir := filepath.Join(jniLibsDir, abi)
+		if err := os.MkdirAll(abiDir, 0o750); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		for _, srcPath := range pluginsInfo.GetAllPathsForABI(abi) {
+			if _, err := os.Stat(srcPath); err != nil {
+				continue
+			}
+
+			destPath := filepath.Join(abiDir, filepath.Base(srcPath))
+			if err := copyFile(srcPath, destPath); err != nil {
+				return fmt.Errorf("%w: プラグインのコピーに失敗しました: %s: %w", ErrTemplatePreparer, srcPath, err)
 			}
 		}
 	}
@@ -100,7 +177,7 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 func (p *TemplatePreparer) extractJNILibs() error {
 	baseAPK := filepath.Join(p.projectDir, "krkrsdl2_universal.apk")
 	if _, err := os.Stat(baseAPK); err != nil {
-		return fmt.Errorf("%w: ベースAPKが見つかりません: %s", ErrJniLibsNotFound, baseAPK)
+		return fmt.Errorf("%w: %w: ベースAPKが見つかりません: %s", ErrTemplatePreparer, ErrJniLibsNotFound, baseAPK)
 	}
 
 	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")
@@ -201,6 +278,7 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 const activityJavaTemplate = `package %s;
 
 import android.os.Bundle;
+import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
 import android.util.Log;
 import java.io.File;
@@ -219,11 +297,45 @@ import org.libsdl.app.SDLActivity;
 public class KirikiriSDL2Activity extends SDLActivity {
     private static final String TAG = "KirikiriSDL2";
     private static final String ASSETS_DATA_DIR = "data";
+    private static String sNativeLibDir = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // ネイティブライブラリのディレクトリを保存
+        sNativeLibDir = getApplicationInfo().nativeLibraryDir;
+        Log.i(TAG, "Native library directory: " + sNativeLibDir);
+
         copyAssetsToInternal();
         super.onCreate(savedInstanceState);
+    }
+
+    /**
+     * krkrsdl2に渡すコマンドライン引数を設定する
+     * - プラグイン検索パス: ネイティブライブラリディレクトリを指定
+     * - holdalpha: アルファチャンネル保持を有効化（透過表示の互換性向上）
+     * - cpuXXX=no: SIMD最適化を無効化してC実装を使用
+     *   ARMデバイスではSIMDe経由のSSE2エミュレーションに問題があるため、
+     *   純粋なC実装のブレンド関数を使用することでアルファブレンディングの
+     *   互換性を確保する
+     */
+    @Override
+    protected String[] getArguments() {
+        if (sNativeLibDir != null) {
+            Log.i(TAG, "Setting plugin search path: " + sNativeLibDir);
+            return new String[]{
+                "-krkrsdl2_pluginsearchpath=" + sNativeLibDir,
+                "-holdalpha=yes",
+                "-cpummx=no",
+                "-cpusse=no",
+                "-cpusse2=no"
+            };
+        }
+        return new String[]{
+            "-holdalpha=yes",
+            "-cpummx=no",
+            "-cpusse=no",
+            "-cpusse2=no"
+        };
     }
 
     /**
@@ -374,8 +486,11 @@ var (
 	receiverTagPattern         = regexp.MustCompile(`<receiver[^>]*(?:>|/>)`)
 )
 
+var applicationTagPattern = regexp.MustCompile(`<application[^>]*>`)
+
 // updateManifest はAndroidManifest.xmlを更新する
-// （package属性の削除、android:exported="true"の付与）。
+// （package属性の削除、android:exported="true"の付与、
+// android:extractNativeLibs="true"の付与）。
 func (p *TemplatePreparer) updateManifest() error {
 	manifestPath := filepath.Join(p.projectDir, "app", "src", "main", "AndroidManifest.xml")
 
@@ -387,6 +502,11 @@ func (p *TemplatePreparer) updateManifest() error {
 	text := string(content)
 	text = manifestPackageAttrPattern.ReplaceAllString(text, "")
 
+	// applicationタグにextractNativeLibs="true"を追加する。これにより
+	// ネイティブライブラリがAPKから展開され、dlopen（krkrsdl2プラグインの
+	// 動的読み込み）でアクセス可能になる。
+	text = applicationTagPattern.ReplaceAllStringFunc(text, addExtractNativeLibsIfMissing)
+
 	text = activityTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
 	text = serviceTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
 	text = receiverTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
@@ -396,6 +516,16 @@ func (p *TemplatePreparer) updateManifest() error {
 	}
 
 	return nil
+}
+
+// addExtractNativeLibsIfMissing はapplicationタグにandroid:extractNativeLibs
+// 属性が無い場合"true"で追加する。
+func addExtractNativeLibsIfMissing(tag string) string {
+	if strings.Contains(tag, "android:extractNativeLibs") || !strings.HasSuffix(tag, ">") {
+		return tag
+	}
+
+	return tag[:len(tag)-1] + ` android:extractNativeLibs="true">`
 }
 
 // addExportedIfMissing はタグにandroid:exported属性が無い場合"true"で追加する。
@@ -520,4 +650,52 @@ func (p *TemplatePreparer) updateIcon(iconPath string) error {
 	}
 
 	return nil
+}
+
+// defaultIconDensitySizes はデフォルトアイコン生成時の密度ごとのサイズ(px)。
+var defaultIconDensitySizes = map[string]int{
+	"mdpi":    48,
+	"hdpi":    72,
+	"xhdpi":   96,
+	"xxhdpi":  144,
+	"xxxhdpi": 192,
+}
+
+// defaultIconColor はデフォルトアイコンの色（吉里吉里のテーマカラーに近い青紫）。
+var defaultIconColor = color.RGBA{R: 100, G: 80, B: 160, A: 255}
+
+// createDefaultIcon はデフォルトアイコンを生成する。
+//
+// アイコンが提供されない場合のフォールバックとして、単色の正方形アイコンを
+// 各解像度で生成する。
+func (p *TemplatePreparer) createDefaultIcon() error {
+	resDir := filepath.Join(p.projectDir, "app", "src", "main", "res")
+
+	for _, density := range iconMipmapDensities {
+		mipmapDir := filepath.Join(resDir, "mipmap-"+density)
+		if err := os.MkdirAll(mipmapDir, 0o750); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+
+		destPath := filepath.Join(mipmapDir, "ic_launcher.png")
+		if err := writeSolidColorPNG(destPath, defaultIconDensitySizes[density], defaultIconColor); err != nil {
+			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+		}
+	}
+
+	return nil
+}
+
+// writeSolidColorPNG はsize x sizeの単色PNG画像をpathへ書き出す。
+func writeSolidColorPNG(path string, size int, c color.RGBA) error {
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	draw.Draw(img, img.Bounds(), &image.Uniform{C: c}, image.Point{}, draw.Src)
+
+	f, err := os.Create(path) //nolint:gosec // ビルド成果物の出力用途のため妥当
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	return png.Encode(f, img)
 }

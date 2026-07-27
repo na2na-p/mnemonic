@@ -41,6 +41,30 @@ func addMinimalBuildGradle(t *testing.T, projectDir string) {
 	require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte("android {\n}\n"), 0o600))
 }
 
+// testSDL2Cache はSDL2 Javaソース一式を持つ、有効なSDL2SourceCacheを返す。
+//
+// why: TemplatePreparer.Prepareはfetch_sdl2_sources()を無条件に呼ぶため、
+// 実ネットワークに触れずにテストを完走させるには、事前に有効なキャッシュを
+// 用意してSDL2SourceFetcher.Fetchがキャッシュ復元経路(Cache.RestoreTo)を
+// 通るようにする必要がある（実ネットワークへのアクセス禁止という制約への
+// 対応。builder.SDL2SourceCache.Save/IsValidの正規経路を使う）。
+func testSDL2Cache(t *testing.T) *builder.SDL2SourceCache {
+	t.Helper()
+
+	sourcesDir := t.TempDir()
+	appDir := filepath.Join(sourcesDir, "org", "libsdl", "app")
+	require.NoError(t, os.MkdirAll(appDir, 0o750))
+
+	for _, name := range builder.SDL2RequiredFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(appDir, name), []byte("dummy content"), 0o600))
+	}
+
+	cache := builder.NewSDL2SourceCache(t.TempDir())
+	require.NoError(t, cache.Save(sourcesDir))
+
+	return cache
+}
+
 func writeZipFile(t *testing.T, path string, files map[string][]byte) {
 	t.Helper()
 
@@ -97,9 +121,9 @@ android {
 </manifest>
 `), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		jniLibsDir := filepath.Join(projectDir, "app", "src", "main", "jniLibs")
 		assert.FileExists(t, filepath.Join(jniLibsDir, "arm64-v8a", "libmain.so"))
@@ -111,6 +135,10 @@ android {
 		content, err := os.ReadFile(stringsXML)
 		require.NoError(t, err)
 		assert.Contains(t, string(content), "My Game")
+
+		// デフォルトアイコンが生成されていることを確認（icon_path未指定のため）
+		resDir := filepath.Join(projectDir, "app", "src", "main", "res")
+		assert.FileExists(t, filepath.Join(resDir, "mipmap-mdpi", "ic_launcher.png"))
 	})
 
 	t.Run("異常系: APKファイルが見つからない場合", func(t *testing.T) {
@@ -119,11 +147,12 @@ android {
 		projectDir := filepath.Join(t.TempDir(), "project")
 		require.NoError(t, os.MkdirAll(projectDir, 0o750))
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		err := p.Prepare("com.example.game", "My Game", "", "")
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrJniLibsNotFound)
+		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "ベースAPKが見つかりません")
 	})
 }
@@ -146,9 +175,9 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 		addMinimalBuildGradle(t, projectDir)
 		addMinimalManifest(t, projectDir)
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		jniLibsDir := filepath.Join(projectDir, "app", "src", "main", "jniLibs")
 		assert.FileExists(t, filepath.Join(jniLibsDir, "arm64-v8a", "libmain.so"))
@@ -172,9 +201,9 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 			"classes.dex":         []byte("dex content"),
 		})
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		err := p.Prepare("com.example.game", "My Game", "", "")
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrJniLibsNotFound)
 		assert.ErrorContains(t, err, ".soファイルが見つかりません")
@@ -187,9 +216,9 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 		require.NoError(t, os.MkdirAll(projectDir, 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(projectDir, "krkrsdl2_universal.apk"), []byte("invalid zip content"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		err := p.Prepare("com.example.game", "My Game", "", "")
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "無効なAPKファイルです")
@@ -225,8 +254,8 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 				addMinimalBuildGradle(t, projectDir)
 				addMinimalManifest(t, projectDir)
 
-				p := builder.NewTemplatePreparer(projectDir)
-				require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+				require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 				soFile := filepath.Join(projectDir, "app", "src", "main", "jniLibs", tc.abi, "libtest.so")
 				if tc.expectedExtracted {
@@ -272,8 +301,8 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 
 				projectDir := newFullyPreparableProject(t)
 
-				p := builder.NewTemplatePreparer(projectDir)
-				require.NoError(t, p.Prepare(tc.packageName, "My Game", "", ""))
+				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+				require.NoError(t, p.Prepare(tc.packageName, "My Game", "", "", nil))
 
 				packagePath := filepath.Join(strings.Split(tc.packageName, ".")...)
 				javaFile := filepath.Join(projectDir, "app", "src", "main", "java", packagePath, "KirikiriSDL2Activity.java")
@@ -294,10 +323,45 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		require.NoError(t, os.MkdirAll(oldJavaDir, 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(oldJavaDir, "KirikiriSDL2Activity.java"), []byte("old content"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		assert.NoDirExists(t, oldJavaDir)
+	})
+
+	t.Run("正常系: getArgumentsにholdalpha=yesが含まれる", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+
+		assert.Contains(t, string(content), `"-holdalpha=yes"`)
+	})
+
+	t.Run("正常系: getArgumentsにSIMD無効化フラグが含まれる（C実装を使用）", func(t *testing.T) {
+		t.Parallel()
+
+		// ARMデバイスではSIMDeエミュレーションに問題があるため、純粋なC実装の
+		// ブレンド関数を使用することでアルファブレンディングの互換性を確保する
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+
+		text := string(content)
+		assert.Contains(t, text, `"-cpummx=no"`)
+		assert.Contains(t, text, `"-cpusse=no"`)
+		assert.Contains(t, text, `"-cpusse2=no"`)
 	})
 }
 
@@ -322,8 +386,8 @@ func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
 		projectDir := newBuildGradleProject(t, "\nandroid {\n    compileSdkVersion 30\n}\n")
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -336,8 +400,8 @@ func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
 		projectDir := newBuildGradleProject(t, "\nandroid {\n    compileSdkVersion 30\n}\n")
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -350,8 +414,8 @@ func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
 		projectDir := newBuildGradleProject(t, "\nandroid {\n    compileSdkVersion 30\n    defaultConfig {\n        targetSdkVersion 30\n    }\n}\n")
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -364,8 +428,8 @@ func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
 		projectDir := newBuildGradleProject(t, "\nandroid {\n    compileSdkVersion 30\n    defaultConfig {\n        minSdkVersion 16\n    }\n}\n")
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -394,8 +458,8 @@ android {
 `)
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -410,8 +474,8 @@ android {
 		projectDir := newBuildGradleProject(t, "\nandroid {\n    compileSdkVersion 30\n    defaultConfig {\n        applicationId \"pw.uyjulian.krkrsdl2\"\n    }\n}\n")
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "build.gradle"))
 		require.NoError(t, err)
@@ -423,9 +487,9 @@ android {
 
 		projectDir := newProjectWithAPK(t)
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		err := p.Prepare("com.example.game", "My Game", "", "")
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "build.gradleが見つかりません")
@@ -462,8 +526,8 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 </manifest>
 `)
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
@@ -482,8 +546,8 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 </manifest>
 `)
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
@@ -502,8 +566,8 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 </manifest>
 `)
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
@@ -522,8 +586,8 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 </manifest>
 `)
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
@@ -538,9 +602,9 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 		require.NoError(t, os.MkdirAll(appDir, 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte("android {\n}\n"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
-		err := p.Prepare("com.example.game", "My Game", "", "")
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
 
 		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "AndroidManifest.xmlが見つかりません")
@@ -573,8 +637,8 @@ func TestTemplatePreparer_UpdateStringsXML(t *testing.T) {
 
 		projectDir := newFullyPreparableProject(t)
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
 		stringsXML := filepath.Join(projectDir, "app", "src", "main", "res", "values", "strings.xml")
 		content, err := os.ReadFile(stringsXML)
@@ -595,8 +659,8 @@ func TestTemplatePreparer_UpdateStringsXML(t *testing.T) {
 </resources>
 `), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "New Game Name", "", ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "New Game Name", "", "", nil))
 
 		content, err := os.ReadFile(filepath.Join(valuesDir, "strings.xml"))
 		require.NoError(t, err)
@@ -626,8 +690,8 @@ func TestTemplatePreparer_UpdateStringsXML(t *testing.T) {
 
 				projectDir := newFullyPreparableProject(t)
 
-				p := builder.NewTemplatePreparer(projectDir)
-				require.NoError(t, p.Prepare("com.example.game", tc.appName, "", ""))
+				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+				require.NoError(t, p.Prepare("com.example.game", tc.appName, "", "", nil))
 
 				content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "res", "values", "strings.xml"))
 				require.NoError(t, err)
@@ -647,8 +711,8 @@ func TestTemplatePreparer_UpdateIcon(t *testing.T) {
 		iconPath := filepath.Join(t.TempDir(), "icon.png")
 		require.NoError(t, os.WriteFile(iconPath, []byte("fake png content"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", "", iconPath))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", iconPath, nil))
 
 		densities := []string{"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}
 		resDir := filepath.Join(projectDir, "app", "src", "main", "res")
@@ -676,8 +740,8 @@ func TestTemplatePreparer_CopyAssets(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(assetsSrc, "data.xp3"), []byte("xp3 content"), 0o600))
 		require.NoError(t, os.WriteFile(filepath.Join(assetsSrc, "config.tjs"), []byte("config"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", assetsSrc, ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", assetsSrc, "", nil))
 
 		assetsDest := filepath.Join(projectDir, "app", "src", "main", "assets", "data")
 		assert.FileExists(t, filepath.Join(assetsDest, "data.xp3"))
@@ -692,8 +756,8 @@ func TestTemplatePreparer_CopyAssets(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(assetsSrc, "scenario"), 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(assetsSrc, "scenario", "first.ks"), []byte("scenario"), 0o600))
 
-		p := builder.NewTemplatePreparer(projectDir)
-		require.NoError(t, p.Prepare("com.example.game", "My Game", assetsSrc, ""))
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", assetsSrc, "", nil))
 
 		assetsDest := filepath.Join(projectDir, "app", "src", "main", "assets", "data")
 		assert.FileExists(t, filepath.Join(assetsDest, "scenario", "first.ks"))
