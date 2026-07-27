@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 
 	"golang.org/x/term"
 )
@@ -97,6 +98,49 @@ func (p DefaultPasswordProvider) GetPasswordFromEnv(envVar string) (string, bool
 }
 
 // readPasswordFromTerminal はterm.ReadPasswordを使った既定の読み取り実装。
+//
+// why not: term.ReadPasswordは端末のECHOビットのみを落としISIG（Ctrl-CでSIGINTを
+// 発生させる設定）は維持したままである。素のterm.ReadPasswordを待っている間に
+// Ctrl-Cが押されると、SIGINTの既定動作でプロセスが即座に終了し、
+// term.ReadPasswordが完了時に行うはずのtermios復元（エコー再有効化）が
+// 実行されないまま、ユーザーのシェルにecho offの端末が残ってしまう。
+// signal.NotifyでSIGINTを横取りし、届いたらこの関数の責任でtermios状態を
+// 復元してからcontext.Canceledを返す（GetPasswordがErrPasswordCancelledへ
+// 変換する）。読み取り中のgoroutineはstdinのブロッキングreadに残り続けるが、
+// os.Stdinをcloseしない限り安全に無視できる（呼び出し元はキャンセル後に
+// 処理を終了する想定）。
 func readPasswordFromTerminal(fd uintptr) ([]byte, error) {
-	return term.ReadPassword(int(fd))
+	intFd := int(fd)
+
+	state, err := term.GetState(intFd)
+	if err != nil {
+		// 端末でない(パイプ・リダイレクト等)場合はSIGINT横取りに意味がないため
+		// term.ReadPasswordへそのまま委ねる。
+		return term.ReadPassword(intFd)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	type readResult struct {
+		password []byte
+		err      error
+	}
+
+	resultCh := make(chan readResult, 1)
+
+	go func() {
+		password, readErr := term.ReadPassword(intFd)
+		resultCh <- readResult{password: password, err: readErr}
+	}()
+
+	select {
+	case r := <-resultCh:
+		return r.password, r.err
+	case <-sigCh:
+		_ = term.Restore(intFd, state)
+
+		return nil, context.Canceled
+	}
 }
