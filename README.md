@@ -12,8 +12,34 @@
 | FFmpeg | 動画/音声変換 |
 | Android SDK（Platform 34, NDK r21） | APKビルド |
 | Java JDK 17+ | Gradle実行（Gradle本体はテンプレート同梱のGradle Wrapperを使用するためシステムへの別途インストールは不要） |
+| FluidSynth + サウンドフォント | MIDI変換（**MIDIアセット(.mid/.midi)を含むゲームのみ必須**） |
 
 依存ツールが揃っているかは `mnemonic doctor` で確認できる。
+
+### FluidSynth について
+
+krkrsdl2はMIDIを再生できないため、mnemonicはMIDIアセットを検出すると
+FluidSynthでOGG Vorbisへ変換する。この変換はスキップできない。スクリプト内の
+`.mid` 参照は無条件に `.ogg` へ書き換えられるため、変換を省略すると実体の無い
+ファイルを指す参照が残り、BGMが一切鳴らないAPKが出来上がるからである。
+そのため **MIDIを含むゲームでFluidSynthかサウンドフォントが無い場合、ビルドは
+失敗する**（MIDIを含まないゲームのビルドには一切不要）。
+
+```bash
+# Debian/Ubuntu系
+apt-get install fluidsynth fluid-soundfont-gm
+
+# macOS（サウンドフォントは同梱されないため別途入手が必要）
+brew install fluid-synth
+```
+
+サウンドフォントは既定で以下の順に探索する:
+
+1. `/usr/share/sounds/sf3/MuseScore_General.sf3`
+2. `/usr/share/sounds/sf2/FluidR3_GM.sf2`
+
+これ以外の場所に置く場合（macOSなど）は `mnemonic build --soundfont <パス>` で
+指定する。
 
 ## インストール
 
@@ -46,6 +72,7 @@ mnemonic build <input.exe> -o <output.apk>
       --app-name string             アプリ表示名
       --package-name string         Androidパッケージ名
       --keystore string             署名用キーストア
+      --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス
       --quality string              画像品質プリセット (default "high")
       --skip-video                  動画変換をスキップ
       --clean                       キャッシュをクリア

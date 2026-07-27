@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"regexp"
 	"time"
+
+	"github.com/na2na-p/mnemonic/internal/converter"
 )
 
 // checkTimeout は依存ツールのバージョン確認コマンドのタイムアウト。
@@ -33,6 +36,10 @@ type DependencyInfo struct {
 	// Note はRequired=falseのツールが必要になる条件の説明。
 	// 空文字列の場合、条件付きの説明を持たないことを表す。
 	Note string
+	// PostCheck はコマンド検出後に行う追加検査。okがfalseの場合、そのツールは
+	// 「見つかったが使えない」状態として扱う（reasonに理由を入れる）。
+	// nilの場合、追加検査を行わない。
+	PostCheck func() (ok bool, reason string)
 }
 
 // Dependencies はビルドに必要な依存ツールの一覧。
@@ -50,8 +57,26 @@ var Dependencies = []DependencyInfo{
 	// 代わりにNoteで条件を伝え、未インストール時に利用者が判断できるようにする。
 	{
 		Name: "FluidSynth", Command: "fluidsynth", VersionFlag: "--version", Required: false,
-		Note: "MIDIアセット(.mid/.midi)を含むゲームのビルドには必須です（サウンドフォントも併せて必要）",
+		Note:      "MIDIアセット(.mid/.midi)を含むゲームのビルドには必須です（サウンドフォントも併せて必要）",
+		PostCheck: checkDefaultSoundfont,
 	},
+}
+
+// checkDefaultSoundfont は既定のサウンドフォントが実在するかを検査する。
+//
+// why not: fluidsynthコマンドの有無だけでは判定として不十分。fluidsynthは
+// サウンドフォントを同梱しないため「コマンドはあるがサウンドフォントが無い」
+// という半端なインストール状態が起こりやすく、その場合doctorはOKと表示する
+// 一方でMIDIを含むゲームのビルドは失敗する。パスの定義はconverter側をSSOTと
+// して参照し、doctorが独自に持たない。
+func checkDefaultSoundfont() (bool, string) {
+	soundfontPath := converter.GetDefaultSoundfontPath()
+	if _, err := os.Stat(soundfontPath); err != nil {
+		return false, "fluidsynthは見つかりましたが、サウンドフォントが見つかりません: " + soundfontPath +
+			"。サウンドフォントを導入するか、mnemonic build の --soundfont でパスを指定してください"
+	}
+
+	return true, ""
 }
 
 // versionPatterns はコマンド出力からバージョン番号を抽出する正規表現の候補。
@@ -92,12 +117,7 @@ func CheckDependency(info DependencyInfo) CheckResult {
 	case err == nil:
 		output := stdout.String() + stderr.String()
 
-		return CheckResult{
-			Name:     info.Name,
-			Required: info.Required,
-			Found:    true,
-			Version:  ExtractVersion(output),
-		}
+		return foundResult(info, ExtractVersion(output))
 	case ctx.Err() != nil:
 		return notFoundResult(info, "コマンド '"+info.Command+"' がタイムアウトしました")
 	default:
@@ -111,12 +131,28 @@ func CheckDependency(info DependencyInfo) CheckResult {
 		// 取得できている場合があるため、foundとして扱いバージョン抽出を試みる。
 		output := stdout.String() + stderr.String()
 
-		return CheckResult{
-			Name:     info.Name,
-			Required: info.Required,
-			Found:    true,
-			Version:  ExtractVersion(output),
+		return foundResult(info, ExtractVersion(output))
+	}
+}
+
+// foundResult はコマンドを検出できた場合のCheckResultを組み立てる。
+// info.PostCheckが失敗した場合は「見つかったが使えない」状態として
+// notFoundResultへ委ねる。
+func foundResult(info DependencyInfo, version string) CheckResult {
+	if info.PostCheck != nil {
+		if ok, reason := info.PostCheck(); !ok {
+			result := notFoundResult(info, reason)
+			result.Version = version
+
+			return result
 		}
+	}
+
+	return CheckResult{
+		Name:     info.Name,
+		Required: info.Required,
+		Found:    true,
+		Version:  version,
 	}
 }
 

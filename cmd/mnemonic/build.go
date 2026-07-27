@@ -33,6 +33,7 @@ func newBuildCmd() *cobra.Command {
 		packageName         string
 		appName             string
 		keystore            string
+		soundfont           string
 		skipVideo           bool
 		verbose             int
 		quality             string
@@ -63,6 +64,7 @@ func newBuildCmd() *cobra.Command {
 			config.PackageName = packageName
 			config.AppName = appName
 			config.KeystorePath = keystore
+			config.SoundfontPath = soundfont
 			config.SkipVideo = skipVideo
 			config.Quality = quality
 			config.CleanCache = clean
@@ -120,6 +122,10 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringVar(&packageName, "package-name", "", "Androidパッケージ名")
 	cmd.Flags().StringVar(&appName, "app-name", "", "アプリ表示名")
 	cmd.Flags().StringVar(&keystore, "keystore", "", "署名用キーストア")
+	cmd.Flags().StringVar(
+		&soundfont, "soundfont", "",
+		"MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス（未指定時は既定のシステムパスを探索）",
+	)
 	cmd.Flags().BoolVar(&skipVideo, "skip-video", false, "動画変換をスキップ")
 	cmd.Flags().CountVarP(&verbose, "verbose", "v", "詳細ログ出力")
 	cmd.Flags().StringVar(&quality, "quality", pipeline.DefaultQuality, "画像品質プリセット")

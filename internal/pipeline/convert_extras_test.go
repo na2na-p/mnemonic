@@ -417,7 +417,7 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		assert.NoFileExists(t, filepath.Join(dir, "bgm.ogg"))
 	})
 
-	t.Run("異常系: MIDIが存在しサウンドフォントが実在しないならセンチネルエラーを返す", func(t *testing.T) {
+	t.Run("異常系: --soundfontで指定したサウンドフォントが実在しないならセンチネルエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -436,15 +436,20 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 
 		require.ErrorIs(t, err, ErrMidiConversionUnavailable)
 		assert.Contains(t, err.Error(), missingSoundfont)
+		assert.Contains(t, err.Error(), "--soundfont")
 		assert.FileExists(t, midiFile)
 	})
 
-	t.Run("異常系: 個別ファイルの変換失敗はビルドエラーとして伝播する", func(t *testing.T) {
+	t.Run("異常系: 個別ファイルの変換失敗は全件分を集約したビルドエラーになる", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
-		midiFile := filepath.Join(dir, "bgm.mid")
-		require.NoError(t, os.WriteFile(midiFile, []byte("MThd"), 0o600))
+		// why: 2件seedするのは「最初の失敗でbreakせず全件試す」という仕様を
+		// 固定するため。1件だけだとbreak/continueの差が観測できない。
+		firstMidi := filepath.Join(dir, "opening.mid")
+		secondMidi := filepath.Join(dir, "ending.midi")
+		require.NoError(t, os.WriteFile(firstMidi, []byte("MThd"), 0o600))
+		require.NoError(t, os.WriteFile(secondMidi, []byte("MThd"), 0o600))
 
 		soundfont := filepath.Join(dir, "soundfont.sf2")
 		require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
@@ -460,8 +465,10 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		err := convertMidiFilesUsing(dir, midiConverter)
 
 		require.ErrorIs(t, err, ErrMidiConversionFailed)
-		assert.Contains(t, err.Error(), "bgm.mid")
-		assert.FileExists(t, midiFile)
+		assert.Contains(t, err.Error(), "opening.mid")
+		assert.Contains(t, err.Error(), "ending.midi")
+		assert.FileExists(t, firstMidi)
+		assert.FileExists(t, secondMidi)
 	})
 
 	t.Run("正常系: 変換成功時は.oggへ変換し元のMIDIファイルを削除する", func(t *testing.T) {

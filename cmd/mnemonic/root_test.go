@@ -134,6 +134,70 @@ func withStubBuildPipeline(t *testing.T, stub *stubBuildRunner) {
 	t.Cleanup(func() { newBuildPipeline = original })
 }
 
+// withCapturingBuildPipeline はnewBuildPipelineへ渡されたpipeline.Configを
+// 記録するスタブを差し込み、記録先を返す。CLIフラグがConfigへ正しく
+// 引き渡されているか（配線されているか）を検証するために使う。
+func withCapturingBuildPipeline(t *testing.T, stub *stubBuildRunner) *pipeline.Config {
+	t.Helper()
+
+	var captured pipeline.Config
+
+	original := newBuildPipeline
+	newBuildPipeline = func(config pipeline.Config) buildRunner {
+		captured = config
+
+		return stub
+	}
+
+	t.Cleanup(func() { newBuildPipeline = original })
+
+	return &captured
+}
+
+// TestBuildCommand_SoundfontFlag は--soundfontがpipeline.Config.SoundfontPathへ
+// 配線されていることを検証する。
+//
+// why: MIDI変換のサウンドフォントはこのフラグでしか指定できない。既定の探索先は
+// Linuxの絶対パスのみで、macOS等ではこの経路が唯一の指定手段になる（T-220）。
+func TestBuildCommand_SoundfontFlag(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+	soundfont := filepath.Join(dir, "FluidR3_GM.sf2")
+
+	tests := []struct {
+		name      string
+		extraArgs []string
+		want      string
+	}{
+		{
+			name:      "正常系: --soundfont指定時はそのパスがConfigへ渡る",
+			extraArgs: []string{"--soundfont", soundfont},
+			want:      soundfont,
+		},
+		{
+			name:      "正常系: --soundfont未指定時は空文字列（既定の探索に委ねる）",
+			extraArgs: nil,
+			want:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captured := withCapturingBuildPipeline(t, &stubBuildRunner{
+				runResult: pipeline.Result{Success: true, OutputPath: &outputFile},
+			})
+
+			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
+			result := invoke(t, args)
+
+			require.Equal(t, 0, result.exitCode)
+			assert.Equal(t, tt.want, captured.SoundfontPath)
+		})
+	}
+}
+
 func TestBuildCommand_Success(t *testing.T) {
 	dir := t.TempDir()
 	inputFile := filepath.Join(dir, "game.exe")

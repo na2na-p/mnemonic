@@ -2,11 +2,13 @@ package doctor_test
 
 import (
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/doctor"
 )
 
@@ -102,26 +104,25 @@ func TestDependencies_ContainsOptionalTools(t *testing.T) {
 func TestCheckDependency_NoteIsSurfacedWhenMissing(t *testing.T) {
 	t.Parallel()
 
+	// 存在しないコマンドなので、reasonは必ず「見つかりません」側になる。
+	const missingCommand = "nonexistent_command_xyz123"
+
+	baseReason := "コマンド '" + missingCommand + "' が見つかりません"
+
 	tests := []struct {
 		name        string
-		command     string
 		note        string
-		wantInMsg   string
-		wantMissing bool
+		wantMessage string
 	}{
 		{
-			name:        "正常系: 見つからない場合はNoteがメッセージに含まれる",
-			command:     "nonexistent_command_xyz123",
+			name:        "正常系: 見つからない場合はNoteがメッセージへ追記される",
 			note:        "MIDIを含むゲームのビルドには必須です",
-			wantInMsg:   "MIDIを含むゲームのビルドには必須です",
-			wantMissing: true,
+			wantMessage: baseReason + "。MIDIを含むゲームのビルドには必須です",
 		},
 		{
-			name:        "正常系: Noteが空なら見つからない場合もメッセージに追記しない",
-			command:     "nonexistent_command_xyz123",
+			name:        "正常系: Noteが空ならメッセージは理由のみで追記されない",
 			note:        "",
-			wantInMsg:   "",
-			wantMissing: true,
+			wantMessage: baseReason,
 		},
 	}
 
@@ -130,18 +131,104 @@ func TestCheckDependency_NoteIsSurfacedWhenMissing(t *testing.T) {
 			t.Parallel()
 
 			info := doctor.DependencyInfo{
-				Name: "Test", Command: tt.command, VersionFlag: "--version", Required: false, Note: tt.note,
+				Name: "Test", Command: missingCommand, VersionFlag: "--version", Required: false, Note: tt.note,
 			}
 
 			result := doctor.CheckDependency(info)
 
-			require.Equal(t, !tt.wantMissing, result.Found)
-			require.NotEmpty(t, result.Message)
-			if tt.wantInMsg != "" {
-				assert.Contains(t, result.Message, tt.wantInMsg)
-			}
+			require.False(t, result.Found)
+			// Equalで固定する。Containsだけだと、Noteの有無に関わらず一定の
+			// 文言を後置するような実装でも通ってしまう。
+			assert.Equal(t, tt.wantMessage, result.Message)
 		})
 	}
+}
+
+// TestCheckDependency_PostCheck はコマンドが見つかっても追加検査に失敗した場合、
+// 「見つからない」扱いとして理由が表示されることを検証する。
+//
+// why: fluidsynthはサウンドフォントを同梱しないため「コマンドはあるが
+// サウンドフォントが無い」状態が起こりやすく、これをOKと表示すると
+// MIDIを含むゲームのビルドが失敗する理由を利用者が事前に知る手段が無くなる。
+func TestCheckDependency_PostCheck(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go command not found in PATH")
+	}
+
+	tests := []struct {
+		name        string
+		postCheck   func() (bool, string)
+		wantFound   bool
+		wantMessage string
+	}{
+		{
+			name:        "正常系: 追加検査が成功すればFoundのまま",
+			postCheck:   func() (bool, string) { return true, "" },
+			wantFound:   true,
+			wantMessage: "",
+		},
+		{
+			name:        "異常系: 追加検査が失敗すれば理由付きでNGになる",
+			postCheck:   func() (bool, string) { return false, "サウンドフォントが見つかりません: /path/to.sf2" },
+			wantFound:   false,
+			wantMessage: "サウンドフォントが見つかりません: /path/to.sf2",
+		},
+		{
+			name:        "正常系: 追加検査が未設定ならFoundのまま",
+			postCheck:   nil,
+			wantFound:   true,
+			wantMessage: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info := doctor.DependencyInfo{
+				Name: "Test", Command: "go", VersionFlag: "version", Required: false, PostCheck: tt.postCheck,
+			}
+
+			result := doctor.CheckDependency(info)
+
+			assert.Equal(t, tt.wantFound, result.Found)
+			assert.Equal(t, tt.wantMessage, result.Message)
+			// 追加検査の成否に関わらず、取得済みのバージョンは保持する。
+			assert.NotEmpty(t, result.Version)
+		})
+	}
+}
+
+// TestDependencies_FluidSynthHasSoundfontPostCheck は本番のFluidSynthエントリに
+// サウンドフォントの追加検査が結び付いていることを検証する。
+//
+// why not: t.Parallel()を呼ばない。converterのパッケージ変数（探索先パス）を
+// 一時的に書き換えるため、同パッケージ内でCheckAllDependenciesを呼ぶ並列テスト
+// と競合する。非並列テストは並列テストの再開前に完走するため、これで直列化できる。
+func TestDependencies_FluidSynthHasSoundfontPostCheck(t *testing.T) {
+	dep := findDependency(t, "FluidSynth")
+
+	require.NotNil(t, dep.PostCheck)
+
+	// 既定の探索先を実在しないパスへ差し替え、追加検査が失敗を報告することを確認する。
+	origMuseScore := converter.MuseScoreSoundfontPath
+	origFluidR3 := converter.FluidR3SoundfontPath
+
+	t.Cleanup(func() {
+		converter.MuseScoreSoundfontPath = origMuseScore
+		converter.FluidR3SoundfontPath = origFluidR3
+	})
+
+	converter.MuseScoreSoundfontPath = filepath.Join(t.TempDir(), "absent.sf3")
+	converter.FluidR3SoundfontPath = filepath.Join(t.TempDir(), "absent.sf2")
+
+	ok, reason := dep.PostCheck()
+
+	assert.False(t, ok)
+	assert.Contains(t, reason, "サウンドフォントが見つかりません")
+	assert.Contains(t, reason, "--soundfont")
 }
 
 func TestDependencies_AllHaveVersionFlag(t *testing.T) {

@@ -193,29 +193,47 @@ var (
 )
 
 // midiRequirementGuide はMIDI変換の前提条件を満たせなかった場合に、
-// 利用者が復旧するための手順を示す案内文。
-const midiRequirementGuide = "ゲーム内にMIDIアセット(.mid/.midi)が含まれています。" +
-	"krkrsdl2はMIDIを再生できず、スクリプト内の参照は必ず.oggへ書き換えられるため、" +
-	"MIDI変換にはFluidSynthとサウンドフォントの両方が必須です。" +
-	"インストール例: Debian/Ubuntu系は `apt-get install fluidsynth fluid-soundfont-gm`、" +
-	"macOSは `brew install fluid-synth`。" +
-	"なお--skip-videoのようなスキップ指定はMIDIには適用できません" +
-	"（変換を省略するとBGMが一切鳴らないAPKが出来上がるため）。"
+// 利用者が復旧するための手順を示す案内文を組み立てる。
+//
+// why not: macOSの案内をHomebrewのインストールコマンドだけで終わらせない。
+// `brew install fluid-synth`はfluidsynthコマンドを提供するがサウンドフォントは
+// 同梱せず、既定の探索先はいずれもLinuxの絶対パスであるため、コマンドだけを
+// 入れた利用者は同じエラーに再突入して手詰まりになる。サウンドフォントの
+// 別途入手と--soundfontでの指定まで案内する必要がある。
+//
+// why not: 定数ではなく関数にしているのは、既定の探索先パスを文面へ直書き
+// すると converter 側の定義とずれても誰も気付けないため。SSOTである
+// converterのパッケージ変数から都度組み立てる。
+func midiRequirementGuide() string {
+	return "ゲーム内にMIDIアセット(.mid/.midi)が含まれています。" +
+		"krkrsdl2はMIDIを再生できず、スクリプト内の参照は必ず.oggへ書き換えられるため、" +
+		"MIDI変換にはFluidSynthとサウンドフォントの両方が必須です。" +
+		"インストール例: Debian/Ubuntu系は `apt-get install fluidsynth fluid-soundfont-gm`。" +
+		"macOSは `brew install fluid-synth` でコマンドを導入したうえで、" +
+		"サウンドフォント(.sf2/.sf3、例: FluidR3_GM)を別途入手し、" +
+		"`--soundfont <パス>` で指定してください（既定の探索先である " +
+		converter.MuseScoreSoundfontPath + " または " + converter.FluidR3SoundfontPath +
+		" に配置しても構いません）。" +
+		"なお--skip-videoのようなスキップ指定はMIDIには適用できません" +
+		"（変換を省略するとBGMが一切鳴らないAPKが出来上がるため）。"
+}
 
-// convertMidiFiles はdirectory配下のMIDIファイルをOGG Vorbis形式に変換する。
+// newMidiConverter は設定値からMIDI変換器を構築する。
+// Config.SoundfontPathが空文字列の場合、NewMidiConverterが
+// converter.GetDefaultSoundfontPathによる既定の解決を行う。
+func (b *BuildPipeline) newMidiConverter() *converter.MidiConverter {
+	timeout := time.Duration(b.config.FFmpegTimeoutSeconds) * time.Second
+
+	return converter.NewMidiConverter(b.config.SoundfontPath, 0, "", 0, timeout, nil)
+}
+
+// convertMidiFilesUsing はdirectory配下のMIDIファイルをOGG Vorbis形式に変換する。
 //
 // krkrsdl2はMIDI再生未対応のため、MIDIファイルをOGG Vorbisに変換する。
 // スクリプト書き換え（ScriptAdjuster）で参照が.oggに変更されるため、
 // 出力ファイル名は.mid/.midiを.oggに置換した形式にする
 // （例: bgm/sinone.mid → bgm/sinone.ogg）。変換成功後、元のMIDIファイルは
 // 削除する。
-func (b *BuildPipeline) convertMidiFiles(directory string) error {
-	timeout := time.Duration(b.config.FFmpegTimeoutSeconds) * time.Second
-	midiConverter := converter.NewMidiConverter("", 0, "", 0, timeout, nil)
-
-	return convertMidiFilesUsing(directory, midiConverter)
-}
-
 func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter) error {
 	midiFiles, err := findMidiFiles(directory)
 	if err != nil {
@@ -280,7 +298,7 @@ func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error
 	if !midiConverter.IsFluidsynthAvailable() {
 		return fmt.Errorf(
 			"%w: fluidsynthコマンドを実行できません。%s",
-			ErrMidiConversionUnavailable, midiRequirementGuide,
+			ErrMidiConversionUnavailable, midiRequirementGuide(),
 		)
 	}
 
@@ -288,7 +306,7 @@ func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error
 	if _, err := os.Stat(soundfontPath); err != nil {
 		return fmt.Errorf(
 			"%w: サウンドフォントが見つかりません: %s。%s",
-			ErrMidiConversionUnavailable, soundfontPath, midiRequirementGuide,
+			ErrMidiConversionUnavailable, soundfontPath, midiRequirementGuide(),
 		)
 	}
 
@@ -318,6 +336,13 @@ func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConver
 			continue
 		}
 
+		// why not: 削除失敗はビルドエラーに昇格させない。変換自体は成功して
+		// おり.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき無音に
+		// ならない（本チケットが対象とする欠陥は発生しない）。残留した.midは
+		// 再生されない死蔵アセットとしてAPKへ同梱されるだけ（サイズ増のみ）で
+		// あり、これでビルド全体を落とす方が損害が大きい。本パッケージには
+		// ロガーの注入口が無いため警告出力も行わない（copyPolyfillFilesUsingの
+		// フォント取得失敗と同じ方針）。
 		_ = os.Remove(midiFile)
 	}
 

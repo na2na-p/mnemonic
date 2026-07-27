@@ -147,42 +147,47 @@ func (b *BuildPipeline) executeConvert() error {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
-	// MIDI変換（.mid/.midi → .ogg）。
-	//
-	// why not: この呼び出しを後段のadjustScriptsより後ろへ動かしてはならない。
-	// ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、MIDI変換が
-	// 先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを指す
-	// スクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
-	// 順序自体はPython版（MIDI変換→プラグインdllディレクトリ削除→polyfill
-	// コピー→スクリプト調整→ファイル名正規化）と同じ。
-	if err := b.convertMidiFiles(b.convertDir); err != nil {
+	return b.finalizeConvertedTree(b.convertDir, b.newMidiConverter())
+}
+
+// finalizeConvertedTree はアセット変換済みのdirectoryへ後処理を順に適用する。
+//
+// midiConverterを引数で受け取るのは、テストが実プロセスのfluidsynthに触れずに
+// 各ステップの順序を検証できるようにするため（converter.MidiConverterの
+// CommandRunner注入口を使う）。
+//
+// why not: convertMidiFilesUsingの呼び出しをadjustScriptsより後ろへ動かしては
+// ならない。ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、
+// MIDI変換が先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを指す
+// スクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
+// この順序不変条件はphases_internal_test.goのテストで固定している。
+// 順序自体はPython版（MIDI変換→プラグインdllディレクトリ削除→polyfillコピー
+// →スクリプト調整→ファイル名正規化）と同じ。
+func (b *BuildPipeline) finalizeConvertedTree(directory string, midiConverter *converter.MidiConverter) error {
+	if err := convertMidiFilesUsing(directory, midiConverter); err != nil {
 		return fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}
 
 	// プラグインディレクトリを削除（Windows DLLはAndroidで使用不可。
 	// extrans/wuvorbisはBUILDフェーズでjniLibs経由の.soとして別途配置される）
-	if err := b.removePluginDirectory(b.convertDir); err != nil {
+	if err := b.removePluginDirectory(directory); err != nil {
 		return err
 	}
 
 	// krkrsdl2 polyfillファイルをコピー
-	if err := b.copyPolyfillFiles(b.convertDir); err != nil {
+	if err := b.copyPolyfillFiles(directory); err != nil {
 		return err
 	}
 
 	// スクリプト調整（startup.tjsへのpolyfill読み込み追加、loadplugin書き換え等）
-	if err := b.adjustScripts(b.convertDir); err != nil {
+	if err := b.adjustScripts(directory); err != nil {
 		return err
 	}
 
 	// Androidのファイルシステムは大文字小文字を区別するため、重要な
 	// ファイル名を正規化（小文字化）する。変換処理の後に行う必要がある
 	// （変換が元のケースでファイルを作成するため）。
-	if err := b.normalizeCriticalFilenames(b.convertDir); err != nil {
-		return err
-	}
-
-	return nil
+	return b.normalizeCriticalFilenames(directory)
 }
 
 // executeBuild はBUILDフェーズを実行する: Gradleビルドを使用してAPKを
