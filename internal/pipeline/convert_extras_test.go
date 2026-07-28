@@ -183,6 +183,59 @@ func TestBuildPipeline_AdjustScripts(t *testing.T) {
 	})
 }
 
+// TestBuildPipeline_AdjustScripts_SkipVideo はB-1(--skip-video時にスクリプト
+// 参照だけが.mpgへ書き換わり実体の無い参照が残る不具合)の修正をピン留めする。
+//
+// why: --skip-video時はVideoConverterがconvertersに登録されず(phases.go
+// executeConvert参照)、動画ファイルは無変換のまま(実体はop.wmvのまま)
+// convertDirに残る。adjustScriptsがDefaultRulesをそのまま適用すると、
+// スクリプト側の参照だけが"op.mpg"へ書き換わり、実体の無いファイルを指す
+// ようになる（fault-injection: 実際にはop.wmvしか存在しないディレクトリで
+// adjustScriptsを実行し、参照が書き換わらないこと=danglingにならないことを
+// 機械的に検証する）。
+func TestBuildPipeline_AdjustScripts_SkipVideo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: SkipVideo時は.ks内の動画参照が書き換わらずopファイルと整合する", func(t *testing.T) {
+		t.Parallel()
+
+		p := newTestPipeline(t)
+		p.config.SkipVideo = true
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "op.wmv"), []byte("raw wmv content"), 0o600))
+		scriptPath := filepath.Join(dir, "first.ks")
+		scriptSource := `[movie storage="op.wmv" layer=0]`
+		require.NoError(t, os.WriteFile(scriptPath, []byte(scriptSource), 0o600))
+
+		require.NoError(t, p.adjustScripts(dir))
+
+		content, err := os.ReadFile(scriptPath) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+		require.NoError(t, err)
+		// スクリプトが引き続き"op.wmv"を参照し、実体のop.wmvも存在する
+		// (=参照先が実在する)ことを機械的に確認する。
+		assert.Contains(t, string(content), `"op.wmv"`)
+		assert.NotContains(t, string(content), ".mpg")
+		assert.FileExists(t, filepath.Join(dir, "op.wmv"))
+	})
+
+	t.Run("正常系: SkipVideoでない場合は従来どおり動画参照が.mpgへ書き換わる", func(t *testing.T) {
+		t.Parallel()
+
+		p := newTestPipeline(t)
+
+		dir := t.TempDir()
+		scriptPath := filepath.Join(dir, "first.ks")
+		require.NoError(t, os.WriteFile(scriptPath, []byte(`[movie storage="op.wmv" layer=0]`), 0o600))
+
+		require.NoError(t, p.adjustScripts(dir))
+
+		content, err := os.ReadFile(scriptPath) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+		require.NoError(t, err)
+		assert.Contains(t, string(content), `"op.mpg"`)
+	})
+}
+
 // TestBuildPipeline_RemovePluginDirectory はPython版
 // TestBuildPipelineRemovePluginDirectoryの移植。
 func TestBuildPipeline_RemovePluginDirectory(t *testing.T) {
@@ -615,6 +668,62 @@ func TestRemoveStaleVideoSourceFiles(t *testing.T) {
 		}}
 
 		assert.NotPanics(t, func() { removeStaleVideoSourceFiles(summary) })
+	})
+
+	t.Run("正常系: 大文字拡張子(.WMV)の旧ファイルもケースを保持して削除できる", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		// why: withSuffixはSourcePathに記録された拡張子のケースをそのまま使って
+		// 旧ファイルパスを再構築する。小文字化して再構築すると、大文字小文字を
+		// 区別するファイルシステム(Android向けビルドを行うLinux CI/DevContainer)
+		// 上では実際にcopyTreeが複製した"OP.WMV"を見つけられず削除に失敗する。
+		skipIfCaseInsensitiveFS(t, dir)
+
+		staleFile := filepath.Join(dir, "OP.WMV")
+		convertedFile := filepath.Join(dir, "OP.mpg")
+		require.NoError(t, os.WriteFile(staleFile, []byte("raw copy from copyTree"), 0o600))
+		require.NoError(t, os.WriteFile(convertedFile, []byte("converted mpeg-ps"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "OP.WMV"),
+				DestPath:   convertedFile,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.NoFileExists(t, staleFile)
+		assert.FileExists(t, convertedFile)
+	})
+
+	t.Run("正常系: 動画結果を含まないsummaryでは何もしない（--skip-video相当）", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		scriptDest := filepath.Join(dir, "script.ks")
+		require.NoError(t, os.WriteFile(scriptDest, []byte("script content"), 0o600))
+
+		// why: --skip-video時はVideoConverterがconvertersに登録されないため
+		// (phases.go executeConvert参照)、ConversionManagerのsummaryには
+		// 動画由来の結果が一切含まれない。空のsummaryと非動画結果のみの
+		// summaryの両方で無害であることを確認し、「自然に無害なはず」という
+		// 前提を実際に検証する。
+		assert.NotPanics(t, func() { removeStaleVideoSourceFiles(converter.ConversionSummary{}) })
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "script.ks"),
+				DestPath:   scriptDest,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.FileExists(t, scriptDest)
 	})
 }
 

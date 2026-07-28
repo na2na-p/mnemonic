@@ -155,6 +155,38 @@ var DefaultRules = []AdjustmentRule{
 	},
 }
 
+// videoExtensionRuleDescriptions はDefaultRules中の動画拡張子書き換えルール
+// (.wmv/.avi/.mpeg → .mpg)を識別するDescriptionの集合。AdjustmentRuleに
+// カテゴリを表すフィールドが無いため、TestScriptAdjuster_DefaultRulesOrderと
+// 同様にDescriptionを識別子として扱う。
+var videoExtensionRuleDescriptions = map[string]bool{
+	"動画参照をMPEGに変換（.wmv → .mpg）":  true,
+	"動画参照をMPEGに変換（.avi → .mpg）":  true,
+	"動画参照をMPEGに変換（.mpeg → .mpg）": true,
+}
+
+// DefaultRulesWithoutVideoExtensions はDefaultRulesから動画拡張子書き換え
+// ルールを除いたルール集合のコピーを返す。
+//
+// why not: 呼び出し元(pipelineパッケージのadjustScripts)は--skip-video時に
+// この戻り値をScriptAdjusterへ渡す。SkipVideo時はVideoConverterが登録され
+// ず動画ファイルは無変換のまま(拡張子も実体も元のまま)convertDirに残るため、
+// DefaultRulesをそのまま適用すると参照だけが.mpgへ書き換わり、実体の無い
+// .mpgを指す不整合が生じる（T-220でMIDIが踏んだのと同じ不具合のクラス）。
+func DefaultRulesWithoutVideoExtensions() []AdjustmentRule {
+	filtered := make([]AdjustmentRule, 0, len(DefaultRules))
+
+	for _, rule := range DefaultRules {
+		if videoExtensionRuleDescriptions[rule.Description] {
+			continue
+		}
+
+		filtered = append(filtered, rule)
+	}
+
+	return filtered
+}
+
 var (
 	layoptTagPattern = regexp.MustCompile(`\[layopt\b([^\]]*)\]`)
 	// why not: Python版の元パターンはlayer=[0-9]+の後ろに\bを付けないため

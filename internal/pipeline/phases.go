@@ -148,25 +148,41 @@ func (b *BuildPipeline) executeConvert() error {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
-	removeStaleVideoSourceFiles(summary)
-
-	return b.finalizeConvertedTree(b.convertDir, b.newMidiConverter())
+	return b.finalizeConvertedTree(b.convertDir, summary, b.newMidiConverter())
 }
 
 // finalizeConvertedTree はアセット変換済みのdirectoryへ後処理を順に適用する。
 //
 // midiConverterを引数で受け取るのは、テストが実プロセスのfluidsynthに触れずに
 // 各ステップの順序を検証できるようにするため（converter.MidiConverterの
-// CommandRunner注入口を使う）。
+// CommandRunner注入口を使う）。summaryも同じ理由で引数として受け取る
+// （removeStaleVideoSourceFilesは実プロセスのffmpegに触れない純粋な後処理
+// だが、実行順序の検証にはexecuteConvertを経由せずこの関数を直接呼べる
+// 必要がある）。
 //
-// why not: convertMidiFilesUsingの呼び出しをadjustScriptsより後ろへ動かしては
-// ならない。ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、
-// MIDI変換が先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを指す
-// スクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
-// この順序不変条件はphases_internal_test.goのテストで固定している。
+// why not: 各ステップの順序を入れ替えてはならない。
+//   - removeStaleVideoSourceFilesはnormalizeCriticalFilenames（末尾の
+//     小文字化）より前でなければならない。normalizeCriticalFilenamesが先に
+//     走ると、大文字拡張子の旧ファイル(例: OP.WMV)が小文字にリネームされ、
+//     summaryが記録した元のケース(.WMV)でパスを再構築しても既にリネーム済み
+//     のため削除に失敗し(best-effortで握りつぶされ)、旧ファイルが永続的に
+//     残ってしまう。
+//   - convertMidiFilesUsingの呼び出しをadjustScriptsより後ろへ動かしては
+//     ならない。ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、
+//     MIDI変換が先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを
+//     指すスクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
+//
+// これらの順序不変条件はphases_internal_test.goのテストで固定している。
 // 順序自体はPython版（MIDI変換→プラグインdllディレクトリ削除→polyfillコピー
-// →スクリプト調整→ファイル名正規化）と同じ。
-func (b *BuildPipeline) finalizeConvertedTree(directory string, midiConverter *converter.MidiConverter) error {
+// →スクリプト調整→ファイル名正規化）と同じ（動画の残留ファイル削除はGo版で
+// 追加した独自のステップ）。
+func (b *BuildPipeline) finalizeConvertedTree(
+	directory string,
+	summary converter.ConversionSummary,
+	midiConverter *converter.MidiConverter,
+) error {
+	removeStaleVideoSourceFiles(summary)
+
 	if err := convertMidiFilesUsing(directory, midiConverter); err != nil {
 		return fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}

@@ -105,11 +105,19 @@ func (b *BuildPipeline) removePluginDirectory(directory string) error {
 // why: VideoConverter.GetOutputExtensionは常に".mpg"を返すため、.wmv/.avi/
 // .mpeg入力はConversionManagerによって新しい拡張子のファイルとして書き出され、
 // copyTreeが複製した旧拡張子ファイルはconvertDir内に残ったままになる。
-// ScriptAdjusterは動画参照を無条件に.mpgへ書き換えるため、旧ファイルを
-// 残しても参照は解決できる（MIDIがT-220で踏んだ「実体の無いファイルを指す」
-// 不具合とは異なる）。削除失敗をエラーにしないのは、convertMidiFileListの
-// os.Remove(midiFile)と同じ理由: 変換自体は成功しスクリプト参照も解決できる
-// ため、残留は死蔵アセットとしてAPKサイズが増えるだけで実害が無い。
+// adjustScriptsは(--skip-videoでない限り)動画参照を.mpgへ書き換えるため、
+// 旧ファイルを残しても新しい参照は解決できる（MIDIがT-220で踏んだ「実体の
+// 無いファイルを指す」不具合とは異なる）。削除失敗をエラーにしないのは、
+// convertMidiFileListのos.Remove(midiFile)と同じ理由: 変換自体は成功し
+// スクリプト参照も解決できるため、残留は死蔵アセットとしてAPKサイズが
+// 増えるだけで実害が無い。
+//
+// why not: --skip-video時はVideoConverterがconvertersに登録されないため
+// (phases.go executeConvert参照)、summary.Resultsに動画由来の結果が
+// 一切含まれず、このループは自然に何もしない。adjustScripts側も
+// SkipVideo時はDefaultRulesWithoutVideoExtensionsを使い動画参照を書き換え
+// ないため、「参照は.mpgのまま、ファイルは元の拡張子のまま」という整合が
+// 保たれる（TestBuildPipeline_AdjustScripts_SkipVideo参照）。
 func removeStaleVideoSourceFiles(summary converter.ConversionSummary) {
 	videoExts := converter.NewVideoConverter(0, nil).SupportedExtensions()
 
@@ -140,8 +148,20 @@ func removeStaleVideoSourceFiles(summary converter.ConversionSummary) {
 // strings.EqualFoldで比較するため、大文字小文字を区別するファイルシステム
 // でもPython版と同じ集合を1回の走査で漏れなく捕捉でき、かつ
 // 大文字小文字を区別しないファイルシステムでの二重適用も起こらない。
+//
+// why not: --skip-video時はDefaultRulesWithoutVideoExtensions（動画拡張子
+// 書き換えルールを除いたルール集合）を使う。SkipVideo時はVideoConverterが
+// 登録されず動画ファイルは無変換のまま(拡張子も実体も元のまま)なので、
+// DefaultRulesのまま適用すると参照だけが.mpgへ書き換わり、実体の無い.mpgを
+// 指す参照が残る（T-220でMIDIが踏んだのと同じ「実体の無いファイルを指す」
+// 不具合）。
 func (b *BuildPipeline) adjustScripts(directory string) error {
-	adjuster := converter.NewScriptAdjuster(nil, true)
+	var rules []converter.AdjustmentRule
+	if b.config.SkipVideo {
+		rules = converter.DefaultRulesWithoutVideoExtensions()
+	}
+
+	adjuster := converter.NewScriptAdjuster(rules, true)
 
 	return filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
