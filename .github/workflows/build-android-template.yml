@@ -72,6 +72,17 @@ jobs:
         with:
           cache-read-only: false
 
+      - name: Resolve krkrsdl2 ref
+        id: resolve-krkrsdl2
+        run: |
+          sha=$(git ls-remote "https://github.com/${KRKRSDL2_REPO}.git" \
+            "refs/heads/${{ github.event.inputs.krkrsdl2_ref || 'android-support' }}" | cut -f1)
+          if [ -z "$sha" ]; then
+            # ブランチでなければタグ/SHA指定とみなしrefそのものをキーに使う
+            sha="${{ github.event.inputs.krkrsdl2_ref || 'android-support' }}"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: Cache krkrsdl2 repository
         uses: actions/cache@v4
         id: cache-krkrsdl2
@@ -79,7 +90,7 @@ jobs:
           path: krkrsdl2
           # パッチ適用後のツリーをキャッシュするため、パッチ内容をキーに含める。
           # パッチを追加・更新したらキャッシュを破棄して再クローン・再適用させる。
-          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'android-support' }}-${{ hashFiles('patches/*.patch') }}
+          key: krkrsdl2-${{ steps.resolve-krkrsdl2.outputs.sha }}-${{ hashFiles('patches/*.patch') }}
 
       - name: Clone krkrsdl2
         if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
