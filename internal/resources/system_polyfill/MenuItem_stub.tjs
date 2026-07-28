@@ -16,11 +16,18 @@ class MenuItem
 	var caption;
 	var visible = true;
 
-	// why: radio/groupは未代入のまま読まれ得る(checked setterのsibling走査
-	// 参照)。KAGMenuItem(system/Menus.tjs)はgroup引数が0のときthis.group/
-	// this.radioへ一切代入しない(separator項目や排他選択を持たない項目は
-	// group=0で生成される)ため、初期値を明示しないとこれらの項目に対する
-	// 初回読み取りが「Member does not exist」例外になる。
+	// why: クラスにvarとして宣言済みのメンバは、インスタンス生成時に
+	// 必ず存在が確保される(member-ensureされる)ため、初期化子が無くても
+	// 読み取りが例外になることはない。例外になるのは__menuInstance
+	// (本ファイル下部の_windowMenuProperty参照)のように、そもそも
+	// どのクラスにもvar宣言されていない動的メンバの初回読み取りのみであり、
+	// ここでの明示的な既定値はTJSのセマンティクス上必須ではない。
+	//
+	// この初期化は、KAGMenuItem(system/Menus.tjs)がgroup引数0のとき
+	// this.group/this.radioへ一切代入しない(separator項目や排他選択を
+	// 持たない項目はgroup=0で生成される)ケースに対して、checked setterの
+	// sibling走査が読む値を「排他選択なし/グループ0」という意図した既定値に
+	// 明示しておくための、無害な防御的初期化にとどまる。
 	var radio = false;
 	var group = 0;
 

@@ -12,6 +12,16 @@
 // までしか選べないため、「次へ...」の1件を差し引いた15件を上限にする。
 global.KirikiriMenuOpener_PAGE_SIZE = 15;
 
+// why not: System.showSelectListの第1引数(キャプション)を空文字列で
+// 呼ぶと、fork側ネイティブ実装は一覧を表示すらせず即座に-1を返す
+// (実機診断で確認済み: 同じentries/captionsでもcaption=""だと
+// キャンセル操作なしにr=-1、caption非空だとr=0で正常に選択できる)。
+// この-1はユーザーのキャンセル操作と区別が付かず、メニューバーが
+// タップ無反応に見える不具合の原因だった。ルート階層には固定の
+// UI文言(ゲーム非依存)を、サブ階層にはその階層を開いた親項目の
+// 整形済みcaptionを必ず渡し、空文字列を渡さないようにする。
+global.KirikiriMenuOpener_ROOT_TITLE = "メニュー";
+
 // why not: setMenuBarCallbackへ渡す関数は無引数で呼ばれるため、どのルートを
 // 開くかをクロージャで捕捉する必要がある。TJSの無名関数によるクロージャ
 // 捕捉が this 実行系で確実に機能するかをこの環境で実行検証できないため、
@@ -107,17 +117,18 @@ function KirikiriMenuOpener_buildPage(entries, startIndex)
 	return captions;
 }
 
-// menuItem配下を1階層分開く。戻り値は、葉を選択してメニュー全体を閉じる
-// べきならtrue、キャンセルでこの階層だけを抜けるならfalseを返す
-// (再帰呼び出し元がこの値で「さらに上へ戻るか」「同じページを出し直すか」
-// を判断する)。
+// menuItem配下を1階層分開く。titleはこの階層の全ページを通して
+// showSelectListへ渡すキャプション(次項参照)。戻り値は、葉を選択して
+// メニュー全体を閉じるべきならtrue、キャンセルでこの階層だけを抜ける
+// ならfalseを返す(再帰呼び出し元がこの値で「さらに上へ戻るか」
+// 「同じページを出し直すか」を判断する)。
 //
 // 走査規則: 子を持つ項目(children.count > 0)を選択したらその子リストで
 // 再帰的に同じ処理を行い、子側がtrue(葉が選択された)を返したら自分も
 // 即座にtrueを返してメニュー全体を閉じる。falseが返ったのはキャンセルで
 // 1階層戻ってきたときなので、自分の階層のページを出し直す。子を持たない
 // 項目(葉)を選択したらfireClick()を呼びtrueを返す。
-function KirikiriMenuOpener_openLevel(menuItem)
+function KirikiriMenuOpener_openLevel(menuItem, title)
 {
 	var entries = KirikiriMenuOpener_collectVisibleEntries(menuItem);
 	if (entries.count == 0) return false;
@@ -126,7 +137,11 @@ function KirikiriMenuOpener_openLevel(menuItem)
 	while (true)
 	{
 		var captions = KirikiriMenuOpener_buildPage(entries, startIndex);
-		var selection = global.System.showSelectList("", captions);
+		// why not: titleは空文字列であってはならない(ファイル冒頭の
+		// KirikiriMenuOpener_ROOT_TITLEのwhy not参照)。ページングで
+		// 「次へ...」を選んでも同じtitleを使い回すことで、階層タイトルは
+		// ページが変わっても維持される。
+		var selection = global.System.showSelectList(title, captions);
 
 		if (selection < 0)
 		{
@@ -142,7 +157,12 @@ function KirikiriMenuOpener_openLevel(menuItem)
 
 		if (target.children.count > 0)
 		{
-			if (KirikiriMenuOpener_openLevel(target)) return true;
+			// why not: 整形後のcaptionが空文字列になる場合(「(&X)」のみの
+			// captionなど)にshowSelectListへ空文字列を渡さないための保険。
+			var childTitle = KirikiriMenuOpener_formatCaption(target);
+			if (childTitle == "") childTitle = global.KirikiriMenuOpener_ROOT_TITLE;
+
+			if (KirikiriMenuOpener_openLevel(target, childTitle)) return true;
 			continue;
 		}
 
@@ -155,7 +175,7 @@ function KirikiriMenuOpener_openLevel(menuItem)
 function KirikiriMenuOpener_onMenuBarTapped()
 {
 	if (global.KirikiriMenuOpener_root === void) return;
-	KirikiriMenuOpener_openLevel(global.KirikiriMenuOpener_root);
+	KirikiriMenuOpener_openLevel(global.KirikiriMenuOpener_root, global.KirikiriMenuOpener_ROOT_TITLE);
 }
 
 // MenuItem_stub.tjsのツリー変更フック。add()/insert()のたびに呼ばれる。
