@@ -30,7 +30,7 @@ permissions:
   contents: write
 
 env:
-  KRKRSDL2_REPO: krkrsdl2/krkrsdl2
+  KRKRSDL2_REPO: na2na-p/krkrsdl2
   ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
@@ -79,12 +79,12 @@ jobs:
           path: krkrsdl2
           # パッチ適用後のツリーをキャッシュするため、パッチ内容をキーに含める。
           # パッチを追加・更新したらキャッシュを破棄して再クローン・再適用させる。
-          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}-${{ hashFiles('patches/*.patch') }}
+          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'android-support' }}-${{ hashFiles('patches/*.patch') }}
 
       - name: Clone krkrsdl2
         if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.krkrsdl2_ref || 'main' }} \
+          git clone --depth 1 --branch ${{ github.event.inputs.krkrsdl2_ref || 'android-support' }} \
             https://github.com/${{ env.KRKRSDL2_REPO }}.git krkrsdl2
           cd krkrsdl2
           git submodule update --init --recursive
@@ -100,6 +100,7 @@ jobs:
         working-directory: krkrsdl2
         run: |
           for patch in "${GITHUB_WORKSPACE}"/patches/*.patch; do
+            [ -e "$patch" ] || continue
             echo "applying $(basename "$patch")"
             git apply --verbose "$patch"
           done
@@ -160,7 +161,7 @@ jobs:
           # Create version info
           cd krkrsdl2
           echo "krkrsdl2_commit=$(git rev-parse HEAD)" > ../template-output/VERSION
-          echo "krkrsdl2_ref=${{ github.event.inputs.krkrsdl2_ref || 'main' }}" >> ../template-output/VERSION
+          echo "krkrsdl2_ref=${{ github.event.inputs.krkrsdl2_ref || 'android-support' }}" >> ../template-output/VERSION
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ../template-output/VERSION
           # why not(krkrsdl2_commitだけで十分としない理由): パッチ未適用の
           # テンプレートはAndroidで描画不具合が出るため、配布物から
