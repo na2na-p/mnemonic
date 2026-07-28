@@ -1,6 +1,7 @@
 package resources_test
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -9,6 +10,9 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/resources"
 )
+
+// utf8BOM はUTF-8のバイトオーダーマーク。
+var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
 func TestSystemPolyfillFS_ContainsAllEmbeddedFiles(t *testing.T) {
 	t.Parallel()
@@ -89,6 +93,41 @@ func TestSystemPolyfillFS_MenuFilesBraceBalance(t *testing.T) {
 			content := string(data)
 			assert.Equal(t, strings.Count(content, "{"), strings.Count(content, "}"), "波括弧の対応が崩れています")
 			assert.Equal(t, strings.Count(content, "("), strings.Count(content, ")"), "丸括弧の対応が崩れています")
+		})
+	}
+}
+
+// TestSystemPolyfillFS_MenuFilesHaveUTF8BOM は、メニューポリフィル一式
+// （PolyfillInitialize.tjs/MenuItem_stub.tjs/MenuOpener.tjs）が先頭に
+// UTF-8のBOMを持つことをピン留めする。
+//
+// why: copyPolyfillFilesUsingは埋め込みリソースを生バイトのままコピーし、
+// ScriptAdjusterはこれらのファイルの内容がDefaultRulesのどのパターンにも
+// 一致しないためStatusSkippedとなりBOMを付与しない。したがってBOMは
+// embed元のファイル自体が持っていない限り実機に載らない。3ファイルは
+// いずれも日本語コメントや、画面に表示される日本語文字列(MenuOpener.tjsの
+// 「✓」「次へ...」)を含むため、BOM無しで実機のkirikiriエンジンが
+// Shift_JISと誤認すると文字化けする。
+//
+// why not(対象を3ファイルに限定する理由): 同じ一覧に含まれる
+// MIDISoundBuffer_stub.tjs/VideoOverlay_stub.tjsは、この3ファイルとは別に
+// 元々BOM無しのまま同梱されており、この事実自体を変更する判断は本テストの
+// スコープ外とする。判定基準を「非ASCIIバイトを含むかどうか」のような
+// 計算値にすると、後から日本語コメントが1行増えただけの無関係な変更で
+// このテストが新たに赤くなってしまうため、対象ファイル名を明示的に列挙する。
+func TestSystemPolyfillFS_MenuFilesHaveUTF8BOM(t *testing.T) {
+	t.Parallel()
+
+	names := []string{"PolyfillInitialize.tjs", "MenuItem_stub.tjs", "MenuOpener.tjs"}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			data, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + name)
+			require.NoError(t, err)
+
+			assert.True(t, bytes.HasPrefix(data, utf8BOM), "UTF-8のBOMが先頭にありません")
 		})
 	}
 }
