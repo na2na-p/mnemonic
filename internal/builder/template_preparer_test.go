@@ -363,6 +363,22 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		assert.Contains(t, text, `"-cpusse=no"`)
 		assert.Contains(t, text, `"-cpusse2=no"`)
 	})
+
+	t.Run("正常系: showSelectListメソッドが含まれる（krkrsdl2ネイティブがJNI経由で呼び出す）", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+
+		text := string(content)
+		assert.Contains(t, text, "public static int showSelectList(final String title, final String[] items)")
+	})
 }
 
 func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
