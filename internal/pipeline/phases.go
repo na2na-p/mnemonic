@@ -128,7 +128,7 @@ func (b *BuildPipeline) executeConvert() error {
 	}
 	if !b.config.SkipVideo {
 		timeout := time.Duration(b.config.FFmpegTimeoutSeconds) * time.Second
-		converters = append(converters, converter.NewVideoConverter("", "", "", timeout, nil))
+		converters = append(converters, converter.NewVideoConverter(timeout, nil))
 	}
 
 	manager := converter.NewConversionManager(converters, nil, 0, nil)
