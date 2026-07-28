@@ -280,6 +280,9 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 // 検索して呼び出す。このメソッドを欠いたまま出力すると検索が失敗し、
 // 実機では例外を投げずにSDLActivity標準のダイアログへ無言でフォールバックする
 // （呼び出し側はJNIエラーを無視する実装のため、ビルドもクラッシュもしない）。
+// また、setOrientationBisを欠いたまま出力すると、SDL初期化時にSDLActivity側の
+// 実装がAndroidManifest.xmlのandroid:screenOrientation指定を無条件で
+// 上書きし、横向き固定が効かなくなる。
 // テンプレート元のpw/uyjulian/krkrsdl2/KirikiriSDL2Activity.javaにある実装を
 // このパッケージ名変更後のクラスにも移植し、シグネチャを一致させる。
 const activityJavaTemplate = `package %s;
@@ -287,6 +290,8 @@ const activityJavaTemplate = `package %s;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.content.pm.ApplicationInfo;
 import android.content.res.AssetManager;
@@ -308,6 +313,40 @@ public class KirikiriSDL2Activity extends SDLActivity {
     private static final String TAG = "KirikiriSDL2";
     private static final String ASSETS_DATA_DIR = "data";
     private static String sNativeLibDir = null;
+
+    // Screen orientation
+
+    /**
+     * This can be overridden (see SDLActivity.setOrientationBis()).
+     * SDLActivity.setOrientation() (called from native code via JNI) always
+     * dispatches through this instance method rather than calling
+     * setRequestedOrientation() itself, specifically so subclasses can
+     * intervene -- overriding here, rather than setOrientation(), is the
+     * documented hook point.
+     *
+     * Why not let SDL decide: setOrientationBis() calls
+     * setRequestedOrientation(SCREEN_ORIENTATION_FULL_SENSOR) whenever
+     * SDL_HINT_ORIENTATIONS isn't set, which silently overrides any
+     * orientation lock declared in AndroidManifest.xml (e.g. a
+     * build-injected android:screenOrientation="sensorLandscape") the
+     * moment SDL starts up. When the Manifest declares an explicit
+     * orientation for this Activity, keep it and skip SDL's override
+     * entirely; only fall back to SDL's own heuristic (window aspect ratio
+     * / SDL_HINT_ORIENTATIONS) when the Manifest leaves it unspecified.
+     */
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        try {
+            int manifestOrientation = getPackageManager()
+                    .getActivityInfo(getComponentName(), 0).screenOrientation;
+            if (manifestOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                return;
+            }
+        } catch (PackageManager.NameNotFoundException ex) {
+            ex.printStackTrace();
+        }
+        super.setOrientationBis(w, h, resizable, hint);
+    }
 
     // Select-list dialog
 

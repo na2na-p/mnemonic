@@ -383,6 +383,40 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		text := string(content)
 		assert.Contains(t, text, "public static int showSelectList(final String title, final String[] items)")
 	})
+
+	t.Run("正常系: fork側Java(pw/uyjulian/krkrsdl2/KirikiriSDL2Activity.java)の安全性・機能に不可欠な断片が生成テンプレートから欠落していない", func(t *testing.T) {
+		t.Parallel()
+
+		// このリストはfork側の実装を手で移植した箇所のピン留め。fork側で
+		// メソッドが追加/削除された場合、このテストは自動検知できないため
+		// 別途「fork側の全メンバ列挙とGo定数側との突合」を都度行う必要がある。
+		requiredFragments := []string{
+			// setOrientationBis: Manifestの画面向き指定をSDLのsetOrientationBis()
+			// による上書きから守るオーバーライド
+			"import android.content.pm.ActivityInfo;",
+			"import android.content.pm.PackageManager;",
+			"public void setOrientationBis(int w, int h, boolean resizable, String hint)",
+			"ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED",
+			"PackageManager.NameNotFoundException",
+			// showSelectList: krkrsdl2ネイティブがJNI経由で呼び出すダイアログ実装
+			"public static int showSelectList(",
+			"setCancelable(true)",
+		}
+
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+
+		text := string(content)
+		for _, fragment := range requiredFragments {
+			assert.Contains(t, text, fragment, "fork側の断片が生成テンプレートから欠落しています: %s", fragment)
+		}
+	})
 }
 
 func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
