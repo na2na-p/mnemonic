@@ -260,6 +260,11 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		count += compatCount
 	}
 
+	if strings.EqualFold(filepath.Base(source), "yesnodialog.tjs") {
+		adjusted = yesNoDialogReplacement
+		count++
+	}
+
 	if count == 0 {
 		return ConversionResult{
 			SourcePath:  source,
@@ -362,6 +367,28 @@ var messageLayerCompatRules = []AdjustmentRule{
 		Description: "assignからのフォント名コピーをfontFaceにリネーム（krkrsdl2対応）",
 	},
 }
+
+// yesNoDialogReplacement はKAG3標準のYesNoDialog.tjsを置き換える
+// 単一ウィンドウ実装。
+//
+// why not(元実装を残さない理由): KAG3のaskYesNoはYesNoDialogWindow
+// (サブWindow)をshowModalで表示するが、AndroidのSDLは1ウィンドウしか
+// サポートせず「Cannot create SDL window」例外でセーブ/ロード確認等が
+// 全て失敗する。同期的に結果を返せる代替はネイティブのメッセージ
+// ボックスだけであるため、System.showYesNoMessageBox(fork版krkrsdl2で
+// 追加)を呼ぶ実装へ全置換する。未対応エンジンでは確認なしの肯定として
+// 続行する(確認できない環境で操作を全て塞ぐより安全側)。
+const yesNoDialogReplacement = `// YesNoDialog.tjs - krkrsdl2単一ウィンドウ向け置換実装(mnemonicが生成)
+// 元実装はサブWindowをshowModalで表示するが、Androidでは
+// 「Cannot create SDL window」となるためネイティブダイアログを使う。
+
+function askYesNo(message, caption = "確認")
+{
+	if (typeof(global.System.showYesNoMessageBox) != "undefined")
+		return +global.System.showYesNoMessageBox(message, caption) == 1;
+	return true;
+}
+`
 
 // ApplyMessageLayerCompat はMessageLayer.tjs向けのkrkrsdl2互換調整を
 // contentへ適用し、(調整後の内容, 調整回数)を返す。

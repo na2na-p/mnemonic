@@ -1138,3 +1138,40 @@ func TestScriptAdjuster_Convert_MessageLayerCompat(t *testing.T) {
 		assert.Contains(t, string(got), "var face; // フォント")
 	})
 }
+
+func TestScriptAdjuster_Convert_YesNoDialogReplacement(t *testing.T) {
+	t.Parallel()
+
+	t.Run("yesnodialog.tjsは単一ウィンドウ実装へ全置換される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "YesNoDialog.tjs")
+		content := "\uFEFFclass YesNoDialogWindow extends Window\n{\n}\nfunction askYesNo(message, caption = \"確認\")\n{\n\tvar win = new YesNoDialogWindow(message, caption);\n}\n"
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+
+		got := string(readFile(t, source))
+		assert.Contains(t, got, "System.showYesNoMessageBox")
+		assert.Contains(t, got, "function askYesNo(message, caption = \"確認\")")
+		assert.NotContains(t, got, "new YesNoDialogWindow")
+	})
+
+	t.Run("他のファイルは置換されない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "other.tjs")
+		content := "\uFEFFvar win = new YesNoDialogWindow(message, caption);\n"
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+}
