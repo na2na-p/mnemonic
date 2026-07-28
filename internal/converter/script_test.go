@@ -1027,3 +1027,114 @@ func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
 
 	assert.Equal(t, wantDescriptions, descriptions)
 }
+
+func TestScriptAdjuster_ApplyMessageLayerCompat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		want      string
+		wantCount int
+	}{
+		{
+			name:      "フォント用faceメンバ宣言をfontFaceにリネームする",
+			content:   "\t/*C*/var face; // フォント\n",
+			want:      "\t/*C*/var fontFace; // フォント\n",
+			wantCount: 1,
+		},
+		{
+			name:      "font.faceへの連鎖代入をリネームする",
+			content:   "\t\t\tlineLayer.font.face = face = defaultFace == 'user' ? userFace : defaultFace;\n",
+			want:      "\t\t\tlineLayer.font.face = fontFace = defaultFace == 'user' ? userFace : defaultFace;\n",
+			wantCount: 1,
+		},
+		{
+			name:      "アットマーク付きフォント名の括弧内代入をリネームする",
+			content:   "\t\t\t\tvar f = '@' + (face = defaultFace);\n",
+			want:      "\t\t\t\tvar f = '@' + (fontFace = defaultFace);\n",
+			wantCount: 1,
+		},
+		{
+			name:      "assignからのコピーを両辺リネームする",
+			content:   "\t\tface = src.face;\n",
+			want:      "\t\tfontFace = src.fontFace;\n",
+			wantCount: 1,
+		},
+		{
+			name:      "描画面切替のface代入は変更しない",
+			content:   "\t\t\tface = dfProvince;\n\t\t\tface = dfAuto;\n\t\t\tll.face = dfProvince;\n",
+			want:      "\t\t\tface = dfProvince;\n\t\t\tface = dfAuto;\n\t\t\tll.face = dfProvince;\n",
+			wantCount: 0,
+		},
+		{
+			name:      "Fontオブジェクトのfaceプロパティは変更しない",
+			content:   "\t\tof.face = lf.face;\n\t\tvar elmface = elm.face;\n\t\tlf.face = orgfont;\n",
+			want:      "\t\tof.face = lf.face;\n\t\tvar elmface = elm.face;\n\t\tlf.face = orgfont;\n",
+			wantCount: 0,
+		},
+		{
+			name: "実際のclearLayer相当のコードでは描画面切替を保持しつつ宣言のみ変更する",
+			content: "\t/*C*/var face; // フォント\n" +
+				"\t\t\tface = dfProvince;\n" +
+				"\t\t\tcolorRect(0, 0, imageWidth, imageHeight, 0); // 領域もクリア\n" +
+				"\t\t\tface = dfAuto;\n",
+			want: "\t/*C*/var fontFace; // フォント\n" +
+				"\t\t\tface = dfProvince;\n" +
+				"\t\t\tcolorRect(0, 0, imageWidth, imageHeight, 0); // 領域もクリア\n" +
+				"\t\t\tface = dfAuto;\n",
+			wantCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			adjuster := converter.NewScriptAdjuster(nil, true)
+			got, count := adjuster.ApplyMessageLayerCompat(tt.content)
+
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantCount, count)
+		})
+	}
+}
+
+func TestScriptAdjuster_Convert_MessageLayerCompat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("messagelayer.tjsにはface互換リネームが適用される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "MessageLayer.tjs")
+		content := "\uFEFF\t/*C*/var face; // フォント\n\t\t\tface = dfProvince;\n"
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+
+		got := readFile(t, source)
+		assert.Contains(t, string(got), "var fontFace; // フォント")
+		assert.Contains(t, string(got), "face = dfProvince;")
+	})
+
+	t.Run("messagelayer.tjs以外にはface互換リネームを適用しない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "other.tjs")
+		content := "\uFEFF\t/*C*/var face; // フォント\n"
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+
+		got := readFile(t, source)
+		assert.Contains(t, string(got), "var face; // フォント")
+	})
+}
