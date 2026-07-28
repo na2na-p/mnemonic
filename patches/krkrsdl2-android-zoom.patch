@@ -1,0 +1,32 @@
+diff --git a/src/core/sdl2/SDLApplication.cpp b/src/core/sdl2/SDLApplication.cpp
+index 48c7820..9bd8218 100644
+--- a/src/core/sdl2/SDLApplication.cpp
++++ b/src/core/sdl2/SDLApplication.cpp
+@@ -53,6 +53,14 @@ EM_JS_DEPS(main, "$FS,$IDBFS");
+ #define KRKRSDL2_WINDOW_SIZE_IS_LAYER_SIZE
+ #endif
+ 
++#if defined(__ANDROID__)
++// On Android the window is fullscreen at device resolution. Without zoom the
++// layer size becomes the whole screen, so a game authored for e.g. 640x480 is
++// drawn into the top-left corner and the rest stays black. Zoom keeps the
++// layer at the game resolution and letterboxes it via UpdateActualZoom().
++#define KRKRSDL2_ENABLE_ZOOM
++#endif
++
+ #if defined(__linux__)
+ // By specification of SDL_RenderPresent, the backbuffer should be
+ // considered invalidated after each call. This is required for
+@@ -930,6 +938,12 @@ void TVPWindowWindow::SetPaintBoxSize(tjs_int w, tjs_int h)
+ #ifdef KRKRSDL2_ENABLE_ZOOM
+ 	this->LayerWidth = w;
+ 	this->LayerHeight = h;
++	// KRKRSDL2_WINDOW_SIZE_IS_LAYER_SIZE platforms never call SetInnerSize(),
++	// so InnerWidth/InnerHeight would keep their default (32) and
++	// UpdateActualZoom() would compute the zoom from a 32x32 source, leaving
++	// the screen almost entirely black. Track the real paint box size here.
++	this->InnerWidth = w;
++	this->InnerHeight = h;
+ #endif
+ 	if (this->renderer)
+ 	{

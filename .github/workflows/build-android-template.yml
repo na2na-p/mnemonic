@@ -78,8 +78,8 @@ jobs:
         with:
           path: krkrsdl2
           # パッチ適用後のツリーをキャッシュするため、パッチ内容をキーに含める。
-          # パッチを更新したらキャッシュを破棄して再クローン・再適用させる必要がある。
-          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}-${{ hashFiles('patches/krkrsdl2-alpha-transparency.patch') }}
+          # パッチを追加・更新したらキャッシュを破棄して再クローン・再適用させる。
+          key: krkrsdl2-${{ github.event.inputs.krkrsdl2_ref || 'main' }}-${{ hashFiles('patches/*.patch') }}
 
       - name: Clone krkrsdl2
         if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
@@ -89,18 +89,20 @@ jobs:
           cd krkrsdl2
           git submodule update --init --recursive
 
-      # why not(上流のkrkrsdl2をそのまま使わない理由): krkrsdl2のSDL2描画は
-      # 不透明(ltOpaque/RGB888)前提の実装で、layopt type=alphaを使う作品は
-      # オーバーレイ表示時に画面が真っ黒になる。上流への取り込みが未了のため
-      # テンプレートビルド時にパッチを当てて回避する。
+      # why not(上流のkrkrsdl2をそのまま使わない理由): Android向けに未修正の
+      # 描画不具合があり、上流への取り込みも未了のため、テンプレートビルド時に
+      # patches/配下を適用して回避する。各パッチの理由は patches/README.md 参照。
       #
       # why not(キャッシュヒット時も適用しない理由): 復元されるツリーは
       # 適用済みで、二重適用は git apply が失敗するため。
-      - name: Apply alpha transparency patch
+      - name: Apply krkrsdl2 patches
         if: steps.cache-krkrsdl2.outputs.cache-hit != 'true'
         working-directory: krkrsdl2
         run: |
-          git apply --verbose "${GITHUB_WORKSPACE}/patches/krkrsdl2-alpha-transparency.patch"
+          for patch in "${GITHUB_WORKSPACE}"/patches/*.patch; do
+            echo "applying $(basename "$patch")"
+            git apply --verbose "$patch"
+          done
 
       - name: Build Android project
         working-directory: krkrsdl2/android-project
@@ -161,9 +163,12 @@ jobs:
           echo "krkrsdl2_ref=${{ github.event.inputs.krkrsdl2_ref || 'main' }}" >> ../template-output/VERSION
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> ../template-output/VERSION
           # why not(krkrsdl2_commitだけで十分としない理由): パッチ未適用の
-          # テンプレートはlayopt type=alpha使用時に画面が真っ黒になるため、
-          # 配布物から適用状況を追跡できる必要がある。
-          echo "patches=krkrsdl2-alpha-transparency@$(git hash-object "${GITHUB_WORKSPACE}/patches/krkrsdl2-alpha-transparency.patch")" >> ../template-output/VERSION
+          # テンプレートはAndroidで描画不具合が出るため、配布物から
+          # どのパッチが当たっているか追跡できる必要がある。
+          for patch in "${GITHUB_WORKSPACE}"/patches/*.patch; do
+            name="$(basename "$patch" .patch)"
+            echo "patches=${name}@$(git hash-object "$patch")" >> ../template-output/VERSION
+          done
 
       - name: Create template archive
         run: |

@@ -254,6 +254,12 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		count++
 	}
 
+	if strings.EqualFold(filepath.Base(source), "messagelayer.tjs") {
+		compatAdjusted, compatCount := a.ApplyMessageLayerCompat(adjusted)
+		adjusted = compatAdjusted
+		count += compatCount
+	}
+
 	if count == 0 {
 		return ConversionResult{
 			SourcePath:  source,
@@ -292,10 +298,15 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 // convert()側でsource.nameを直接見て行う）。Go版では使われない引数を持たせず、
 // この関数のシグネチャをそのユースケースに合わせて単純化する。
 func (a *ScriptAdjuster) AdjustContent(content string) (string, int) {
+	return applyRules(content, a.rules)
+}
+
+// applyRules はcontentへrulesを順に適用し、(調整後の内容, 調整回数)を返す。
+func applyRules(content string, rules []AdjustmentRule) (string, int) {
 	total := 0
 	result := content
 
-	for _, rule := range a.rules {
+	for _, rule := range rules {
 		if rule.Apply != nil {
 			newResult, count := rule.Apply(result)
 			result = newResult
@@ -311,6 +322,51 @@ func (a *ScriptAdjuster) AdjustContent(content string) (string, int) {
 	}
 
 	return result, total
+}
+
+// messageLayerCompatRules はKAG3標準のMessageLayer.tjsに適用する
+// krkrsdl2互換ルール。フォント名保持用メンバ`var face`を`fontFace`へ
+// リネームする（上流krkrsdl2/kag3が行っているのと同じ修正）。
+//
+// why not(リネーム以外の選択肢): KAG3のMessageLayerクラスはフォント名を
+// 保持するメンバ`var face;`を宣言しており、krkrz系TJS2ではこのメンバが
+// Layerネイティブの描画面プロパティ`face`をシャドーイングする。その結果
+// clearLayer()の`face = dfProvince; colorRect(...)`が描画面を切り替えられず、
+// 当たり判定領域のクリアがメイン画像への不透明黒ブレンドとして誤実行され、
+// メッセージレイヤ全体が不透明黒になる（Androidでの全画面真っ黒の根本原因）。
+// krkr2のTJS2はネイティブプロパティを優先するためWindowsでは顕在化しない。
+// エンジン側のメンバ解決順序の変更は影響範囲が広すぎるため、上流と同じ
+// スクリプト側リネームで対処する。
+var messageLayerCompatRules = []AdjustmentRule{
+	{
+		Pattern:     `\bvar face;`,
+		Replacement: `var fontFace;`,
+		Description: "フォント用faceメンバ宣言をfontFaceにリネーム（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `font\.face = face =`,
+		Replacement: `font.face = fontFace =`,
+		Description: "font.faceへの連鎖代入をfontFaceにリネーム（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `'@' \+ \(face =`,
+		Replacement: `'@' + (fontFace =`,
+		Description: "アットマーク付きフォント名代入をfontFaceにリネーム（krkrsdl2対応）",
+	},
+	{
+		// why not(\bのみにしない理由): \bはドット直後にも成立するため
+		// `X.face = src.face;`のようなプロパティ代入にも一致してしまう。
+		// 行頭または非ワード・非ドット文字に限定して素のメンバ参照のみ捕捉する。
+		Pattern:     `(^|[^.\w])face = src\.face;`,
+		Replacement: `${1}fontFace = src.fontFace;`,
+		Description: "assignからのフォント名コピーをfontFaceにリネーム（krkrsdl2対応）",
+	},
+}
+
+// ApplyMessageLayerCompat はMessageLayer.tjs向けのkrkrsdl2互換調整を
+// contentへ適用し、(調整後の内容, 調整回数)を返す。
+func (a *ScriptAdjuster) ApplyMessageLayerCompat(content string) (string, int) {
+	return applyRules(content, messageLayerCompatRules)
 }
 
 // AddStartupDirective はstartup.tjs向けのポリフィル初期化ディレクティブを
