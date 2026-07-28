@@ -183,8 +183,8 @@ func TestBuildPipeline_AdjustScripts(t *testing.T) {
 	})
 }
 
-// TestBuildPipeline_AdjustScripts_SkipVideo はB-1(--skip-video時にスクリプト
-// 参照だけが.mpgへ書き換わり実体の無い参照が残る不具合)の修正をピン留めする。
+// TestBuildPipeline_AdjustScripts_SkipVideo は--skip-video時にスクリプト
+// 参照だけが.mpgへ書き換わり実体の無い参照が残る不具合の修正をピン留めする。
 //
 // why: --skip-video時はVideoConverterがconvertersに登録されず(phases.go
 // executeConvert参照)、動画ファイルは無変換のまま(実体はop.wmvのまま)
@@ -697,6 +697,72 @@ func TestRemoveStaleVideoSourceFiles(t *testing.T) {
 
 		assert.NoFileExists(t, staleFile)
 		assert.FileExists(t, convertedFile)
+	})
+
+	t.Run("正常系: 大文字綴り(.MPG)でも別実体の生ファイルは削除する（ケースセンシティブFS）", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		// why: SourcePathとDestPathの拡張子がEqualFold(".MPG",".mpg")で
+		// 一致するからといって同一実体とは限らない。ケースセンシティブFS
+		// (Android向けビルドを行うLinux CI/DevContainer)では"OP.MPG"と
+		// "OP.mpg"は別ファイルであり、copyTreeが複製した未変換の"OP.MPG"を
+		// 拡張子文字列の一致だけで見逃すと、変換済みの"OP.mpg"と共存したまま
+		// 残ってしまう（normalizeCriticalFilenamesの不安定ソートにより、
+		// どちらが最終的な"op.mpg"になるか未規定になる）。
+		skipIfCaseInsensitiveFS(t, dir)
+
+		staleFile := filepath.Join(dir, "OP.MPG")
+		convertedFile := filepath.Join(dir, "OP.mpg")
+		require.NoError(t, os.WriteFile(staleFile, []byte("raw unconverted copy from copyTree"), 0o600))
+		require.NoError(t, os.WriteFile(convertedFile, []byte("converted mpeg-ps"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "OP.MPG"),
+				DestPath:   convertedFile,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.NoFileExists(t, staleFile)
+		assert.FileExists(t, convertedFile)
+
+		got, err := os.ReadFile(convertedFile) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+		require.NoError(t, err)
+		assert.Equal(t, "converted mpeg-ps", string(got))
+	})
+
+	t.Run("正常系: 大文字綴り(.MPG)がdestと同一実体を指す場合は削除しない（ケース非区別FSの保護）", func(t *testing.T) {
+		t.Parallel()
+
+		// why: このケースにskipIfCaseInsensitiveFSは付けない。ケース非区別FS
+		// (macOS既定)では"OP.MPG"と"op.mpg"が同一実体を指すため、
+		// os.SameFileによる同一実体判定が正しく機能していれば
+		// destを消してしまわない。ケースセンシティブFSでは"OP.MPG"は
+		// 実在しないため削除自体が空振りするだけで、いずれの環境でも
+		// destが生き残ることを検証できる。
+		dir := t.TempDir()
+		convertedFile := filepath.Join(dir, "op.mpg")
+		require.NoError(t, os.WriteFile(convertedFile, []byte("converted mpeg-ps"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "OP.MPG"),
+				DestPath:   convertedFile,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.FileExists(t, convertedFile)
+
+		got, err := os.ReadFile(convertedFile) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+		require.NoError(t, err)
+		assert.Equal(t, "converted mpeg-ps", string(got))
 	})
 
 	t.Run("正常系: 動画結果を含まないsummaryでは何もしない（--skip-video相当）", func(t *testing.T) {
