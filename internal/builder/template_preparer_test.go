@@ -614,7 +614,7 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 		assert.ErrorContains(t, err, "AndroidManifest.xmlが見つかりません")
 	})
 
-	t.Run("正常系: screenOrientation属性が無いactivityにsensorPortraitが注入される", func(t *testing.T) {
+	t.Run("正常系: screenOrientation属性が無いactivityにsensorLandscapeが注入される", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
@@ -631,16 +631,16 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
-		assert.Contains(t, string(content), `android:screenOrientation="sensorPortrait"`)
+		assert.Contains(t, string(content), `android:screenOrientation="sensorLandscape"`)
 	})
 
-	t.Run("正常系: 既存のscreenOrientation属性はsensorPortraitへ置き換えられる", func(t *testing.T) {
+	t.Run("正常系: 既存のscreenOrientation属性はsensorLandscapeへ置き換えられる", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <activity android:name=".KirikiriSDL2Activity" android:screenOrientation="landscape">
+        <activity android:name=".KirikiriSDL2Activity" android:screenOrientation="portrait">
         </activity>
     </application>
 </manifest>
@@ -651,7 +651,7 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
-		assert.Contains(t, string(content), `android:screenOrientation="sensorPortrait"`)
+		assert.Contains(t, string(content), `android:screenOrientation="sensorLandscape"`)
 		assert.Equal(t, 1, countOccurrences(string(content), `android:screenOrientation="`))
 	})
 
