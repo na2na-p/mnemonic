@@ -1,0 +1,203 @@
+﻿// MenuOpener.tjs - Android向けメニューバー・オープナー(krkrsdl2 fork拡張対応)
+// Part of the Mnemonic project (MIT License)
+// https://github.com/na2na-p/mnemonic
+//
+// krkrsdl2 forkが提供するSystem.showSelectList(モーダルリスト選択)と
+// System.setMenuBarCallback(メニューバータップ時コールバック)を使い、
+// MenuItem_stub.tjsが保持するメニューツリーをAndroid上で操作可能にする。
+// ゲーム固有のメニュー項目名はここには一切書かない(MenuItem_stub.tjs同様、
+// KAG3標準スクリプト側が組み立てたツリーを汎用的に走査するのみ)。
+
+// 1ページに表示できる実項目数。fork側のSystem.showSelectListは最大16件
+// までしか選べないため、「次へ...」の1件を差し引いた15件を上限にする。
+global.KirikiriMenuOpener_PAGE_SIZE = 15;
+
+// why not: System.showSelectListの第1引数(キャプション)を空文字列で
+// 呼ぶと、fork側ネイティブ実装は一覧を表示すらせず即座に-1を返す
+// (実機診断で確認済み: 同じentries/captionsでもcaption=""だと
+// キャンセル操作なしにr=-1、caption非空だとr=0で正常に選択できる)。
+// この-1はユーザーのキャンセル操作と区別が付かず、メニューバーが
+// タップ無反応に見える不具合の原因だった。ルート階層には固定の
+// UI文言(ゲーム非依存)を、サブ階層にはその階層を開いた親項目の
+// 整形済みcaptionを必ず渡し、空文字列を渡さないようにする。
+global.KirikiriMenuOpener_ROOT_TITLE = "メニュー";
+
+// why not: setMenuBarCallbackへ渡す関数は無引数で呼ばれるため、どのルートを
+// 開くかをクロージャで捕捉する必要がある。TJSの無名関数によるクロージャ
+// 捕捉が this 実行系で確実に機能するかをこの環境で実行検証できないため、
+// 捕捉に頼らずグローバル変数へルートを保持する固定シグネチャの関数を渡す。
+// krkrsdl2/AndroidのSDLは同時に1ウィンドウしか作成できない
+// (YesNoDialog置換の実装コメント参照)ため、ルートを1つだけ覚える設計で
+// 実用上問題にならない。
+global.KirikiriMenuOpener_root = void;
+global.KirikiriMenuOpener_registered = false;
+
+// menuItemの子のうち、メニュー一覧に列挙すべき項目だけを返す。
+//
+// 列挙規則: visible==falseの項目、caption=="-"(セパレータ)、
+// isEnabledEffective()==falseの項目は除外する。
+function KirikiriMenuOpener_collectVisibleEntries(menuItem)
+{
+	var entries = [];
+	for (var i = 0; i < menuItem.children.count; i++)
+	{
+		var child = menuItem.children[i];
+		if (!child.visible) continue;
+		if (child.caption == "-") continue;
+		if (!child.isEnabledEffective()) continue;
+		entries.add(child);
+	}
+	return entries;
+}
+
+// 表示用にcaptionを整形する。
+// 「(&X)」形式のアクセスキー表記、単独の「&」、「\t」以降の
+// ショートカットキー表記を取り除き、checked==trueの項目には
+// 「✓ 」を前置する。
+function KirikiriMenuOpener_formatCaption(item)
+{
+	var text = item.caption;
+
+	var tab = text.indexOf("\t");
+	if (tab >= 0) text = text.substring(0, tab);
+
+	text = text.replace(/\(&.\)/g, "");
+	text = text.replace(/&/g, "");
+
+	if (item.checked) text = "✓ " + text;
+
+	return text;
+}
+
+// KirikiriMenuOpener_buildPageが直近に構築したページのtargets配列。
+//
+// why not: TJSの辞書リテラル(%[key => value])はkey位置の識別子も式として
+// 評価されるため、キー名を変数名と同じ文字列にできる保証がなく
+// (この実行環境で検証できない)、captions/targetsの2値をまとめて安全に
+// 返す手段として使えない。実行時に2つの配列を同時に返す代わりに、
+// captionsは戻り値、targetsはこのグローバル変数経由で受け渡す。
+// メニュー操作は一度に1系統しか走らない(krkrsdl2/AndroidのSDLが単一
+// ウィンドウしかサポートしないため)ため、この受け渡しで競合は起きない。
+global.KirikiriMenuOpener_pageTargets = [];
+
+// entries(可視項目の配列)のうちstartIndex以降を1ページ分切り出し、
+// 表示用captionsの配列を返す。対応するMenuItemはKirikiriMenuOpener_pageTargets
+// 経由で参照する。残数がKirikiriMenuOpener_PAGE_SIZEを超える場合のみ
+// 「次へ...」を末尾に追加する(ページングが不要な15件以下では追加しない)。
+// 「次へ...」に対応するKirikiriMenuOpener_pageTargets要素はvoidとし、
+// 呼び出し側はvoidを次ページ遷移の合図として扱う。
+function KirikiriMenuOpener_buildPage(entries, startIndex)
+{
+	var captions = [];
+	var targets = [];
+
+	var remaining = entries.count - startIndex;
+	var pageCount = remaining;
+	var hasMore = false;
+	if (remaining > global.KirikiriMenuOpener_PAGE_SIZE)
+	{
+		pageCount = global.KirikiriMenuOpener_PAGE_SIZE;
+		hasMore = true;
+	}
+
+	for (var i = 0; i < pageCount; i++)
+	{
+		var item = entries[startIndex + i];
+		captions.add(KirikiriMenuOpener_formatCaption(item));
+		targets.add(item);
+	}
+
+	if (hasMore)
+	{
+		captions.add("次へ...");
+		targets.add(void);
+	}
+
+	global.KirikiriMenuOpener_pageTargets = targets;
+	return captions;
+}
+
+// menuItem配下を1階層分開く。titleはこの階層の全ページを通して
+// showSelectListへ渡すキャプション(次項参照)。戻り値は、葉を選択して
+// メニュー全体を閉じるべきならtrue、キャンセルでこの階層だけを抜ける
+// ならfalseを返す(再帰呼び出し元がこの値で「さらに上へ戻るか」
+// 「同じページを出し直すか」を判断する)。
+//
+// 走査規則: 子を持つ項目(children.count > 0)を選択したらその子リストで
+// 再帰的に同じ処理を行い、子側がtrue(葉が選択された)を返したら自分も
+// 即座にtrueを返してメニュー全体を閉じる。falseが返ったのはキャンセルで
+// 1階層戻ってきたときなので、自分の階層のページを出し直す。子を持たない
+// 項目(葉)を選択したらfireClick()を呼びtrueを返す。
+function KirikiriMenuOpener_openLevel(menuItem, title)
+{
+	var entries = KirikiriMenuOpener_collectVisibleEntries(menuItem);
+	if (entries.count == 0) return false;
+
+	var startIndex = 0;
+	while (true)
+	{
+		var captions = KirikiriMenuOpener_buildPage(entries, startIndex);
+		// why not: titleは空文字列であってはならない(ファイル冒頭の
+		// KirikiriMenuOpener_ROOT_TITLEのwhy not参照)。ページングで
+		// 「次へ...」を選んでも同じtitleを使い回すことで、階層タイトルは
+		// ページが変わっても維持される。
+		var selection = global.System.showSelectList(title, captions);
+
+		if (selection < 0)
+		{
+			return false;
+		}
+
+		var target = global.KirikiriMenuOpener_pageTargets[selection];
+		if (target === void)
+		{
+			startIndex += global.KirikiriMenuOpener_PAGE_SIZE;
+			continue;
+		}
+
+		if (target.children.count > 0)
+		{
+			// why not: 整形後のcaptionが空文字列になる場合(「(&X)」のみの
+			// captionなど)にshowSelectListへ空文字列を渡さないための保険。
+			var childTitle = KirikiriMenuOpener_formatCaption(target);
+			if (childTitle == "") childTitle = global.KirikiriMenuOpener_ROOT_TITLE;
+
+			if (KirikiriMenuOpener_openLevel(target, childTitle)) return true;
+			continue;
+		}
+
+		target.fireClick();
+		return true;
+	}
+}
+
+// setMenuBarCallbackへ登録する固定シグネチャの関数。
+function KirikiriMenuOpener_onMenuBarTapped()
+{
+	if (global.KirikiriMenuOpener_root === void) return;
+	KirikiriMenuOpener_openLevel(global.KirikiriMenuOpener_root, global.KirikiriMenuOpener_ROOT_TITLE);
+}
+
+// MenuItem_stub.tjsのツリー変更フック。add()/insert()のたびに呼ばれる。
+//
+// why not: ゲーム起動シーケンスの完了をタイマー等で待ち受けるのではなく、
+// メニューツリーへ実際に項目が追加された時点で判定する。これによりメイン
+// ウィンドウの取得方法(Window.mainWindowの有無やkag等ゲーム固有グローバル
+// への依存)を一切必要とせず、通知されたrootをそのままメニューバーの
+// 開閉対象にできる。
+//
+// 可視の子がまだ1つも無いツリーではsetMenuBarCallbackを登録しない(黒帯を
+// 表示しない)。一度登録した後は、ツリーが後から空になっても登録を維持する
+// (fork側にsetMenuBarCallbackの解除APIが無いため)。
+function MenuItem_onTreeChanged(root)
+{
+	global.KirikiriMenuOpener_root = root;
+
+	if (global.KirikiriMenuOpener_registered) return;
+
+	var entries = KirikiriMenuOpener_collectVisibleEntries(root);
+	if (entries.count == 0) return;
+
+	global.System.setMenuBarCallback(KirikiriMenuOpener_onMenuBarTapped);
+	global.KirikiriMenuOpener_registered = true;
+}

@@ -3,31 +3,259 @@
 // Based on KAG3 (Kirikiri Adventure Game System)
 // Copyright (C) W.Dee and contributors - 改変・配布は自由です
 
+// 吉里吉里2のMenuItem API仕様を再現する実装。
+//
+// why not: krkrsdl2はネイティブのメニューバー描画を持たないため、本クラスは
+// メニューツリー(caption/children/parent/checked等)の保持だけを担当し、
+// 実際の画面表示・タップ操作はMenuOpener.tjs(System.showSelectList/
+// System.setMenuBarCallback経由)に委譲する。ゲーム固有のメニュー項目名は
+// KAG3標準スクリプト側(system/Menus.tjs等)が組み立てるため、本ファイルには
+// 一切含めない。
 class MenuItem
 {
 	var caption;
-	var checked;
-	var enabled;
-	var group;
-	var radio;
+	var visible = true;
+
+	// why: クラスにvarとして宣言済みのメンバは、インスタンス生成時に
+	// 必ず存在が確保される(member-ensureされる)ため、初期化子が無くても
+	// 読み取りが例外になることはない。例外になるのは__menuInstance
+	// (本ファイル下部の_windowMenuProperty参照)のように、そもそも
+	// どのクラスにもvar宣言されていない動的メンバの初回読み取りのみであり、
+	// ここでの明示的な既定値はTJSのセマンティクス上必須ではない。
+	//
+	// この初期化は、KAGMenuItem(system/Menus.tjs)がgroup引数0のとき
+	// this.group/this.radioへ一切代入しない(separator項目や排他選択を
+	// 持たない項目はgroup=0で生成される)ケースに対して、checked setterの
+	// sibling走査が読む値を「排他選択なし/グループ0」という意図した既定値に
+	// 明示しておくための、無害な防御的初期化にとどまる。
+	var radio = false;
+	var group = 0;
+
 	var shortcut;
-	var visible;
-	var parent;
+	var parent = void;
 	var children;
-	var root;
+
+	// why not: 「window」はコンストラクタに渡された時点のオーナーWindowを
+	// そのまま保持する固定値とする。KAG3標準はMenuItem/KAGMenuItemの
+	// コンストラクタへ常にオーナーWindowを明示的に渡す(Menus.tjs参照)ため、
+	// 親をたどって再計算する必要がなく、ツリー構築の途中(未接続のサブツリー)
+	// でも常に正しい値を返せる。
 	var window;
-	var index;
-	function MenuItem() {
+
+	var _checked = false;
+	var _enabledEffective = true;
+
+	function MenuItem(owner, caption)
+	{
+		this.window = owner;
+		this.caption = (caption !== void) ? caption : "";
 		children = [];
 	}
-	function finalize() {}
-	function add() {}
-	function insert() {}
-	function remove() {}
-	function popup() {}
-	function onClick() {}
-	function fireClick() {}
+
+	function finalize()
+	{
+		children = [];
+		parent = void;
+	}
+
+	property checked
+	{
+		getter { return _checked; }
+		setter(value)
+		{
+			_checked = value;
+
+			// why: 吉里吉里2のradioグループ挙動の再現。同じparent配下で
+			// group値が一致するradio項目同士は排他選択になる
+			// (checked=trueにした瞬間、他の兄弟radio項目のcheckedをfalseに戻す)。
+			// setterで完結させることで、KAG3標準スクリプト側の呼び出し方
+			// (item.checked = true)を変更せずに済む。
+			if (value && radio && parent !== void)
+			{
+				var siblings = parent.children;
+				for (var i = 0; i < siblings.count; i++)
+				{
+					var sibling = siblings[i];
+					if (sibling !== this && sibling.radio && sibling.group == group)
+					{
+						// setter経由(sibling.checked = false)にすると再帰的に
+						// 全兄弟を巻き込むループになるため、内部フィールドへ
+						// 直接書き込み、再帰なしで単純化する。
+						sibling._checked = false;
+					}
+				}
+			}
+		}
+	}
+
+	property enabled
+	{
+		getter { return _enabledEffective; }
+		setter(value) { _enabledEffective = value; }
+	}
+
+	// why not: KAGMenuItem(system/Menus.tjs)はproperty enabledを
+	// 独自にオーバーライドし、そのgetterはaccessibleを考慮しない生の値を
+	// 返す(setterだけがsuper.enabled = accessible && enabledで実効値を
+	// 押し込む)。そのためitem.enabledを外から読むとサブクラスの実装次第で
+	// 実効値と食い違う。MenuItem自身が定義するこのメソッドはサブクラスが
+	// 上書きしない限り実効値をそのまま返すため、ツリー走査側
+	// (MenuOpener.tjs)はitem.enabledではなく本メソッドを使う。
+	function isEnabledEffective()
+	{
+		return _enabledEffective;
+	}
+
+	property root
+	{
+		getter
+		{
+			var node = this;
+			while (node.parent !== void)
+			{
+				node = node.parent;
+			}
+			return node;
+		}
+	}
+
+	property index
+	{
+		getter
+		{
+			if (parent === void) return -1;
+
+			var siblings = parent.children;
+			for (var i = 0; i < siblings.count; i++)
+			{
+				if (siblings[i] === this) return i;
+			}
+			return -1;
+		}
+	}
+
+	function add(item)
+	{
+		insert(item, children.count);
+	}
+
+	function insert(item, atIndex)
+	{
+		var position = atIndex;
+		if (position < 0) position = 0;
+		if (position > children.count) position = children.count;
+
+		children.insert(position, item);
+		item.parent = this;
+
+		_notifyTreeChanged();
+	}
+
+	function remove(item)
+	{
+		for (var i = 0; i < children.count; i++)
+		{
+			if (children[i] === item)
+			{
+				children.erase(i);
+				item.parent = void;
+				return;
+			}
+		}
+	}
+
+	// why not: krkrsdl2にはネイティブのポップアップメニュー表示手段が無く、
+	// 実際のメニュー表示・選択操作はMenuOpener.tjs(System.showSelectList駆動)
+	// が担う。popup()自体は吉里吉里2互換のため呼び出しても例外にならない
+	// ようno-opとして残すが、表示処理をここに実装することはしない。
+	function popup()
+	{
+	}
+
+	function onClick()
+	{
+	}
+
+	function fireClick()
+	{
+		onClick();
+	}
+
+	// why not: MenuItem自身はMenuOpener.tjsという具体的な実装を知らない
+	// (関心の分離)。ツリー変更時に呼べる汎用フックとしてグローバル関数
+	// global.MenuItem_onTreeChangedを未定義なら何もしない形で呼ぶだけに
+	// とどめ、実際に「いつメニューバーを登録するか」の判断はMenuOpener.tjs
+	// 側に持たせる。
+	function _notifyTreeChanged()
+	{
+		if (typeof(global.MenuItem_onTreeChanged) === "Object")
+		{
+			// why not: フック側(MenuOpener.tjs)の不具合でツリー変更通知が
+			// 例外を投げても、KAGWindow_createMenus等の呼び出し元がメニュー
+			// 構築の途中で止まってはならない。ここで握りつぶし、メニュー
+			// バー機能の欠落に留める。
+			try
+			{
+				global.MenuItem_onTreeChanged(root);
+			}
+			catch (e)
+			{
+				// pass
+			}
+		}
+	}
 }
 
-global.Window.menu = new MenuItem();
+// Window.menuをウィンドウインスタンスごとに独立させる。
+//
+// why not: 単純に `global.Window.menu = new MenuItem(...)` とすると、
+// Windowクラスへの代入になり全Windowインスタンスが同一のMenuItemツリーを
+// 共有してしまう(本ファイルの旧スタブの挙動)。TJSのproperty定義を
+// 既存クラスへ後付けし、getterに渡されるthis(呼び出したインスタンス自身)へ
+// 実体を遅延生成して保持させることで、インスタンスごとに独立させる。
+//
+// why not(tryの範囲): property宣言はtry節の中では書かない。property自体は
+// 宣言であり、PolyfillInitialize.tjsの`_dummyProp`(既存のプロパティ後付け
+// 実装例)と同じくトップレベルに置く(仮にtry内へ置いて構文が受理されない
+// 実行環境だと、この後追記されたコードを含めファイル全体がパースに失敗し、
+// Window.menuどころかMenuItemクラス自体がglobalへ定義されなくなる。tryは
+// あくまで「クラスへの後付け代入」という実行時の失敗だけを吸収する範囲に
+// 限定する)。
+property _windowMenuProperty
+{
+	getter
+	{
+		// why: `this.__menuInstance === void` は実機で
+		// 「Member "__menuInstance" does not exist」例外になる
+		// (menuitem_stub.tjs(214)で実際に発生・再現)。TJSではクラスに
+		// 宣言されていない未代入のインスタンスメンバへの読み取りは
+		// 例外を投げ、voidが返るのは辞書オブジェクトのみ。__menuInstanceは
+		// どのクラスにもvarとして宣言されていないため、初回アクセス時点では
+		// 存在確認自体がtypeofでなければならない。実際に出荷される
+		// system/MainWindow.tjs(例: `if(typeof this.rightClickMenuItem
+		// != "undefined")`)が、動的に代入される可能性のあるインスタンス
+		// メンバの存在確認に一貫してtypeofを使っており、typeofは未存在
+		// メンバに対して例外を投げず"undefined"を返すことがこの実行環境で
+		// 確認できる。
+		if (typeof(this.__menuInstance) == "undefined")
+		{
+			this.__menuInstance = new MenuItem(this, "");
+		}
+		return this.__menuInstance;
+	}
+}
 
+try
+{
+	with (global.Window)
+	{
+		&.menu = &_windowMenuProperty;
+	}
+}
+catch (e)
+{
+	// why not: 実行環境でproperty後付けが失敗した場合、メニューツリーが
+	// 例外で丸ごと壊れるよりも、旧スタブと同じクラス共有の単一インスタンス
+	// へ後退させ、KAGWindow_createMenus等の既存呼び出し元を通す方を優先する。
+	global.Window.menu = new MenuItem(global.Window, "");
+}

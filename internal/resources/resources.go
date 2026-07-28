@@ -16,15 +16,18 @@ var SystemPolyfillFS embed.FS
 // SystemPolyfillFiles はビルド時にゲームデータのsystem/へコピーするpolyfill
 // ファイル名の一覧。
 //
-// why not: SystemPolyfillFSには6ファイル（KAGParser.tjs、MenuItem_stub.tjs、
-// MIDISoundBuffer_stub.tjs、PolyfillInitialize.tjs、SaveDataPath_patch.tjs、
-// VideoOverlay_stub.tjs）を同梱するが、Python版の_copy_polyfill_filesは
-// SaveDataPath_patch.tjsをコピー対象リストに含めない
-// （どこからも参照されない未使用リソースであり、意図的に除外されていると
-// 判断した）。Go版もこの一覧を忠実に踏襲し、5ファイルのみをコピー対象とする。
+// why not: SystemPolyfillFSには7ファイル（KAGParser.tjs、MenuItem_stub.tjs、
+// MenuOpener.tjs、MIDISoundBuffer_stub.tjs、PolyfillInitialize.tjs、
+// SaveDataPath_patch.tjs、VideoOverlay_stub.tjs）を同梱する。このうち
+// SaveDataPath_patch.tjsだけはコピー対象から除外する（どこからも参照されない
+// 未使用リソースであり、Python版の_copy_polyfill_filesが対象とする5ファイル
+// にも含まれていないため、意図的に除外されていると判断した）。MenuOpener.tjs
+// はPython版に存在しないmnemonic独自の新規ポリフィルであり、Python版との
+// 対応関係とは独立にコピー対象へ含める。
 var SystemPolyfillFiles = []string{
 	"PolyfillInitialize.tjs",
 	"MenuItem_stub.tjs",
+	"MenuOpener.tjs",
 	"KAGParser.tjs",
 	"MIDISoundBuffer_stub.tjs",
 	"VideoOverlay_stub.tjs",
