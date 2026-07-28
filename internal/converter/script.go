@@ -72,6 +72,30 @@ var DefaultRules = []AdjustmentRule{
 		Replacement: `storage + ".ogg"`,
 		Description: "MIDI検索パターンを修正（.mid.ogg → .ogg）",
 	},
+	// VideoConverterはmpeg1video+mp2への変換後、常に.mpg拡張子で出力する
+	// (video.goのGetOutputExtension参照)。.mpgは対象外のため
+	// (パターンが.mpg自体にマッチせず)無変換で残り、二重変換は起きない。
+	//
+	// why not: 拡張子部分だけ(?i:...)で大文字小文字を無視する。Windows製作の
+	// ゲームは".WMV"のような大文字拡張子を参照することがあり
+	// (VideoConverter.CanConvert/adjustScriptsが拡張子を小文字化して比較する
+	// のと同じ理由)、ここを素のリテラルのままにすると大文字参照だけ書き換えを
+	// 素通りし、実体は常に小文字".mpg"で出力されるため参照が解決できなくなる。
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:wmv)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.wmv → .mpg）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:avi)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.avi → .mpg）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:mpeg)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.mpeg → .mpg）",
+	},
 	// loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）。
 	// krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない。
 	// Androidのネイティブライブラリ規約でlibプレフィックスが必要なため、フルネームを指定する。
@@ -129,6 +153,38 @@ var DefaultRules = []AdjustmentRule{
 		Description: "レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
 		Apply:       applyLayoptAlphaRule,
 	},
+}
+
+// videoExtensionRuleDescriptions はDefaultRules中の動画拡張子書き換えルール
+// (.wmv/.avi/.mpeg → .mpg)を識別するDescriptionの集合。AdjustmentRuleに
+// カテゴリを表すフィールドが無いため、TestScriptAdjuster_DefaultRulesOrderと
+// 同様にDescriptionを識別子として扱う。
+var videoExtensionRuleDescriptions = map[string]bool{
+	"動画参照をMPEGに変換（.wmv → .mpg）":  true,
+	"動画参照をMPEGに変換（.avi → .mpg）":  true,
+	"動画参照をMPEGに変換（.mpeg → .mpg）": true,
+}
+
+// DefaultRulesWithoutVideoExtensions はDefaultRulesから動画拡張子書き換え
+// ルールを除いたルール集合のコピーを返す。
+//
+// why not: 呼び出し元(pipelineパッケージのadjustScripts)は--skip-video時に
+// この戻り値をScriptAdjusterへ渡す。SkipVideo時はVideoConverterが登録され
+// ず動画ファイルは無変換のまま(拡張子も実体も元のまま)convertDirに残るため、
+// DefaultRulesをそのまま適用すると参照だけが.mpgへ書き換わり、実体の無い
+// .mpgを指す不整合が生じる（T-220でMIDIが踏んだのと同じ不具合のクラス）。
+func DefaultRulesWithoutVideoExtensions() []AdjustmentRule {
+	filtered := make([]AdjustmentRule, 0, len(DefaultRules))
+
+	for _, rule := range DefaultRules {
+		if videoExtensionRuleDescriptions[rule.Description] {
+			continue
+		}
+
+		filtered = append(filtered, rule)
+	}
+
+	return filtered
 }
 
 var (

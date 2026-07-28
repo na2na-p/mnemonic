@@ -40,7 +40,7 @@ func TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite(t 
 	}}
 	midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, runner)
 
-	err := p.finalizeConvertedTree(dir, midiConverter)
+	err := p.finalizeConvertedTree(dir, converter.ConversionSummary{}, midiConverter)
 
 	require.ErrorIs(t, err, ErrMidiConversionUnavailable)
 
@@ -50,6 +50,63 @@ func TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite(t 
 	require.NoError(t, readErr)
 	assert.Equal(t, scriptSource, string(content))
 	assert.NotContains(t, string(content), ".ogg")
+}
+
+// TestBuildPipeline_FinalizeConvertedTree_RemoveStaleVideoSourceFilesPrecedesNormalize は
+// CONVERTフェーズの後処理において、動画の旧拡張子ファイル削除
+// (removeStaleVideoSourceFiles)がファイル名正規化(normalizeCriticalFilenames、
+// finalizeConvertedTreeの最後のステップ)より先に実行されるという順序不変
+// 条件を固定する。MIDI変換とスクリプト調整の順序を固定する既存テスト
+// （本ファイル上部）と同じくfinalizeConvertedTree自体を呼び出して検証する。
+//
+// why: normalizeCriticalFilenamesが先に走ると、大文字拡張子の旧ファイル
+// (例: OP.WMV)が小文字にリネームされる。removeStaleVideoSourceFilesは
+// summaryが記録した元のケース(.WMV)で旧ファイルパスを再構築するため、
+// 既にリネーム済みだと削除に失敗し(best-effortで握りつぶされ)、旧ファイルが
+// 永続的に残ってしまう。
+func TestBuildPipeline_FinalizeConvertedTree_RemoveStaleVideoSourceFilesPrecedesNormalize(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	skipIfCaseInsensitiveFS(t, dir)
+
+	staleFile := filepath.Join(dir, "OP.WMV")
+	convertedFile := filepath.Join(dir, "OP.mpg")
+	require.NoError(t, os.WriteFile(staleFile, []byte("raw copy from copyTree"), 0o600))
+	require.NoError(t, os.WriteFile(convertedFile, []byte("converted mpeg-ps"), 0o600))
+
+	// why not: copyPolyfillFiles(finalizeConvertedTreeの一部)は
+	// system/font.ttfが無い場合に実ネットワークへフォントダウンロードを試みる
+	// (copyFontFile参照)。あらかじめsystem/font.ttfを用意しその既存ファイル
+	// ガードを通すことで、finalizeConvertedTreeを実ネットワークに触れず最後
+	// まで実行できるようにする（本ファイル冒頭のalwaysFailRoundTripper/
+	// offlineFontFetcherが実ネットワークを避けているのと同じ方針）。
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "system"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "system", "font.ttf"), []byte("stub font"), 0o600))
+
+	summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+		{
+			SourcePath: filepath.Join(dir, "extract", "OP.WMV"),
+			DestPath:   convertedFile,
+			Status:     converter.StatusSuccess,
+		},
+	}}
+
+	p := newTestPipeline(t)
+	midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, fakeCommandRunner{})
+
+	require.NoError(t, p.finalizeConvertedTree(dir, summary, midiConverter))
+
+	// removeStaleVideoSourceFilesがnormalizeCriticalFilenamesより後に走ると、
+	// 大文字のOP.WMVは既にnormalizeCriticalFilenamesによって小文字の
+	// "op.wmv"へリネームされている。summaryが記録した元のケース(.WMV)で
+	// 削除を試みても"OP.WMV"はもう存在せず削除に失敗し(best-effortで
+	// 握りつぶされ)、リネーム後の"op.wmv"が残ってしまう。両方の表記を
+	// 確認することで、順序が入れ替わった場合にこのテストが実際に落ちる
+	// ことを保証する。
+	assert.NoFileExists(t, staleFile)
+	assert.NoFileExists(t, filepath.Join(dir, "op.wmv"))
+	assert.FileExists(t, filepath.Join(dir, "op.mpg"))
 }
 
 // TestBuildPipeline_NewMidiConverter はConfig.SoundfontPathがMIDI変換器へ

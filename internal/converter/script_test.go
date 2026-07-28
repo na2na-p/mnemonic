@@ -603,6 +603,89 @@ func TestScriptAdjuster_MidiRules(t *testing.T) {
 	})
 }
 
+// TestScriptAdjuster_VideoRules はVideoConverterが対象とする入力拡張子
+// (.wmv/.avi/.mpeg)の参照を.mpgへ書き換えるルールをテストする。
+// VideoConverterは変換後、常にMPEG-PS(.mpg)を出力するため（video.goの
+// GetOutputExtension参照）、スクリプト側の参照も同じ拡張子を指す必要がある。
+func TestScriptAdjuster_VideoRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: .wmv参照をダブルクォートで.mpgに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[movie storage="op.wmv" layer=0]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"op.mpg"`)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: .avi参照をシングルクォートで.mpgに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[movie storage='op.avi' layer=0]"
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, "'op.mpg'")
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: .mpeg参照を.mpgに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[movie storage="op.mpeg" layer=0]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"op.mpg"`)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: 大文字拡張子(.WMV)の参照も小文字.mpgに変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[movie storage="OP.WMV" layer=0]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"OP.mpg"`)
+		assert.GreaterOrEqual(t, count, 1)
+	})
+
+	t.Run("正常系: 既に.mpg参照の場合は無変換で変化しない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := `[movie storage="op.mpg" layer=0]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("正常系: 複数の動画参照を変換する", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		content := "[movie storage=\"op.wmv\" layer=0]\n" +
+			"[movie storage=\"ed.avi\" layer=0]\n" +
+			"[movie storage=\"insert.mpeg\" layer=0]\n"
+
+		adjusted, _ := adjuster.AdjustContent(content)
+
+		assert.Contains(t, adjusted, `"op.mpg"`)
+		assert.Contains(t, adjusted, `"ed.mpg"`)
+		assert.Contains(t, adjusted, `"insert.mpg"`)
+	})
+}
+
 // TestScriptAdjuster_MidiOutRule はWaveSoundBuffer.midiOut呼び出しの
 // 空文置換ルールをテストする。
 //
@@ -1013,6 +1096,9 @@ func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
 		"MIDI参照をOGGに変換（.mid → .ogg）",
 		"MIDI参照をOGGに変換（.midi → .ogg）",
 		"MIDI検索パターンを修正（.mid.ogg → .ogg）",
+		"動画参照をMPEGに変換（.wmv → .mpg）",
+		"動画参照をMPEGに変換（.avi → .mpg）",
+		"動画参照をMPEGに変換（.mpeg → .mpg）",
 		"extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
 		"wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
 		"krmovie.dllをコメントアウト（krkrsdl2未対応）",
@@ -1026,6 +1112,61 @@ func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
 	}
 
 	assert.Equal(t, wantDescriptions, descriptions)
+}
+
+// TestDefaultRulesWithoutVideoExtensions はScriptAdjusterに渡すルールから
+// 動画拡張子書き換えルール(.wmv/.avi/.mpeg → .mpg)だけを除いた集合を
+// 取得できることを検証する（--skip-video時にpipelineパッケージから
+// 呼び出される想定）。
+func TestDefaultRulesWithoutVideoExtensions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: 動画拡張子ルールの3件のみが除外される", func(t *testing.T) {
+		t.Parallel()
+
+		filtered := converter.DefaultRulesWithoutVideoExtensions()
+
+		assert.Len(t, filtered, len(converter.DefaultRules)-3)
+		for _, rule := range filtered {
+			assert.NotContains(t, rule.Description, "動画参照をMPEGに変換")
+		}
+	})
+
+	t.Run("正常系: 動画拡張子ルール以外は残る（MIDIルールは除外されない）", func(t *testing.T) {
+		t.Parallel()
+
+		filtered := converter.DefaultRulesWithoutVideoExtensions()
+
+		descriptions := make([]string, 0, len(filtered))
+		for _, rule := range filtered {
+			descriptions = append(descriptions, rule.Description)
+		}
+
+		assert.Contains(t, descriptions, "MIDI参照をOGGに変換（.mid → .ogg）")
+		assert.Contains(t, descriptions, "レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）")
+	})
+
+	t.Run("正常系: 除外後のルールを渡すと.wmv参照が書き換わらない", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(converter.DefaultRulesWithoutVideoExtensions(), true)
+		content := `[movie storage="op.wmv" layer=0]`
+
+		adjusted, count := adjuster.AdjustContent(content)
+
+		assert.Equal(t, content, adjusted)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("正常系: DefaultRules自体は変更されない（呼び出しごとに独立したコピーを返す）", func(t *testing.T) {
+		t.Parallel()
+
+		before := len(converter.DefaultRules)
+
+		_ = converter.DefaultRulesWithoutVideoExtensions()
+
+		assert.Len(t, converter.DefaultRules, before)
+	})
 }
 
 func TestScriptAdjuster_ApplyMessageLayerCompat(t *testing.T) {
