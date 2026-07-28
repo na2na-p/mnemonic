@@ -1233,17 +1233,24 @@ class __internal_KAGParser
 
 			if (!this.ignoreCR)
 			{
+				// why not(上流のkrkrsdl2/kag3をそのまま使わない理由): 上流の条件は
+				// curLineStr[curPos]の参照とcurLineStr.length === curPosを同時に
+				// 要求しており、添字が末尾を指すとき文字は存在しないため決して
+				// 成立しない。その結果、行末の "\\"（改行無視）が消費されず画面に
+				// そのまま描画される。[p]判定も curPos-2 を "p" と "]" の両方と
+				// 比較しており同様に成立しない。ここでは末尾文字を正しく参照する。
 				if (
 					(
-						this.curLineStr[this.curPos] === "\\" &&
-						this.curLineStr.length === this.curPos
+						this.curLineStr.length >= 1 &&
+						this.curLineStr[this.curLineStr.length - 1] === "\\" &&
+						this.curLineStr.length === this.curPos + 1
 					) ||
 					(
 						this.curLineStr.length === this.curPos &&
 						this.curPos >= 3 &&
 						this.curLineStr[this.curPos - 3] === "[" &&
 						this.curLineStr[this.curPos - 2] === "p" && // for line ending with [p]
-						this.curLineStr[this.curPos - 2] === "]" 
+						this.curLineStr[this.curPos - 1] === "]"
 					)
 				)
 				{
