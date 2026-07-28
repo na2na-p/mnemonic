@@ -2,6 +2,10 @@ package builder_test
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/xml"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -608,6 +612,75 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "AndroidManifest.xmlが見つかりません")
+	})
+
+	t.Run("正常系: screenOrientation属性が無いactivityにsensorLandscapeが注入される", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".KirikiriSDL2Activity">
+        </activity>
+    </application>
+</manifest>
+`)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
+		require.NoError(t, err)
+		assert.Contains(t, string(content), `android:screenOrientation="sensorLandscape"`)
+	})
+
+	t.Run("正常系: 既存のscreenOrientation属性はsensorLandscapeへ置き換えられる", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".KirikiriSDL2Activity" android:screenOrientation="portrait">
+        </activity>
+    </application>
+</manifest>
+`)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
+		require.NoError(t, err)
+		assert.Contains(t, string(content), `android:screenOrientation="sensorLandscape"`)
+		assert.Equal(t, 1, countOccurrences(string(content), `android:screenOrientation="`))
+	})
+
+	t.Run("正常系: screenOrientation注入後も妥当なXMLである", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name=".KirikiriSDL2Activity">
+        </activity>
+    </application>
+</manifest>
+`)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
+		require.NoError(t, err)
+
+		decoder := xml.NewDecoder(bytes.NewReader(content))
+		for {
+			_, tokenErr := decoder.Token()
+			if errors.Is(tokenErr, io.EOF) {
+				break
+			}
+			require.NoError(t, tokenErr, "注入後のAndroidManifest.xmlが妥当なXMLではありません")
+		}
 	})
 }
 

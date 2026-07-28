@@ -484,13 +484,23 @@ var (
 	activityTagPattern         = regexp.MustCompile(`<activity[^>]*(?:>|/>)`)
 	serviceTagPattern          = regexp.MustCompile(`<service[^>]*(?:>|/>)`)
 	receiverTagPattern         = regexp.MustCompile(`<receiver[^>]*(?:>|/>)`)
+	screenOrientationPattern   = regexp.MustCompile(`android:screenOrientation="[^"]*"`)
 )
 
 var applicationTagPattern = regexp.MustCompile(`<application[^>]*>`)
 
+// ScreenOrientationSensorLandscape は起動activityに固定する画面向きの値。
+//
+// why not: 横向き固定（ゲーム画面が4:3のため横向きの方が大きく表示される）
+// とし、plain landscapeではなくsensorLandscapeを選ぶ。寝転んでプレイする際に
+// 上下逆さまに持ち替えても追従してほしい（180度反転）というユーザー要望を、
+// 横向き固定を保ったまま満たすため。
+const ScreenOrientationSensorLandscape = "sensorLandscape"
+
 // updateManifest はAndroidManifest.xmlを更新する
 // （package属性の削除、android:exported="true"の付与、
-// android:extractNativeLibs="true"の付与）。
+// android:extractNativeLibs="true"の付与、activityへの
+// android:screenOrientation="sensorLandscape"の付与）。
 func (p *TemplatePreparer) updateManifest() error {
 	manifestPath := filepath.Join(p.projectDir, "app", "src", "main", "AndroidManifest.xml")
 
@@ -507,7 +517,9 @@ func (p *TemplatePreparer) updateManifest() error {
 	// 動的読み込み）でアクセス可能になる。
 	text = applicationTagPattern.ReplaceAllStringFunc(text, addExtractNativeLibsIfMissing)
 
-	text = activityTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
+	text = activityTagPattern.ReplaceAllStringFunc(text, func(tag string) string {
+		return setScreenOrientation(addExportedIfMissing(tag))
+	})
 	text = serviceTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
 	text = receiverTagPattern.ReplaceAllStringFunc(text, addExportedIfMissing)
 
@@ -516,6 +528,21 @@ func (p *TemplatePreparer) updateManifest() error {
 	}
 
 	return nil
+}
+
+// setScreenOrientation はactivityタグにandroid:screenOrientation属性を
+// ScreenOrientationSensorLandscapeで設定する。既に属性が存在する場合は
+// 値を置き換える（冪等）。
+func setScreenOrientation(tag string) string {
+	if screenOrientationPattern.MatchString(tag) {
+		return screenOrientationPattern.ReplaceAllString(tag, fmt.Sprintf(`android:screenOrientation="%s"`, ScreenOrientationSensorLandscape))
+	}
+
+	if strings.HasSuffix(tag, "/>") {
+		return tag[:len(tag)-2] + fmt.Sprintf(` android:screenOrientation="%s"/>`, ScreenOrientationSensorLandscape)
+	}
+
+	return tag[:len(tag)-1] + fmt.Sprintf(` android:screenOrientation="%s">`, ScreenOrientationSensorLandscape)
 }
 
 // addExtractNativeLibsIfMissing はapplicationタグにandroid:extractNativeLibs
