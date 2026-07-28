@@ -72,6 +72,21 @@ with(global.Window)
 		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "videooverlay_stub.tjs");
 	}
 
+	// Androidメニューバー・オープナーは、fork版krkrsdl2が
+	// System.showSelectListとSystem.setMenuBarCallbackの両方を提供する
+	// 場合にのみ読み込む(標準krkrsdl2/kirikiriZにはどちらのAPIも無く、
+	// 未提供の環境では何もしない)。
+	//
+	// why not("Object"判定): このファイル内の他の存在確認(22, 43, 64, 70,
+	// 77, 90行目)は全て`typeof(...) === "Object"`でネイティブメンバーの
+	// 有無を調べており、実行実績があるのはこの形のみ。存在しないメンバーに
+	// 対するtypeofが本当に"undefined"を返すかはこの環境で検証できないため、
+	// 実行実績のある判定式に合わせる。
+	if (typeof(global.System.showSelectList) === "Object" && typeof(global.System.setMenuBarCallback) === "Object")
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "menuopener.tjs");
+	}
+
 	// Enable alpha channel hold for better transparency handling
 	// This ensures proper alpha blending on Android/krkrsdl2
 	if (typeof(global.System.setArgument) === "Object")
