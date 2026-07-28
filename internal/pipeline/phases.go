@@ -143,9 +143,12 @@ func (b *BuildPipeline) executeConvert() error {
 	// フェーズの失敗として明示的に報告する（「エラーはerrorとして呼び出し元へ
 	// 伝播する」という他フェーズと同じ契約を踏襲する方が、黙って空の変換結果を
 	// 返すより安全なため、Python版の挙動をあえて踏襲しない）。
-	if _, err := manager.ConvertDirectory(b.extractDir, b.convertDir, true); err != nil {
+	summary, err := manager.ConvertDirectory(b.extractDir, b.convertDir, true)
+	if err != nil {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
+
+	removeStaleVideoSourceFiles(summary)
 
 	return b.finalizeConvertedTree(b.convertDir, b.newMidiConverter())
 }

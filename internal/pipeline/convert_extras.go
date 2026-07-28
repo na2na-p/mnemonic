@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -95,6 +96,38 @@ func (b *BuildPipeline) removePluginDirectory(directory string) error {
 	}
 
 	return nil
+}
+
+// removeStaleVideoSourceFiles はVideoConverterが拡張子を変更して変換に成功した
+// ファイルについて、copyTree(実行済みのexecuteConvert冒頭)がconvertDirへ
+// 複製した変換前拡張子の生ファイルを削除する。
+//
+// why: VideoConverter.GetOutputExtensionは常に".mpg"を返すため、.wmv/.avi/
+// .mpeg入力はConversionManagerによって新しい拡張子のファイルとして書き出され、
+// copyTreeが複製した旧拡張子ファイルはconvertDir内に残ったままになる。
+// ScriptAdjusterは動画参照を無条件に.mpgへ書き換えるため、旧ファイルを
+// 残しても参照は解決できる（MIDIがT-220で踏んだ「実体の無いファイルを指す」
+// 不具合とは異なる）。削除失敗をエラーにしないのは、convertMidiFileListの
+// os.Remove(midiFile)と同じ理由: 変換自体は成功しスクリプト参照も解決できる
+// ため、残留は死蔵アセットとしてAPKサイズが増えるだけで実害が無い。
+func removeStaleVideoSourceFiles(summary converter.ConversionSummary) {
+	videoExts := converter.NewVideoConverter(0, nil).SupportedExtensions()
+
+	for _, result := range summary.Results {
+		if result.Status != converter.StatusSuccess {
+			continue
+		}
+
+		sourceExt := filepath.Ext(result.SourcePath)
+		if strings.EqualFold(sourceExt, filepath.Ext(result.DestPath)) {
+			continue
+		}
+		if !slices.Contains(videoExts, strings.ToLower(sourceExt)) {
+			continue
+		}
+
+		_ = os.Remove(withSuffix(result.DestPath, sourceExt))
+	}
 }
 
 // adjustScripts はdirectory配下の全.ks/.tjsファイルにScriptAdjusterを適用する。

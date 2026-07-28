@@ -72,6 +72,30 @@ var DefaultRules = []AdjustmentRule{
 		Replacement: `storage + ".ogg"`,
 		Description: "MIDI検索パターンを修正（.mid.ogg → .ogg）",
 	},
+	// VideoConverterはmpeg1video+mp2への変換後、常に.mpg拡張子で出力する
+	// (video.goのGetOutputExtension参照)。.mpgは対象外のため
+	// (パターンが.mpg自体にマッチせず)無変換で残り、二重変換は起きない。
+	//
+	// why not: 拡張子部分だけ(?i:...)で大文字小文字を無視する。Windows製作の
+	// ゲームは".WMV"のような大文字拡張子を参照することがあり
+	// (VideoConverter.CanConvert/adjustScriptsが拡張子を小文字化して比較する
+	// のと同じ理由)、ここを素のリテラルのままにすると大文字参照だけ書き換えを
+	// 素通りし、実体は常に小文字".mpg"で出力されるため参照が解決できなくなる。
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:wmv)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.wmv → .mpg）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:avi)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.avi → .mpg）",
+	},
+	{
+		Pattern:     `(["'])([^"']*?)\.(?i:mpeg)(["'])`,
+		Replacement: `$1$2.mpg$3`,
+		Description: "動画参照をMPEGに変換（.mpeg → .mpg）",
+	},
 	// loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）。
 	// krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない。
 	// Androidのネイティブライブラリ規約でlibプレフィックスが必要なため、フルネームを指定する。

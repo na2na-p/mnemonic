@@ -509,6 +509,115 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 	})
 }
 
+// TestRemoveStaleVideoSourceFiles はVideoConverterが拡張子を変更して変換に
+// 成功した場合、copyTree由来の旧拡張子ファイルが削除されることを検証する。
+//
+// MIDIがT-220で解決した「変換成功後に旧ファイルを消す」のと同じ方法
+// （convertMidiFileList内のos.Remove(midiFile)、失敗はビルドを落とさない
+// best-effort）を、ConversionManager経由で処理される動画にも適用する。
+func TestRemoveStaleVideoSourceFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: 拡張子が変わった変換成功時は旧ファイルを削除する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staleFile := filepath.Join(dir, "movie.wmv")
+		convertedFile := filepath.Join(dir, "movie.mpg")
+		require.NoError(t, os.WriteFile(staleFile, []byte("raw copy from copyTree"), 0o600))
+		require.NoError(t, os.WriteFile(convertedFile, []byte("converted mpeg-ps"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "movie.wmv"),
+				DestPath:   convertedFile,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.NoFileExists(t, staleFile)
+		assert.FileExists(t, convertedFile)
+	})
+
+	t.Run("正常系: パススルー(拡張子が変わらない)場合は何もしない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		mpgFile := filepath.Join(dir, "movie.mpg")
+		require.NoError(t, os.WriteFile(mpgFile, []byte("mpeg-ps passthrough"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "movie.mpg"),
+				DestPath:   mpgFile,
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.FileExists(t, mpgFile)
+	})
+
+	t.Run("異常系: 変換が失敗した結果は旧ファイルを消さない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staleFile := filepath.Join(dir, "movie.wmv")
+		require.NoError(t, os.WriteFile(staleFile, []byte("raw copy from copyTree"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "movie.wmv"),
+				DestPath:   filepath.Join(dir, "movie.mpg"),
+				Status:     converter.StatusFailed,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.FileExists(t, staleFile)
+	})
+
+	t.Run("正常系: 動画変換器の対象外拡張子は削除しない（スコープ外）", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		staleFile := filepath.Join(dir, "image.tlg")
+		require.NoError(t, os.WriteFile(staleFile, []byte("tlg raw copy"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "image.tlg"),
+				DestPath:   filepath.Join(dir, "image.png"),
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.FileExists(t, staleFile)
+	})
+
+	t.Run("正常系: 旧ファイルが既に存在しなくてもエラーにならない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "movie.avi"),
+				DestPath:   filepath.Join(dir, "movie.mpg"),
+				Status:     converter.StatusSuccess,
+			},
+		}}
+
+		assert.NotPanics(t, func() { removeStaleVideoSourceFiles(summary) })
+	})
+}
+
 // fakeIconExtractor はparser.IconExtractorのテスト用実装。
 type fakeIconExtractor struct {
 	path string
