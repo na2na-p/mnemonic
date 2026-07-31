@@ -249,7 +249,20 @@ func extractZipFileEntry(f *zip.File, destPath string) error {
 	return nil
 }
 
-// updateJavaSource はKirikiriSDL2Activity.javaを拡張版に置き換える。
+// forkJavaSourceRelPath はCIがfork krkrsdl2からテンプレートzipへ梱包する
+// KirikiriSDL2Activity.javaの、projectDirからの相対パス。
+// テンプレート展開後・updateJavaSource呼び出し前の時点で存在している前提。
+var forkJavaSourceRelPath = filepath.Join("app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2", "KirikiriSDL2Activity.java")
+
+// updateJavaSource はfork版KirikiriSDL2Activity.javaを起点に、パッケージ名の
+// 書き換えとmnemonic独自メンバの注入を行い、対象パッケージのディレクトリへ
+// 出力する。
+//
+// why not: 以前はGo定数へ全文を手動移植する方式だったが、fork側で
+// メソッドが追加/変更されるたびに移植が必要になり、忘れるとJNI経由で
+// 呼ばれるメソッド（showSelectList等）がsilentに欠落する事故を繰り返した。
+// fork版ファイルそのものを読み込んで変換する方式にすることで、fork側の
+// 変更が自動的に反映されるようにする。
 func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 	packagePath := strings.ReplaceAll(packageName, ".", "/")
 	javaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", packagePath)
@@ -257,197 +270,51 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
-	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
+	forkJavaFile := filepath.Join(p.projectDir, forkJavaSourceRelPath)
 
-	oldJavaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
-	if _, err := os.Stat(oldJavaDir); err == nil {
-		if err := os.RemoveAll(oldJavaDir); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
+	forkSource, err := os.ReadFile(forkJavaFile) //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
+	if err != nil {
+		return fmt.Errorf("%w: fork版KirikiriSDL2Activity.javaが見つかりません: %s: %w", ErrTemplatePreparer, forkJavaFile, err)
 	}
 
-	javaContent := generateActivityJava(packageName)
+	javaContent, err := generateActivityJava(string(forkSource), packageName)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
 	if err := os.WriteFile(javaFile, []byte(javaContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	oldJavaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
+	if err := os.RemoveAll(oldJavaDir); err != nil {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
 	return nil
 }
 
-// activityJavaTemplate は拡張版KirikiriSDL2Activity.javaのソースコードテンプレート。
-//
-// why not: krkrsdl2ネイティブ側はshowSelectListをJNIのGetStaticMethodIDで
-// 検索して呼び出す。このメソッドを欠いたまま出力すると検索が失敗し、
-// 実機では例外を投げずにSDLActivity標準のダイアログへ無言でフォールバックする
-// （呼び出し側はJNIエラーを無視する実装のため、ビルドもクラッシュもしない）。
-// また、setOrientationBisを欠いたまま出力すると、SDL初期化時にSDLActivity側の
-// 実装がAndroidManifest.xmlのandroid:screenOrientation指定を無条件で
-// 上書きし、横向き固定が効かなくなる。
-// テンプレート元のpw/uyjulian/krkrsdl2/KirikiriSDL2Activity.javaにある実装を
-// このパッケージ名変更後のクラスにも移植し、シグネチャを一致させる。
-const activityJavaTemplate = `package %s;
+// mnemonicJavaImports はfork版ソースには存在しない、mnemonic独自機能
+// （アセットコピー等）が要求するimport群。
+var mnemonicJavaImports = []string{
+	"import android.os.Bundle;",
+	"import android.content.pm.ApplicationInfo;",
+	"import android.content.res.AssetManager;",
+	"import android.util.Log;",
+	"import java.io.File;",
+	"import java.io.FileOutputStream;",
+	"import java.io.IOException;",
+	"import java.io.InputStream;",
+	"import java.io.OutputStream;",
+}
 
-import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.DialogInterface;
-import android.content.pm.ActivityInfo;
-import android.content.pm.PackageManager;
-import android.os.Bundle;
-import android.content.pm.ApplicationInfo;
-import android.content.res.AssetManager;
-import android.util.Log;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import org.libsdl.app.SDLActivity;
-
-/**
- * KirikiriSDL2用のメインアクティビティ
- *
- * アプリ起動時にassets/data/配下のゲームファイルを
- * 内部ストレージにコピーしてkrkrsdl2が読み込めるようにする。
- */
-public class KirikiriSDL2Activity extends SDLActivity {
+// mnemonicActivityMembers はmnemonic独自のクラスメンバ（フィールド/メソッド）。
+// fork版KirikiriSDL2Activity.javaのクラス閉じ括弧の直前に注入される。
+const mnemonicActivityMembers = `
     private static final String TAG = "KirikiriSDL2";
     private static final String ASSETS_DATA_DIR = "data";
     private static String sNativeLibDir = null;
-
-    // Screen orientation
-
-    /**
-     * This can be overridden (see SDLActivity.setOrientationBis()).
-     * SDLActivity.setOrientation() (called from native code via JNI) always
-     * dispatches through this instance method rather than calling
-     * setRequestedOrientation() itself, specifically so subclasses can
-     * intervene -- overriding here, rather than setOrientation(), is the
-     * documented hook point.
-     *
-     * Why not let SDL decide: setOrientationBis() calls
-     * setRequestedOrientation(SCREEN_ORIENTATION_FULL_SENSOR) whenever
-     * SDL_HINT_ORIENTATIONS isn't set, which silently overrides any
-     * orientation lock declared in AndroidManifest.xml (e.g. a
-     * build-injected android:screenOrientation="sensorLandscape") the
-     * moment SDL starts up. When the Manifest declares an explicit
-     * orientation for this Activity, keep it and skip SDL's override
-     * entirely; only fall back to SDL's own heuristic (window aspect ratio
-     * / SDL_HINT_ORIENTATIONS) when the Manifest leaves it unspecified.
-     */
-    @Override
-    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
-        try {
-            int manifestOrientation = getPackageManager()
-                    .getActivityInfo(getComponentName(), 0).screenOrientation;
-            if (manifestOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
-                return;
-            }
-        } catch (PackageManager.NameNotFoundException ex) {
-            ex.printStackTrace();
-        }
-        super.setOrientationBis(w, h, resizable, hint);
-    }
-
-    // Select-list dialog
-
-    /** Result of the current select-list dialog. Also used for blocking the calling thread. */
-    private static final int[] selectListSelection = new int[1];
-    /**
-     * Set alongside a notify() on selectListSelection, and only there --
-     * guards against a spurious wakeup returning from wait() before
-     * onDismiss (or the show()-failure fallback below) actually ran.
-     */
-    private static final boolean[] selectListDone = new boolean[1];
-
-    /**
-     * This method is called by SDL using JNI.
-     * Shows an Android-native, scrollable, cancelable list dialog on the UI
-     * thread and blocks the calling thread until an item is tapped or the
-     * dialog is dismissed (back key, outside tap). This replaces
-     * SDLActivity's own messagebox for list selection: that dialog lays
-     * buttons out in a single non-scrolling horizontal row and hard-codes
-     * setCancelable(false), which on-device pushes a handful of items'
-     * cancel button off-screen and unreachable.
-     * @param title dialog title
-     * @param items list item labels
-     * @return the tapped 0-based index, or -1 if cancelled
-     */
-    public static int showSelectList(final String title, final String[] items) {
-        selectListSelection[0] = -1;
-        selectListDone[0] = false;
-
-        final Activity activity = (Activity) getContext();
-        if (activity == null) {
-            return -1;
-        }
-
-        // trigger Dialog creation on UI thread
-
-        activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                // Building/showing the dialog can throw (e.g. the activity
-                // is finishing and the window token is no longer valid) --
-                // unlike SDLActivity's own messagebox, this must not let
-                // that exception skip the notify(), or the calling thread
-                // (already inside wait()) would hang forever with no
-                // dialog on screen to eventually dismiss it.
-                try {
-                    AlertDialog.Builder builder = new AlertDialog.Builder(activity);
-                    builder.setTitle(title);
-                    builder.setItems(items, new DialogInterface.OnClickListener() {
-                        @Override
-                        public void onClick(DialogInterface dialog, int which) {
-                            selectListSelection[0] = which;
-                        }
-                    });
-                    builder.setCancelable(true);
-                    builder.setOnCancelListener(new DialogInterface.OnCancelListener() {
-                        @Override
-                        public void onCancel(DialogInterface dialog) {
-                            selectListSelection[0] = -1;
-                        }
-                    });
-
-                    AlertDialog dialog = builder.create();
-                    dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
-                        @Override
-                        public void onDismiss(DialogInterface unused) {
-                            synchronized (selectListSelection) {
-                                selectListDone[0] = true;
-                                selectListSelection.notify();
-                            }
-                        }
-                    });
-                    dialog.show();
-                } catch (Exception ex) {
-                    ex.printStackTrace();
-                    synchronized (selectListSelection) {
-                        selectListSelection[0] = -1;
-                        selectListDone[0] = true;
-                        selectListSelection.notify();
-                    }
-                }
-            }
-        });
-
-        // block the calling thread
-
-        synchronized (selectListSelection) {
-            while (!selectListDone[0]) {
-                try {
-                    selectListSelection.wait();
-                } catch (InterruptedException ex) {
-                    ex.printStackTrace();
-                    return -1;
-                }
-            }
-        }
-
-        // return selected value
-
-        return selectListSelection[0];
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -570,11 +437,63 @@ public class KirikiriSDL2Activity extends SDLActivity {
             }
         }
     }
-}
 `
 
-func generateActivityJava(packageName string) string {
-	return fmt.Sprintf(activityJavaTemplate, packageName)
+// javaPackageDeclPattern はJavaソース先頭のpackage宣言にマッチする。
+var javaPackageDeclPattern = regexp.MustCompile(`^package\s+[A-Za-z_][\w.]*;`)
+
+// javaImportLinePattern はJavaのimport文1行にマッチする。
+var javaImportLinePattern = regexp.MustCompile(`(?m)^import\s+[\w.]+;\s*$`)
+
+// generateActivityJava はfork版KirikiriSDL2Activity.javaのソース(forkSource)を
+// 起点に、パッケージ名の書き換えとmnemonic独自メンバの注入を行う。
+//
+// why not: 注入アンカーとして「クラス宣言の直後」や「特定メソッドの直前」の
+// ような相対位置を使うと、fork側のフィールド追加やコメント整形の変化で
+// 注入位置がずれる恐れがある。本ファイルは単一のトップレベルpublicクラスの
+// みを含むJavaファイルであるため、ファイル内で最後に現れる閉じ括弧は
+// 必ずそのクラス自身の閉じ括弧になる。この位置をアンカーにすることで、
+// fork側の内部的な変更（フィールド追加、コメント変更等）に対して頑健になる。
+func generateActivityJava(forkSource, packageName string) (string, error) {
+	if !javaPackageDeclPattern.MatchString(forkSource) {
+		return "", fmt.Errorf("%w: fork版Javaソースにpackage宣言が見つかりません", ErrTemplatePreparer)
+	}
+
+	content := javaPackageDeclPattern.ReplaceAllString(forkSource, fmt.Sprintf("package %s;", packageName))
+	content = injectMissingJavaImports(content, mnemonicJavaImports)
+
+	lastBrace := strings.LastIndex(content, "}")
+	if lastBrace < 0 {
+		return "", fmt.Errorf("%w: fork版Javaソースにクラスの閉じ括弧が見つかりません", ErrTemplatePreparer)
+	}
+
+	return content[:lastBrace] + mnemonicActivityMembers + content[lastBrace:], nil
+}
+
+// injectMissingJavaImports はcontent内にまだ存在しないimport文を、最後の
+// import文の直後（import文が無い場合はpackage宣言の直後）へ追加する。
+// 既に存在するimportは追加しない（冪等）。
+func injectMissingJavaImports(content string, imports []string) string {
+	var missing []string
+	for _, imp := range imports {
+		if !strings.Contains(content, imp) {
+			missing = append(missing, imp)
+		}
+	}
+	if len(missing) == 0 {
+		return content
+	}
+
+	insertAt := len(content)
+	if matches := javaImportLinePattern.FindAllStringIndex(content, -1); len(matches) > 0 {
+		insertAt = matches[len(matches)-1][1]
+	} else if idx := javaPackageDeclPattern.FindStringIndex(content); idx != nil {
+		insertAt = idx[1]
+	}
+
+	insertion := "\n" + strings.Join(missing, "\n")
+
+	return content[:insertAt] + insertion + content[insertAt:]
 }
 
 var (

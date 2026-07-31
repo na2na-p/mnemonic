@@ -45,6 +45,171 @@ func addMinimalBuildGradle(t *testing.T, projectDir string) {
 	require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte("android {\n}\n"), 0o600))
 }
 
+// realForkKirikiriSDL2ActivityJava はfork krkrsdl2リポジトリ
+// (android-project/app/src/main/java/pw/uyjulian/krkrsdl2/KirikiriSDL2Activity.java)
+// の実際の内容そのもの。テンプレートzipがprojectDir配下に展開した状態を
+// 模したフィクスチャとして使う（updateJavaSourceの入力契約の結合確認）。
+const realForkKirikiriSDL2ActivityJava = `package pw.uyjulian.krkrsdl2;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+
+import org.libsdl.app.SDLActivity;
+
+public class KirikiriSDL2Activity extends SDLActivity {
+
+    // Screen orientation
+
+    /**
+     * This can be overridden (see SDLActivity.setOrientationBis()).
+     * SDLActivity.setOrientation() (called from native code via JNI) always
+     * dispatches through this instance method rather than calling
+     * setRequestedOrientation() itself, specifically so subclasses can
+     * intervene -- overriding here, rather than setOrientation(), is the
+     * documented hook point.
+     *
+     * Why not let SDL decide: setOrientationBis() calls
+     * setRequestedOrientation(SCREEN_ORIENTATION_FULL_SENSOR) whenever
+     * SDL_HINT_ORIENTATIONS isn't set, which silently overrides any
+     * orientation lock declared in AndroidManifest.xml (e.g. a
+     * build-injected android:screenOrientation="sensorLandscape") the
+     * moment SDL starts up. When the Manifest declares an explicit
+     * orientation for this Activity, keep it and skip SDL's override
+     * entirely; only fall back to SDL's own heuristic (window aspect ratio
+     * / SDL_HINT_ORIENTATIONS) when the Manifest leaves it unspecified.
+     */
+    @Override
+    public void setOrientationBis(int w, int h, boolean resizable, String hint) {
+        try {
+            int manifestOrientation = getPackageManager()
+                    .getActivityInfo(getComponentName(), 0).screenOrientation;
+            if (manifestOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                return;
+            }
+        } catch (PackageManager.NameNotFoundException ex) {
+            ex.printStackTrace();
+        }
+        super.setOrientationBis(w, h, resizable, hint);
+    }
+
+    // Select-list dialog
+
+    /** Result of the current select-list dialog. Also used for blocking the calling thread. */
+    private static final int[] selectListSelection = new int[1];
+    /**
+     * Set alongside a notify() on selectListSelection, and only there --
+     * guards against a spurious wakeup returning from wait() before
+     * onDismiss (or the show()-failure fallback below) actually ran.
+     */
+    private static final boolean[] selectListDone = new boolean[1];
+
+    /**
+     * This method is called by SDL using JNI.
+     * Shows an Android-native, scrollable, cancelable list dialog on the UI
+     * thread and blocks the calling thread until an item is tapped or the
+     * dialog is dismissed (back key, outside tap). This replaces
+     * SDLActivity's own messagebox for list selection: that dialog lays
+     * buttons out in a single non-scrolling horizontal row and hard-codes
+     * setCancelable(false), which on-device pushes a handful of items'
+     * cancel button off-screen and unreachable.
+     * @param title dialog title
+     * @param items list item labels
+     * @return the tapped 0-based index, or -1 if cancelled
+     */
+    public static int showSelectList(final String title, final String[] items) {
+        selectListSelection[0] = -1;
+        selectListDone[0] = false;
+
+        final Activity activity = (Activity) getContext();
+        if (activity == null) {
+            return -1;
+        }
+
+        // trigger Dialog creation on UI thread
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                // Building/showing the dialog can throw (e.g. the activity
+                // is finishing and the window token is no longer valid) --
+                // unlike SDLActivity's own messagebox, this must not let
+                // that exception skip the notify(), or the calling thread
+                // (already inside wait()) would hang forever with no
+                // dialog on screen to eventually dismiss it.
+                try {
+                    AlertDialog.Builder builder = new AlertDialog.Builder(activity);
+                    builder.setTitle(title);
+                    builder.setItems(items, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            selectListSelection[0] = which;
+                        }
+                    });
+                    builder.setCancelable(true);
+                    builder.setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface dialog) {
+                            selectListSelection[0] = -1;
+                        }
+                    });
+
+                    AlertDialog dialog = builder.create();
+                    dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+                        @Override
+                        public void onDismiss(DialogInterface unused) {
+                            synchronized (selectListSelection) {
+                                selectListDone[0] = true;
+                                selectListSelection.notify();
+                            }
+                        }
+                    });
+                    dialog.show();
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    synchronized (selectListSelection) {
+                        selectListSelection[0] = -1;
+                        selectListDone[0] = true;
+                        selectListSelection.notify();
+                    }
+                }
+            }
+        });
+
+        // block the calling thread
+
+        synchronized (selectListSelection) {
+            while (!selectListDone[0]) {
+                try {
+                    selectListSelection.wait();
+                } catch (InterruptedException ex) {
+                    ex.printStackTrace();
+                    return -1;
+                }
+            }
+        }
+
+        // return selected value
+
+        return selectListSelection[0];
+    }
+}
+`
+
+// addForkJavaSource はprojectDir配下に、CIがfork krkrsdl2から梱包する
+// テンプレートzipが展開済みであることを模して、fork版
+// KirikiriSDL2Activity.javaをapp/src/main/java/pw/uyjulian/krkrsdl2/へ
+// 配置する。updateJavaSourceはこのファイルの存在を前提とする。
+func addForkJavaSource(t *testing.T, projectDir string) {
+	t.Helper()
+
+	forkJavaDir := filepath.Join(projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
+	require.NoError(t, os.MkdirAll(forkJavaDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(forkJavaDir, "KirikiriSDL2Activity.java"), []byte(realForkKirikiriSDL2ActivityJava), 0o600))
+}
+
 // testSDL2Cache はSDL2 Javaソース一式を持つ、有効なSDL2SourceCacheを返す。
 //
 // why: TemplatePreparer.Prepareはfetch_sdl2_sources()を無条件に呼ぶため、
@@ -124,6 +289,7 @@ android {
     </application>
 </manifest>
 `), 0o600))
+		addForkJavaSource(t, projectDir)
 
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
@@ -178,6 +344,7 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 		})
 		addMinimalBuildGradle(t, projectDir)
 		addMinimalManifest(t, projectDir)
+		addForkJavaSource(t, projectDir)
 
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 
@@ -257,6 +424,7 @@ func TestTemplatePreparer_ExtractJNILibs(t *testing.T) {
 				})
 				addMinimalBuildGradle(t, projectDir)
 				addMinimalManifest(t, projectDir)
+				addForkJavaSource(t, projectDir)
 
 				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 				require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
@@ -280,6 +448,7 @@ func newProjectWithAPK(t *testing.T) string {
 	writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{
 		"lib/arm64-v8a/libmain.so": []byte("so content"),
 	})
+	addForkJavaSource(t, projectDir)
 
 	return projectDir
 }
@@ -319,13 +488,16 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		}
 	})
 
-	t.Run("正常系: 古いJavaディレクトリが削除される", func(t *testing.T) {
+	t.Run("正常系: fork版ソースのディレクトリ(pw/uyjulian/krkrsdl2)が消費後に削除される", func(t *testing.T) {
 		t.Parallel()
 
+		// newFullyPreparableProjectがテンプレートzip展開後の状態を模して
+		// 配置するfork版ソース(addForkJavaSource)は、変換元として読み込まれた
+		// 後は不要になる。生成後のAndroidプロジェクトに重複したソースディレクトリが
+		// 残らないことを確認する。
 		projectDir := newFullyPreparableProject(t)
 		oldJavaDir := filepath.Join(projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
-		require.NoError(t, os.MkdirAll(oldJavaDir, 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(oldJavaDir, "KirikiriSDL2Activity.java"), []byte("old content"), 0o600))
+		require.DirExists(t, oldJavaDir)
 
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
@@ -417,6 +589,26 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 			assert.Contains(t, text, fragment, "fork側の断片が生成テンプレートから欠落しています: %s", fragment)
 		}
 	})
+
+	t.Run("異常系: fork版KirikiriSDL2Activity.javaがテンプレートに存在しない場合", func(t *testing.T) {
+		t.Parallel()
+
+		// app/src/main/java/pw/uyjulian/krkrsdl2/以下にfork版ソースが無い状態
+		// （テンプレートzip展開に失敗した等）を再現する。
+		projectDir := filepath.Join(t.TempDir(), "project")
+		appDir := filepath.Join(projectDir, "app")
+		manifestDir := filepath.Join(appDir, "src", "main")
+		require.NoError(t, os.MkdirAll(manifestDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte("android {\n}\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "AndroidManifest.xml"), []byte(minimalManifestXML), 0o600))
+		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		err := p.Prepare("com.example.game", "My Game", "", "", nil)
+
+		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
+		assert.ErrorContains(t, err, "fork版KirikiriSDL2Activity.javaが見つかりません")
+	})
 }
 
 func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
@@ -430,6 +622,7 @@ func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {
 		require.NoError(t, os.MkdirAll(appDir, 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte(content), 0o600))
 		addMinimalManifest(t, projectDir)
+		addForkJavaSource(t, projectDir)
 
 		return projectDir
 	}
@@ -563,6 +756,7 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 		writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
 		appDir := filepath.Join(projectDir, "app")
 		require.NoError(t, os.WriteFile(filepath.Join(appDir, "build.gradle"), []byte("android {\n}\n"), 0o600))
+		addForkJavaSource(t, projectDir)
 
 		return projectDir
 	}
@@ -748,6 +942,7 @@ func newFullyPreparableProject(t *testing.T) string {
 </manifest>
 `), 0o600))
 	writeZipFile(t, filepath.Join(projectDir, "krkrsdl2_universal.apk"), map[string][]byte{"lib/arm64-v8a/libmain.so": []byte("x")})
+	addForkJavaSource(t, projectDir)
 
 	return projectDir
 }
