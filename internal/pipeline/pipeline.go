@@ -41,12 +41,22 @@ type BuildPipeline struct {
 	// 同じ設計方針。Python版はmocker.patch.object(pipeline, "_execute_phase")で
 	// 同等のテスト分離を行っていた）。
 	executePhase func(Phase) error
+
+	// keystorePath/keystoreValid/keystoreGenerateはデバッグ用キーストアの
+	// 永続化（internal/pipeline/keystore.go）をkeytool実行から切り離して
+	// テストするための差し替え可能フィールド（executePhaseと同じ設計方針）。
+	keystorePath     func() (string, error)
+	keystoreValid    func(path string) bool
+	keystoreGenerate func(path string) error
 }
 
 // NewBuildPipeline はconfigをもとにBuildPipelineを初期化する。
 func NewBuildPipeline(config Config) *BuildPipeline {
 	b := &BuildPipeline{config: config}
 	b.executePhase = b.runPhase
+	b.keystorePath = resolveDebugKeystorePath
+	b.keystoreValid = validateDebugKeystoreFile
+	b.keystoreGenerate = generateDebugKeystoreFile
 
 	return b
 }
