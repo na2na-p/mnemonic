@@ -258,17 +258,22 @@ var forkJavaSourceRelPath = filepath.Join("app", "src", "main", "java", "pw", "u
 // 書き換えとmnemonic独自メンバの注入を行い、対象パッケージのディレクトリへ
 // 出力する。
 //
-// why not: 以前はGo定数へ全文を手動移植する方式だったが、fork側で
-// メソッドが追加/変更されるたびに移植が必要になり、忘れるとJNI経由で
-// 呼ばれるメソッド（showSelectList等）がsilentに欠落する事故を繰り返した。
-// fork版ファイルそのものを読み込んで変換する方式にすることで、fork側の
-// 変更が自動的に反映されるようにする。
+// why not: Go定数への全文手動移植は、fork側でメソッドが追加/変更されても
+// 追従できず、JNI経由で呼ばれるメソッド（showSelectList等）がsilentに
+// 欠落する構造的リスクを常に抱える。fork版ファイルそのものを読み込んで
+// 変換する方式にすることで、fork側の変更が自動的に反映されるようにする。
+//
+// why not（削除と書き込みの順序）: 生成物の書き込みを終えてから
+// oldJavaDir（fork版ファイルの元ディレクトリ）を削除すると、packageNameが
+// "pw.uyjulian.krkrsdl2"自身またはその配下を指すケースでjavaDirと
+// oldJavaDirが同一/包含関係になり、書いたばかりの生成物ごと削除されて
+// しまう（エラーは返らずファイルだけが消える）。fork版ソースは削除前に
+// メモリへ読み込み済みであるため、oldJavaDirの削除を生成物の書き込みより
+// 先に行っても情報は失われない。この順序（読み込み→削除→書き込み）に
+// することで、packageNameの値に関わらず安全にする。
 func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 	packagePath := strings.ReplaceAll(packageName, ".", "/")
 	javaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", packagePath)
-	if err := os.MkdirAll(javaDir, 0o750); err != nil {
-		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-	}
 
 	forkJavaFile := filepath.Join(p.projectDir, forkJavaSourceRelPath)
 
@@ -282,13 +287,20 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
-	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
-	if err := os.WriteFile(javaFile, []byte(javaContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+	// fork版ソースはここまでで読み込み済みのため、oldJavaDirの削除を
+	// javaDirの作成・書き込みより先に行ってよい（package書き換え後の
+	// パスがoldJavaDirと同一/包含関係になるケースへの対処。上のwhy not参照）。
+	oldJavaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
+	if err := os.RemoveAll(oldJavaDir); err != nil {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
-	oldJavaDir := filepath.Join(p.projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2")
-	if err := os.RemoveAll(oldJavaDir); err != nil {
+	if err := os.MkdirAll(javaDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
+	if err := os.WriteFile(javaFile, []byte(javaContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
@@ -445,6 +457,24 @@ var javaPackageDeclPattern = regexp.MustCompile(`^package\s+[A-Za-z_][\w.]*;`)
 // javaImportLinePattern はJavaのimport文1行にマッチする。
 var javaImportLinePattern = regexp.MustCompile(`(?m)^import\s+[\w.]+;\s*$`)
 
+// activityClassDeclPattern はKirikiriSDL2Activityのクラス宣言行にマッチする。
+// クラス名はファイル名（KirikiriSDL2Activity.java）およびmnemonicActivityMembers
+// が注入する独自メンバのシグネチャと結びついているため、このクラス名自体は
+// fork側で変わらない前提を既に他の箇所（ファイル名決め打ち等）でも置いている。
+// そのため、この文字列をJavadoc挿入位置のアンカーに使うことは既存の前提の
+// 範囲内であり、追加のリスクにはならない。
+var activityClassDeclPattern = regexp.MustCompile(`(?m)^public class KirikiriSDL2Activity extends SDLActivity \{`)
+
+// activityClassJavadoc はKirikiriSDL2Activityクラスのクラスレベルdocコメント。
+// mnemonic独自機能（起動時のアセットコピー）を説明する、mnemonic独自の記述。
+const activityClassJavadoc = `/**
+ * KirikiriSDL2用のメインアクティビティ
+ *
+ * アプリ起動時にassets/data/配下のゲームファイルを
+ * 内部ストレージにコピーしてkrkrsdl2が読み込めるようにする。
+ */
+`
+
 // generateActivityJava はfork版KirikiriSDL2Activity.javaのソース(forkSource)を
 // 起点に、パッケージ名の書き換えとmnemonic独自メンバの注入を行う。
 //
@@ -461,6 +491,7 @@ func generateActivityJava(forkSource, packageName string) (string, error) {
 
 	content := javaPackageDeclPattern.ReplaceAllString(forkSource, fmt.Sprintf("package %s;", packageName))
 	content = injectMissingJavaImports(content, mnemonicJavaImports)
+	content = injectActivityClassJavadoc(content)
 
 	lastBrace := strings.LastIndex(content, "}")
 	if lastBrace < 0 {
@@ -468,6 +499,22 @@ func generateActivityJava(forkSource, packageName string) (string, error) {
 	}
 
 	return content[:lastBrace] + mnemonicActivityMembers + content[lastBrace:], nil
+}
+
+// injectActivityClassJavadoc はKirikiriSDL2Activityのクラス宣言直前へ
+// activityClassJavadocを挿入する（冪等: 既に挿入済み、またはアンカーとなる
+// クラス宣言が見つからない場合は何もしない）。
+func injectActivityClassJavadoc(content string) string {
+	if strings.Contains(content, activityClassJavadoc) {
+		return content
+	}
+
+	idx := activityClassDeclPattern.FindStringIndex(content)
+	if idx == nil {
+		return content
+	}
+
+	return content[:idx[0]] + activityClassJavadoc + content[idx[0]:]
 }
 
 // injectMissingJavaImports はcontent内にまだ存在しないimport文を、最後の

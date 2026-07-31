@@ -609,6 +609,30 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		require.ErrorIs(t, err, builder.ErrTemplatePreparer)
 		assert.ErrorContains(t, err, "fork版KirikiriSDL2Activity.javaが見つかりません")
 	})
+
+	t.Run("正常系: packageNameがpw.uyjulian.krkrsdl2自身でも生成ファイルが残る", func(t *testing.T) {
+		t.Parallel()
+
+		// レビュー指摘の再現シナリオ: 新Java書き込み後にoldJavaDir
+		// (pw/uyjulian/krkrsdl2)を無条件削除する実装だと、packageNameが
+		// "pw.uyjulian.krkrsdl2"自身の場合はjavaDir==oldJavaDirとなり、
+		// 書いたばかりの生成ファイルがエラーなしで削除されてしまう
+		// （Prepareはnilを返すのにファイルが存在しない状態になる）。
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("pw.uyjulian.krkrsdl2", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2", "KirikiriSDL2Activity.java")
+		require.FileExists(t, javaFile)
+
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+		text := string(content)
+		assert.Contains(t, text, "package pw.uyjulian.krkrsdl2;")
+		assert.Contains(t, text, "public static int showSelectList(")
+		assert.Contains(t, text, "protected void onCreate(Bundle savedInstanceState)")
+	})
 }
 
 func TestTemplatePreparer_UpdateBuildGradle(t *testing.T) {

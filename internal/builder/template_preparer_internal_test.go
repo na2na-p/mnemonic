@@ -313,6 +313,16 @@ func TestGenerateActivityJava(t *testing.T) {
 		assert.Equal(t, strings.Count(got, "{"), strings.Count(got, "}"), "括弧の数が一致しません")
 	})
 
+	t.Run("正常系: クラスレベルのdocコメントが注入される", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "KirikiriSDL2用のメインアクティビティ")
+		assert.Equal(t, 1, strings.Count(got, "KirikiriSDL2用のメインアクティビティ"), "docコメントが重複している")
+	})
+
 	t.Run("異常系: package宣言が無いソースはエラーになる", func(t *testing.T) {
 		t.Parallel()
 
