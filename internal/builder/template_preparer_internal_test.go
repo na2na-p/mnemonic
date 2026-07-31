@@ -4,6 +4,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,5 +238,97 @@ func TestTemplatePreparer_CopyPluginsToJNILibs(t *testing.T) {
 		p := NewTemplatePreparer(projectDir, nil)
 
 		require.NoError(t, p.copyPluginsToJNILibs(pluginsInfo))
+	})
+}
+
+// miniForkJavaFixture はfork版KirikiriSDL2Activity.javaの構造を模した最小限の
+// フィクスチャ。generateActivityJavaの変換ロジック（fork由来メソッドの保持、
+// パッケージ書き換え、独自メンバの注入）を単体で検証するために使う。
+const miniForkJavaFixture = `package pw.uyjulian.krkrsdl2;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import org.libsdl.app.SDLActivity;
+
+public class KirikiriSDL2Activity extends SDLActivity {
+    public static int showSelectList(final String title, final String[] items) {
+        return -1;
+    }
+}
+`
+
+// TestGenerateActivityJava はgenerateActivityJavaの変換ロジックを検証する。
+func TestGenerateActivityJava(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: package宣言が対象パッケージへ書き換えられる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "package com.example.game;")
+		assert.NotContains(t, got, "package pw.uyjulian.krkrsdl2;")
+	})
+
+	t.Run("正常系: fork由来のメソッドが保持される", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "public static int showSelectList(final String title, final String[] items)")
+		assert.Contains(t, got, "import android.app.AlertDialog;")
+	})
+
+	t.Run("正常系: mnemonic独自メンバが注入される", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "protected void onCreate(Bundle savedInstanceState)")
+		assert.Contains(t, got, "protected String[] getArguments()")
+		assert.Contains(t, got, "private void copyAssetsToInternal()")
+		assert.Contains(t, got, `"-holdalpha=yes"`)
+	})
+
+	t.Run("正常系: mnemonic独自importが重複なく追加される", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		for _, imp := range mnemonicJavaImports {
+			assert.Equal(t, 1, strings.Count(got, imp), "import %sが重複または欠落している", imp)
+		}
+	})
+
+	t.Run("正常系: 括弧の対応が保たれ構文的に妥当", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Equal(t, strings.Count(got, "{"), strings.Count(got, "}"), "括弧の数が一致しません")
+	})
+
+	t.Run("正常系: クラスレベルのdocコメントが注入される", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "KirikiriSDL2用のメインアクティビティ")
+		assert.Equal(t, 1, strings.Count(got, "KirikiriSDL2用のメインアクティビティ"), "docコメントが重複している")
+	})
+
+	t.Run("異常系: package宣言が無いソースはエラーになる", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := generateActivityJava("public class Foo {}\n", "com.example.game")
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrTemplatePreparer)
 	})
 }
