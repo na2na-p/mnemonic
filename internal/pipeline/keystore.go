@@ -81,6 +81,13 @@ func validateDebugKeystoreFile(path string) bool {
 
 // generateDebugKeystoreFile はkeytoolコマンドを使用してdestPathにデバッグ用の自己署名キーストアを生成する。
 func generateDebugKeystoreFile(destPath string) error {
+	// why not: keytool -genkeypairはdestPathに既存の（破損した）ファイルがあると
+	// それをキーストアとしてロードしようとしてKeyStoreExceptionで失敗する。
+	// 呼び出し側の削除に依存せず、この関数単体で安全に再生成できるようにする。
+	if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("既存キーストアの削除に失敗しました: %w", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), debugKeystoreTimeout)
 	defer cancel()
 
