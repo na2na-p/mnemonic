@@ -229,7 +229,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		assert.Contains(t, result.Message, "サウンドフォント")
 	})
 
-	t.Run("正常系: MIDI変換が成功する", func(t *testing.T) {
+	t.Run("正常系: MIDI変換が成功する(末尾無音なし)", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -245,6 +245,9 @@ func TestMidiConverter_Convert(t *testing.T) {
 		runner.EXPECT().
 			Run(gomock.Any(), "fluidsynth", "-ni", "-g", "1.0", "-r", "44100", "-F", gomock.Any(), soundfont, source).
 			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
+			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
 			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
@@ -262,6 +265,108 @@ func TestMidiConverter_Convert(t *testing.T) {
 		assert.Equal(t, dest, result.DestPath)
 		assert.Positive(t, result.BytesBefore)
 		assert.Positive(t, result.BytesAfter)
+	})
+
+	t.Run("正常系: 末尾無音を検出した場合ffmpegに-tでトリム指定を渡す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		soundfont := filepath.Join(dir, "test.sf2")
+		writeFile(t, soundfont, []byte("soundfont data"))
+
+		source := filepath.Join(dir, "input.mid")
+		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+		dest := filepath.Join(dir, "output.ogg")
+
+		ctrl := gomock.NewController(t)
+		runner := NewMockCommandRunner(ctrl)
+		runner.EXPECT().
+			Run(gomock.Any(), "fluidsynth", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
+			Return([]byte(`{"frames":[{"tags":{"lavfi.silence_start":"10.5"}}]}`), nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", "-t", "10.800", dest).
+			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
+				writeFile(t, dest, []byte("OggS"))
+
+				return nil, nil
+			})
+
+		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+	})
+
+	t.Run("正常系: 末尾が無音で終わらない場合トリムしない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		soundfont := filepath.Join(dir, "test.sf2")
+		writeFile(t, soundfont, []byte("soundfont data"))
+
+		source := filepath.Join(dir, "input.mid")
+		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+		dest := filepath.Join(dir, "output.ogg")
+
+		ctrl := gomock.NewController(t)
+		runner := NewMockCommandRunner(ctrl)
+		runner.EXPECT().
+			Run(gomock.Any(), "fluidsynth", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
+			Return([]byte(`{"frames":[{"tags":{"lavfi.silence_start":"1.0"}},{"tags":{"lavfi.silence_end":"1.5"}}]}`), nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
+			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
+				writeFile(t, dest, []byte("OggS"))
+
+				return nil, nil
+			})
+
+		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+	})
+
+	t.Run("正常系: 無音検出(ffprobe)が失敗してもトリムをスキップして変換は成功する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		soundfont := filepath.Join(dir, "test.sf2")
+		writeFile(t, soundfont, []byte("soundfont data"))
+
+		source := filepath.Join(dir, "input.mid")
+		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+		dest := filepath.Join(dir, "output.ogg")
+
+		ctrl := gomock.NewController(t)
+		runner := NewMockCommandRunner(ctrl)
+		runner.EXPECT().
+			Run(gomock.Any(), "fluidsynth", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
+			Return(nil, errors.New("ffprobe error"))
+		runner.EXPECT().
+			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
+			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
+				writeFile(t, dest, []byte("OggS"))
+
+				return nil, nil
+			})
+
+		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
 	})
 
 	t.Run("異常系: FluidSynthがエラーを返す場合FAILEDを返す", func(t *testing.T) {
@@ -306,6 +411,9 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "fluidsynth", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(nil, nil)
 		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return([]byte(`{"frames":[{}]}`), nil)
+		runner.EXPECT().
 			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(nil, errors.New("FFmpeg error"))
 
@@ -333,6 +441,9 @@ func TestMidiConverter_Convert(t *testing.T) {
 		runner.EXPECT().
 			Run(gomock.Any(), "fluidsynth", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
 			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
@@ -365,6 +476,9 @@ func TestMidiConverter_Convert(t *testing.T) {
 		runner.EXPECT().
 			Run(gomock.Any(), "fluidsynth", "-ni", "-g", "1.0", "-r", "48000", "-F", gomock.Any(), soundfont, source).
 			Return(nil, nil)
+		runner.EXPECT().
+			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
 			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libopus", "-q:a", "6", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
