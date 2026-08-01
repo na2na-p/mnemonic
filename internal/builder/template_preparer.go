@@ -7,7 +7,6 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -45,6 +44,7 @@ type TemplatePreparer struct {
 	buildGradleUpdater  *buildGradleUpdater
 	manifestUpdater     *manifestUpdater
 	stringsXMLUpdater   *stringsXMLUpdater
+	assetCopier         *assetCopier
 }
 
 // NewTemplatePreparer はTemplatePreparerを初期化する。
@@ -60,6 +60,7 @@ func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *Templat
 		buildGradleUpdater:  newBuildGradleUpdater(projectDir),
 		manifestUpdater:     newManifestUpdater(projectDir),
 		stringsXMLUpdater:   newStringsXMLUpdater(projectDir),
+		assetCopier:         newAssetCopier(projectDir),
 	}
 }
 
@@ -102,7 +103,7 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 	}
 
 	if assetsDir != "" {
-		if err := p.copyAssets(assetsDir); err != nil {
+		if err := p.assetCopier.Copy(assetsDir); err != nil {
 			return err
 		}
 	}
@@ -127,45 +128,6 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 	fetcher := NewSDL2SourceFetcher(0, p.sdl2Cache)
 	if err := fetcher.Fetch(javaDir); err != nil {
 		return fmt.Errorf("%w: %w: %w", ErrTemplatePreparer, ErrSDL2SourceFetch, err)
-	}
-
-	return nil
-}
-
-// copyAssets はゲームファイルをapp/src/main/assets/dataにコピーする（既存ファイルはマージ）。
-func (p *TemplatePreparer) copyAssets(assetsDir string) error {
-	destDir := filepath.Join(p.projectDir, "app", "src", "main", "assets", "data")
-	if err := os.MkdirAll(destDir, 0o750); err != nil {
-		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-	}
-
-	err := filepath.WalkDir(assetsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relPath, err := filepath.Rel(assetsDir, path)
-		if err != nil {
-			return err
-		}
-		if relPath == "." {
-			return nil
-		}
-
-		destPath := filepath.Join(destDir, relPath)
-
-		if d.IsDir() {
-			return os.MkdirAll(destPath, 0o750)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
-			return err
-		}
-
-		return copyFile(path, destPath)
-	})
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
 	return nil
