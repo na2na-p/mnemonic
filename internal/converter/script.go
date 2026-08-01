@@ -164,7 +164,8 @@ var videoExtensionRuleDescriptions = map[string]bool{
 // この戻り値をScriptAdjusterへ渡す。SkipVideo時はVideoConverterが登録され
 // ず動画ファイルは無変換のまま(拡張子も実体も元のまま)convertDirに残るため、
 // DefaultRulesをそのまま適用すると参照だけが.mpgへ書き換わり、実体の無い
-// .mpgを指す不整合が生じる（T-220でMIDIが踏んだのと同じ不具合のクラス）。
+// .mpgを指す不整合が生じる（変換対象アセットの拡張子だけを書き換え、実体の
+// 変換自体は別条件でスキップされるケース全般に共通する不具合のクラス）。
 func DefaultRulesWithoutVideoExtensions() []AdjustmentRule {
 	filtered := make([]AdjustmentRule, 0, len(DefaultRules))
 
@@ -289,27 +290,15 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 
 	adjusted, count := a.AdjustContent(string(content))
 
-	isStartup := strings.EqualFold(filepath.Base(source), "startup.tjs")
-	if isStartup && a.addEncodingDirective {
-		adjusted = a.AddStartupDirective(adjusted)
-		count++
-	}
+	base := filepath.Base(source)
+	for _, sfa := range specialFileAdjustments {
+		if !strings.EqualFold(base, sfa.fileName) {
+			continue
+		}
 
-	if strings.EqualFold(filepath.Base(source), "messagelayer.tjs") {
-		compatAdjusted, compatCount := a.ApplyMessageLayerCompat(adjusted)
-		adjusted = compatAdjusted
-		count += compatCount
-	}
-
-	if strings.EqualFold(filepath.Base(source), "yesnodialog.tjs") {
-		adjusted = yesNoDialogReplacement
-		count++
-	}
-
-	if strings.EqualFold(filepath.Base(source), "mainwindow.tjs") {
-		compatAdjusted, compatCount := a.ApplyMainWindowCompat(adjusted)
-		adjusted = compatAdjusted
-		count += compatCount
+		newAdjusted, addCount := sfa.apply(a, adjusted)
+		adjusted = newAdjusted
+		count += addCount
 	}
 
 	if count == 0 {
@@ -341,6 +330,51 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		BytesBefore: bytesBefore,
 		BytesAfter:  int64(len(adjustedBytes)),
 	}, nil
+}
+
+// specialFileAdjustment はKAG3標準の特定ファイル(ファイル名は大文字小文字を
+// 無視して比較)に対し、DefaultRules適用後に追加で行う調整を表す。
+type specialFileAdjustment struct {
+	// fileName は対象ファイルのベース名(拡張子含む)。
+	fileName string
+	// apply はDefaultRules適用後の内容contentを受け取り、
+	// (調整後の内容, 調整回数)を返す。
+	apply func(a *ScriptAdjuster, content string) (string, int)
+}
+
+// specialFileAdjustments はConvert()がDefaultRules適用後に追加で行う
+// ファイル名ベースの調整の一覧。各エントリのfileNameはKAG3標準クラスの
+// ファイル名(startup.tjs/messagelayer.tjs/yesnodialog.tjs/mainwindow.tjs)と
+// 1対1であり互いに排他的なため、Convert()側は単純な順次ループでよい。
+var specialFileAdjustments = []specialFileAdjustment{
+	{
+		fileName: "startup.tjs",
+		apply: func(a *ScriptAdjuster, content string) (string, int) {
+			if !a.addEncodingDirective {
+				return content, 0
+			}
+
+			return a.AddStartupDirective(content), 1
+		},
+	},
+	{
+		fileName: "messagelayer.tjs",
+		apply: func(a *ScriptAdjuster, content string) (string, int) {
+			return a.ApplyMessageLayerCompat(content)
+		},
+	},
+	{
+		fileName: "yesnodialog.tjs",
+		apply: func(_ *ScriptAdjuster, _ string) (string, int) {
+			return yesNoDialogReplacement, 1
+		},
+	},
+	{
+		fileName: "mainwindow.tjs",
+		apply: func(a *ScriptAdjuster, content string) (string, int) {
+			return a.ApplyMainWindowCompat(content)
+		},
+	},
 }
 
 // AdjustContent はcontentに調整ルールを適用し、(調整後の内容, 調整回数)を返す。
@@ -491,10 +525,12 @@ func (a *ScriptAdjuster) ApplyMainWindowCompat(content string) (string, int) {
 // AddStartupDirective はstartup.tjs向けのポリフィル初期化ディレクティブを
 // contentの先頭に追加する。
 //
-// why not: 以前はKiriKiriZ用のエンコーディング指定ディレクティブ
-// （@if (kirikiriz) { System.setArgument(...) } @endif）を追加していたが、
-// krkrsdl2 polyfill導入（Goal 1）に伴い、system/polyfillinitialize.tjs
-// （MenuItem等の欠落クラスのスタブ読み込みを行う）の実行呼び出しに置き換えた。
+// why not: krkrsdl2で欠落するMenuItem等のKAG3標準クラスごとに、startup.tjs
+// 側で個別のif分岐やexecStorage呼び出しを増やす方法もある。しかしその方式
+// では対応クラスを追加するたびにstartup.tjs自体への変更が必要になる。
+// 読み込みをsystem/polyfillinitialize.tjs（欠落クラスのスタブ読み込みを行う）
+// 1箇所に集約し、その実行呼び出しだけをcontent先頭に追加することで、対応
+// クラスの追加・変更をpolyfillinitialize.tjs側に閉じ込める。
 func (a *ScriptAdjuster) AddStartupDirective(content string) string {
 	const directive = "// krkrsdl2 polyfill initialization\n" +
 		"Scripts.execStorage(\"system/polyfillinitialize.tjs\");\n\n"

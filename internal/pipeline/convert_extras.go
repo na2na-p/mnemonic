@@ -76,8 +76,9 @@ func (b *BuildPipeline) normalizeCriticalFilenames(directory string) error {
 //
 // Windows用の.dllプラグインはAndroidで使用できないため、プラグイン
 // ディレクトリを削除する。krkrsdl2は多くの機能をビルトインで持っているため
-// プラグインDLLは不要（Goal 7で導入されるextrans/wuvorbisはjniLibs経由で
-// 別途配置されるため対象外）。
+// プラグインDLLは不要（extrans/wuvorbisのようにkrkrsdl2が必要とするネイティブ
+// プラグインはjniLibs経由で別途配置されるため、削除対象のプラグイン
+// ディレクトリには含まれない）。
 var pluginDirNames = []string{"plugin", "Plugin", "PLUGIN", "Plugins", "plugins", "PLUGINS"}
 
 func (b *BuildPipeline) removePluginDirectory(directory string) error {
@@ -105,8 +106,9 @@ func (b *BuildPipeline) removePluginDirectory(directory string) error {
 // .mpeg入力はConversionManagerによって新しい拡張子のファイルとして書き出され、
 // copyTreeが複製した旧拡張子ファイルはconvertDir内に残ったままになる。
 // adjustScriptsは(--skip-videoでない限り)動画参照を.mpgへ書き換えるため、
-// 旧ファイルを残しても新しい参照は解決できる（MIDIがT-220で踏んだ「実体の
-// 無いファイルを指す」不具合とは異なる）。削除失敗をエラーにしないのは、
+// 旧ファイルを残しても新しい参照は解決できる（変換後ファイルが既に存在する
+// ため、削除の成否がスクリプト参照の解決可否には影響しない）。削除失敗を
+// エラーにしないのは、
 // convertMidiFileListのos.Remove(midiFile)と同じ理由: 変換自体は成功し
 // スクリプト参照も解決できるため、残留は死蔵アセットとしてAPKサイズが
 // 増えるだけで実害が無い。
@@ -363,10 +365,11 @@ func findMidiFiles(directory string) ([]string, error) {
 // ensureMidiConversionAvailable はMIDI変換の前提条件（FluidSynthの実行可能性と
 // サウンドフォントの実在）を検査する。
 //
-// why not: 以前は前提条件を満たさない場合に変換自体を黙ってスキップしていたが、
-// スクリプトの.mid→.ogg書き換えは無条件に走るため、存在しない.oggを指す参照が
-// 残りBGMが無音のAPKが完成してしまう（実機で確認済み）。前提条件の欠如は
-// 「やることが無い」ではなくビルドの失敗として扱う。
+// why not: 前提条件を満たさない場合に変換自体を黙ってスキップする方法もある。
+// しかしスクリプトの.mid→.ogg書き換えは(MIDI変換の成否によらず)無条件に走る
+// ため、変換をスキップすると存在しない.oggを指す参照が残りBGMが無音のAPKが
+// 完成してしまう（実機で確認済み）。前提条件の欠如は「やることが無い」
+// ではなくビルドの失敗として扱う。
 //
 // why not: サウンドフォントの実在確認をここで行うのは、converter.
 // GetDefaultSoundfontPathがFluidR3のパスへ実在確認なしにフォールバックし、
@@ -417,9 +420,10 @@ func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConver
 
 		// why not: 削除失敗はビルドエラーに昇格させない。変換自体は成功して
 		// おり.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき無音に
-		// ならない（本チケットが対象とする欠陥は発生しない）。残留した.midは
-		// 再生されない死蔵アセットとしてAPKへ同梱されるだけ（サイズ増のみ）で
-		// あり、これでビルド全体を落とす方が損害が大きい。本パッケージには
+		// ならない（存在しないファイルを指す参照が残る不具合のクラスには該当
+		// しない）。残留した.midは再生されない死蔵アセットとしてAPKへ同梱
+		// されるだけ（サイズ増のみ）であり、これでビルド全体を落とす方が
+		// 損害が大きい。本パッケージには
 		// ロガーの注入口が無いため警告出力も行わない（copyPolyfillFilesUsingの
 		// フォント取得失敗と同じ方針）。
 		_ = os.Remove(midiFile)
