@@ -54,8 +54,12 @@ var errRetryableDownload = errors.New("リトライ対象の接続エラー")
 // templateAssetPattern はテンプレートアセットのファイル名パターン。
 var templateAssetPattern = regexp.MustCompile(`(?i)android-template\.zip$`)
 
-// versionPattern はバージョン文字列の検証パターン（CalVer: template-YYYY.MM.DD）。
-var versionPattern = regexp.MustCompile(`^template-\d{4}\.\d{2}\.\d{2}$`)
+// versionPattern はバージョン文字列の検証パターン
+// （CalVer: template-YYYY.MM.DD、同日複数リリース時は連番サフィックス付き）。
+//
+// why not: 同日に複数リリースすると、GitHub上のタグ名に連番サフィックス
+// （例: template-2026.07.28-12）が付く運用のため、末尾の "-数値" を任意で許容する。
+var versionPattern = regexp.MustCompile(`^template-\d{4}\.\d{2}\.\d{2}(-\d+)?$`)
 
 // TemplateInfo はテンプレート情報を表す不変値。
 type TemplateInfo struct {

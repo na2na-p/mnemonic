@@ -125,6 +125,17 @@ func TestTemplateDownloader_GetDownloadURL(t *testing.T) {
 		assert.Contains(t, url, "github.com")
 	})
 
+	t.Run("正常系: 連番サフィックス付きバージョンでもダウンロードURLが構築される", func(t *testing.T) {
+		t.Parallel()
+
+		d := builder.NewTemplateDownloader("", nil)
+
+		url, err := d.GetDownloadURL("template-2026.07.28-12")
+
+		require.NoError(t, err)
+		assert.Contains(t, url, "template-2026.07.28-12")
+	})
+
 	t.Run("異常系: 不正なバージョン形式でErrInvalidVersion", func(t *testing.T) {
 		t.Parallel()
 
@@ -135,6 +146,9 @@ func TestTemplateDownloader_GetDownloadURL(t *testing.T) {
 			{name: "異常系: 空文字のバージョン", version: ""},
 			{name: "異常系: 不正なバージョン形式", version: "invalid"},
 			{name: "異常系: vのみのバージョン", version: "v"},
+			{name: "異常系: 連番サフィックスが非数値", version: "template-2026.07.28-abc"},
+			{name: "異常系: 連番サフィックスのハイフンが二重", version: "template-2026.07.28--12"},
+			{name: "異常系: 連番サフィックスがハイフンのみで数値がない", version: "template-2026.07.28-"},
 		}
 
 		for _, tc := range testCases {
