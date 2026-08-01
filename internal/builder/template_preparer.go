@@ -1,14 +1,12 @@
 package builder
 
 import (
-	"archive/zip"
 	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -36,14 +34,6 @@ const (
 	MinSDKVersion = 21
 )
 
-// supportedABIs はサポートするABI一覧。
-var supportedABIs = map[string]struct{}{
-	"arm64-v8a":   {},
-	"armeabi-v7a": {},
-	"x86":         {},
-	"x86_64":      {},
-}
-
 // TemplatePreparer はAndroidプロジェクトテンプレートを準備する。
 //
 // 以下の処理を行う:
@@ -60,13 +50,19 @@ var supportedABIs = map[string]struct{}{
 type TemplatePreparer struct {
 	projectDir string
 	sdl2Cache  *SDL2SourceCache
+
+	jniLibsExtractor *jniLibsExtractor
 }
 
 // NewTemplatePreparer はTemplatePreparerを初期化する。
 // sdl2CacheがnilでもSDL2 Javaソースの取得自体は行われる（キャッシュ未使用で
 // 毎回ダウンロードする）。
 func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *TemplatePreparer {
-	return &TemplatePreparer{projectDir: projectDir, sdl2Cache: sdl2Cache}
+	return &TemplatePreparer{
+		projectDir:       projectDir,
+		sdl2Cache:        sdl2Cache,
+		jniLibsExtractor: newJNILibsExtractor(projectDir),
+	}
 }
 
 // Prepare はテンプレートを準備する。
@@ -79,7 +75,7 @@ func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *Templat
 // 持たない。呼び出し元（internal/pipeline）が明示的にfetchPlugins()の
 // 結果を渡す設計に一本化した）。
 func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath string, pluginsInfo *PluginsInfo) error {
-	if err := p.extractJNILibs(); err != nil {
+	if err := p.jniLibsExtractor.Extract(); err != nil {
 		return err
 	}
 
@@ -170,82 +166,6 @@ func (p *TemplatePreparer) copyPluginsToJNILibs(pluginsInfo *PluginsInfo) error 
 				return fmt.Errorf("%w: プラグインのコピーに失敗しました: %s: %w", ErrTemplatePreparer, srcPath, err)
 			}
 		}
-	}
-
-	return nil
-}
-
-// extractJNILibs はkrkrsdl2_universal.apkから.soファイルを抽出する。
-func (p *TemplatePreparer) extractJNILibs() error {
-	baseAPK := filepath.Join(p.projectDir, "krkrsdl2_universal.apk")
-	if _, err := os.Stat(baseAPK); err != nil {
-		return fmt.Errorf("%w: %w: ベースAPKが見つかりません: %s", ErrTemplatePreparer, ErrJniLibsNotFound, baseAPK)
-	}
-
-	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")
-	if err := os.MkdirAll(jniLibsDir, 0o750); err != nil {
-		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-	}
-
-	zr, err := zip.OpenReader(baseAPK)
-	if err != nil {
-		return fmt.Errorf("%w: 無効なAPKファイルです: %s", ErrTemplatePreparer, baseAPK)
-	}
-	defer func() { _ = zr.Close() }()
-
-	extracted := 0
-
-	for _, f := range zr.File {
-		if !strings.HasPrefix(f.Name, "lib/") || !strings.HasSuffix(f.Name, ".so") {
-			continue
-		}
-
-		parts := strings.Split(f.Name, "/")
-		if len(parts) < 3 {
-			continue
-		}
-
-		abi := parts[1]
-		soName := parts[2]
-
-		if _, ok := supportedABIs[abi]; !ok {
-			continue
-		}
-
-		destDir := filepath.Join(jniLibsDir, abi)
-		if err := os.MkdirAll(destDir, 0o750); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-
-		if err := extractZipFileEntry(f, filepath.Join(destDir, soName)); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-
-		extracted++
-	}
-
-	if extracted == 0 {
-		return fmt.Errorf("%w: APK内に.soファイルが見つかりません: %s", ErrJniLibsNotFound, baseAPK)
-	}
-
-	return nil
-}
-
-func extractZipFileEntry(f *zip.File, destPath string) error {
-	src, err := f.Open()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = src.Close() }()
-
-	dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // ABI名はsupportedABIsで許可リスト検証済みのため妥当
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dst.Close() }()
-
-	if _, err := io.Copy(dst, src); err != nil { //nolint:gosec // ベースAPKは信頼済みのビルド成果物でありサイズ上限は設けない
-		return err
 	}
 
 	return nil
