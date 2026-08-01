@@ -36,16 +36,16 @@ func buildSDL2CacheFixture(t *testing.T) *SDL2SourceCache {
 	return cache
 }
 
-func TestTemplatePreparer_CreateDefaultIcon(t *testing.T) {
+func TestIconProvisioner_CreateDefault(t *testing.T) {
 	t.Parallel()
 
 	t.Run("正常系: 全ての解像度でデフォルトアイコンが生成される", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newIconProvisioner(projectDir)
 
-		require.NoError(t, p.createDefaultIcon())
+		require.NoError(t, p.CreateDefault())
 
 		resDir := filepath.Join(projectDir, "app", "src", "main", "res")
 		for _, density := range iconMipmapDensities {
@@ -58,9 +58,9 @@ func TestTemplatePreparer_CreateDefaultIcon(t *testing.T) {
 		t.Parallel()
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newIconProvisioner(projectDir)
 
-		require.NoError(t, p.createDefaultIcon())
+		require.NoError(t, p.CreateDefault())
 
 		resDir := filepath.Join(projectDir, "app", "src", "main", "res")
 		for density, expectedSize := range defaultIconDensitySizes {
@@ -83,9 +83,9 @@ func TestTemplatePreparer_CreateDefaultIcon(t *testing.T) {
 		t.Parallel()
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newIconProvisioner(projectDir)
 
-		require.NoError(t, p.createDefaultIcon())
+		require.NoError(t, p.CreateDefault())
 
 		iconFile := filepath.Join(projectDir, "app", "src", "main", "res", "mipmap-mdpi", "ic_launcher.png")
 		f, err := os.Open(iconFile) //nolint:gosec // テストで自身が生成した一時ファイルを読む用途のため妥当

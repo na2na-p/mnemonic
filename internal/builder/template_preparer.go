@@ -3,10 +3,6 @@ package builder
 import (
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"os"
 	"path/filepath"
 )
@@ -45,6 +41,7 @@ type TemplatePreparer struct {
 	manifestUpdater     *manifestUpdater
 	stringsXMLUpdater   *stringsXMLUpdater
 	assetCopier         *assetCopier
+	iconProvisioner     *iconProvisioner
 }
 
 // NewTemplatePreparer はTemplatePreparerを初期化する。
@@ -61,6 +58,7 @@ func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *Templat
 		manifestUpdater:     newManifestUpdater(projectDir),
 		stringsXMLUpdater:   newStringsXMLUpdater(projectDir),
 		assetCopier:         newAssetCopier(projectDir),
+		iconProvisioner:     newIconProvisioner(projectDir),
 	}
 }
 
@@ -110,11 +108,11 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 
 	if iconPath != "" {
 		if _, err := os.Stat(iconPath); err == nil {
-			return p.updateIcon(iconPath)
+			return p.iconProvisioner.UpdateIcon(iconPath)
 		}
 	}
 
-	return p.createDefaultIcon()
+	return p.iconProvisioner.CreateDefault()
 }
 
 // fetchSDL2Sources はSDL2のJavaソースファイル（SDLActivity.java等）を取得して
@@ -131,74 +129,4 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 	}
 
 	return nil
-}
-
-// iconMipmapDensities はアイコンを配置するmipmapディレクトリの解像度一覧。
-var iconMipmapDensities = []string{"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}
-
-// updateIcon はアプリアイコンを各解像度のmipmapディレクトリへコピーする。
-func (p *TemplatePreparer) updateIcon(iconPath string) error {
-	resDir := filepath.Join(p.projectDir, "app", "src", "main", "res")
-
-	for _, density := range iconMipmapDensities {
-		mipmapDir := filepath.Join(resDir, "mipmap-"+density)
-		if err := os.MkdirAll(mipmapDir, 0o750); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-
-		destPath := filepath.Join(mipmapDir, "ic_launcher.png")
-		if err := copyFile(iconPath, destPath); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-	}
-
-	return nil
-}
-
-// defaultIconDensitySizes はデフォルトアイコン生成時の密度ごとのサイズ(px)。
-var defaultIconDensitySizes = map[string]int{
-	"mdpi":    48,
-	"hdpi":    72,
-	"xhdpi":   96,
-	"xxhdpi":  144,
-	"xxxhdpi": 192,
-}
-
-// defaultIconColor はデフォルトアイコンの色（吉里吉里のテーマカラーに近い青紫）。
-var defaultIconColor = color.RGBA{R: 100, G: 80, B: 160, A: 255}
-
-// createDefaultIcon はデフォルトアイコンを生成する。
-//
-// アイコンが提供されない場合のフォールバックとして、単色の正方形アイコンを
-// 各解像度で生成する。
-func (p *TemplatePreparer) createDefaultIcon() error {
-	resDir := filepath.Join(p.projectDir, "app", "src", "main", "res")
-
-	for _, density := range iconMipmapDensities {
-		mipmapDir := filepath.Join(resDir, "mipmap-"+density)
-		if err := os.MkdirAll(mipmapDir, 0o750); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-
-		destPath := filepath.Join(mipmapDir, "ic_launcher.png")
-		if err := writeSolidColorPNG(destPath, defaultIconDensitySizes[density], defaultIconColor); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-	}
-
-	return nil
-}
-
-// writeSolidColorPNG はsize x sizeの単色PNG画像をpathへ書き出す。
-func writeSolidColorPNG(path string, size int, c color.RGBA) error {
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	draw.Draw(img, img.Bounds(), &image.Uniform{C: c}, image.Point{}, draw.Src)
-
-	f, err := os.Create(path) //nolint:gosec // ビルド成果物の出力用途のため妥当
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	return png.Encode(f, img)
 }
