@@ -52,6 +52,7 @@ type TemplatePreparer struct {
 	sdl2Cache  *SDL2SourceCache
 
 	jniLibsExtractor *jniLibsExtractor
+	pluginPlacer     *pluginPlacer
 }
 
 // NewTemplatePreparer はTemplatePreparerを初期化する。
@@ -62,6 +63,7 @@ func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *Templat
 		projectDir:       projectDir,
 		sdl2Cache:        sdl2Cache,
 		jniLibsExtractor: newJNILibsExtractor(projectDir),
+		pluginPlacer:     newPluginPlacer(projectDir),
 	}
 }
 
@@ -83,7 +85,7 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 		return err
 	}
 
-	if err := p.copyPluginsToJNILibs(pluginsInfo); err != nil {
+	if err := p.pluginPlacer.Place(pluginsInfo); err != nil {
 		return err
 	}
 
@@ -129,43 +131,6 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 	fetcher := NewSDL2SourceFetcher(0, p.sdl2Cache)
 	if err := fetcher.Fetch(javaDir); err != nil {
 		return fmt.Errorf("%w: %w: %w", ErrTemplatePreparer, ErrSDL2SourceFetch, err)
-	}
-
-	return nil
-}
-
-// copyPluginsToJNILibs はkrkrsdl2プラグインをjniLibsディレクトリにコピーする。
-//
-// プラグイン(.so)を各ABI用のjniLibsディレクトリに配置する。jniLibsに配置
-// されたプラグインはAPKビルド時に自動的にlib/{abi}/配下に含まれ、
-// System.loadLibraryで読み込み可能になる。スクリプト変換時にlibプレフィックス
-// 付きのフルファイル名を指定するため、libプレフィックス付きのファイルのみ
-// 配置すれば良い。pluginsInfoがnilの場合は何も行わない（Prepareのdocコメント
-// 参照）。プラグインファイルが見つからない場合はスキップする
-// （ベストエフォートとしてエラーを握りつぶす）。
-func (p *TemplatePreparer) copyPluginsToJNILibs(pluginsInfo *PluginsInfo) error {
-	if pluginsInfo == nil {
-		return nil
-	}
-
-	jniLibsDir := filepath.Join(p.projectDir, "app", "src", "main", "jniLibs")
-
-	for _, abi := range SupportedABIs {
-		abiDir := filepath.Join(jniLibsDir, abi)
-		if err := os.MkdirAll(abiDir, 0o750); err != nil {
-			return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
-		}
-
-		for _, srcPath := range pluginsInfo.GetAllPathsForABI(abi) {
-			if _, err := os.Stat(srcPath); err != nil {
-				continue
-			}
-
-			destPath := filepath.Join(abiDir, filepath.Base(srcPath))
-			if err := copyFile(srcPath, destPath); err != nil {
-				return fmt.Errorf("%w: プラグインのコピーに失敗しました: %s: %w", ErrTemplatePreparer, srcPath, err)
-			}
-		}
 	}
 
 	return nil

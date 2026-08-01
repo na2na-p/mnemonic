@@ -165,18 +165,17 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 	})
 }
 
-// TestTemplatePreparer_CopyPluginsToJNILibs はcopyPluginsToJNILibsの挙動を
-// 検証する。
-func TestTemplatePreparer_CopyPluginsToJNILibs(t *testing.T) {
+// TestPluginPlacer_Place はpluginPlacer.Placeの挙動を検証する。
+func TestPluginPlacer_Place(t *testing.T) {
 	t.Parallel()
 
 	t.Run("正常系: pluginsInfoがnilの場合は何もしない", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newPluginPlacer(projectDir)
 
-		require.NoError(t, p.copyPluginsToJNILibs(nil))
+		require.NoError(t, p.Place(nil))
 
 		jniLibsDir := filepath.Join(projectDir, "app", "src", "main", "jniLibs")
 		assert.NoDirExists(t, jniLibsDir)
@@ -201,9 +200,9 @@ func TestTemplatePreparer_CopyPluginsToJNILibs(t *testing.T) {
 		}
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newPluginPlacer(projectDir)
 
-		require.NoError(t, p.copyPluginsToJNILibs(pluginsInfo))
+		require.NoError(t, p.Place(pluginsInfo))
 
 		destPath := filepath.Join(projectDir, "app", "src", "main", "jniLibs", "arm64-v8a", "libextrans.so")
 		content, err := os.ReadFile(destPath) //nolint:gosec // テストで自身が生成した一時ファイルを読む用途のため妥当
@@ -231,9 +230,9 @@ func TestTemplatePreparer_CopyPluginsToJNILibs(t *testing.T) {
 		}
 
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, nil)
+		p := newPluginPlacer(projectDir)
 
-		require.NoError(t, p.copyPluginsToJNILibs(pluginsInfo))
+		require.NoError(t, p.Place(pluginsInfo))
 	})
 }
 
