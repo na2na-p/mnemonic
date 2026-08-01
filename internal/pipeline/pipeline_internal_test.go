@@ -11,8 +11,7 @@ import (
 
 // stubExecutePhase を差し込み、実際のフェーズ処理をスキップしてRun()の
 // オーケストレーション（進捗コールバック・phasesCompleted集計・統計収集）
-// のみを検証する。Python版のmocker.patch.object(pipeline, "_execute_phase")
-// に相当する。
+// のみを検証する。
 func newValidPipelineForOrchestration(t *testing.T) *BuildPipeline {
 	t.Helper()
 
@@ -214,14 +213,12 @@ func TestBuildPipeline_FindGameIcon_ReturnsEmptyWhenNoIcon(t *testing.T) {
 	assert.Empty(t, p.findGameIcon())
 }
 
-// TestBuildPipeline_ExecuteConvert_MissingExtractDir はPR4申し送り事項の
-// ピン留めテスト: converter.ConvertDirectoryはsourceDirが存在しない場合に
-// errorを返す（Python版は空サマリーで成功扱いになる既知の齟齬）。この
-// テストは、CONVERTフェーズがその挙動差を吸収せず、フェーズの失敗として
-// 明示的にerrorを伝播する（Python版のように黙って空の変換結果で成功
-// しない）ことをピン留めする。extractDirは通常の実行経路では直前のEXTRACT
-// フェーズが必ず作成するため、ここでは異常系を模擬するために直接
-// 存在しないパスを設定する。
+// TestBuildPipeline_ExecuteConvert_MissingExtractDir はピン留めテスト:
+// converter.ConvertDirectoryはsourceDirが存在しない場合にerrorを返す。この
+// テストは、CONVERTフェーズがフェーズの失敗として明示的にerrorを伝播する
+// （黙って空の変換結果で成功しない）ことをピン留めする。extractDirは通常の
+// 実行経路では直前のEXTRACTフェーズが必ず作成するため、ここでは異常系を
+// 模擬するために直接存在しないパスを設定する。
 func TestBuildPipeline_ExecuteConvert_MissingExtractDir(t *testing.T) {
 	t.Parallel()
 

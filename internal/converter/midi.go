@@ -45,10 +45,8 @@ type silenceProbeFrame struct {
 // MuseScoreSoundfontPath / FluidR3SoundfontPath はGetDefaultSoundfontPathが
 // 探索するデフォルトサウンドフォントのパス。
 //
-// why: Python版はMidiConverterのクラス属性としてこれらのパスを持ち、テストが
-// クラス属性を一時的に書き換えて存在判定を差し替える。Go版でも同じ検証を
-// 行えるようパッケージ変数として公開する（テストはtmp_pathへの一時的な差し替え
-// と復元をdeferで行う）。
+// why: テストで存在判定を差し替えられるよう、パッケージ変数として公開する
+// （テストは一時的な差し替えと復元をdeferで行う）。
 var (
 	MuseScoreSoundfontPath = "/usr/share/sounds/sf3/MuseScore_General.sf3"
 	FluidR3SoundfontPath   = "/usr/share/sounds/sf2/FluidR3_GM.sf2"
@@ -83,15 +81,14 @@ type MidiConverter struct {
 // NewMidiConverter はMidiConverterを初期化する。
 // soundfontPathが空文字列の場合はGetDefaultSoundfontPath()を使用する。
 // sampleRate/audioQualityが0以下の場合、audioCodecが空文字列の場合、
-// timeoutが0以下の場合はPython版と同じデフォルト値
+// timeoutが0以下の場合はデフォルト値
 // (sampleRate=44100, audioCodec="libvorbis", audioQuality=4, timeout=300秒)を
 // 使用する。runnerがnilの場合はos/execベースの既定実装を使用する。
 //
-// why not: Python版はaudioQuality=0（ffmpeg -q:a 0、libvorbisにおける最高品質
-// 指定）を有効な明示値として受け付けるが、Go版はVideoConverter等の既存の
-// 「0以下はセンチネル」規約に合わせて0もデフォルト値(4)へフォールバックする。
-// -q:a 0を明示指定したいユースケースは本チケットのテスト移植範囲に無く、
-// 既存コンストラクタ群との規約一貫性を優先した。
+// why not: audioQuality=0（ffmpeg -q:a 0、libvorbisにおける最高品質指定）を
+// 有効な値として区別することもできるが、VideoConverter等の既存の
+// 「0以下はセンチネル」規約に合わせて0もデフォルト値(4)へフォールバックする
+// （既存コンストラクタ群との規約一貫性を優先した設計）。
 func NewMidiConverter(
 	soundfontPath string,
 	sampleRate int,
@@ -151,9 +148,8 @@ func (c *MidiConverter) SupportedExtensions() []string {
 
 // GetOutputExtension は変換後ファイルの拡張子".ogg"を返す。
 //
-// why not: baseline Python版にget_output_extensionの実装は無いが、
-// Converterインターフェース（PR9/T-209でGetOutputExtensionを追加）はこれを
-// 使い出力パスの拡張子を書き換える。MIDI変換の出力実体は常にOGGであるため、
+// why not: Converterインターフェースが持つGetOutputExtensionは出力パスの
+// 拡張子を書き換えるために使われる。MIDI変換の出力実体は常にOGGであるため、
 // 空文字列（拡張子不変）を返すと出力先が".mid"のままになり誤りとなる。
 func (c *MidiConverter) GetOutputExtension(_ string) string { return ".ogg" }
 
@@ -176,16 +172,16 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 
 // Convert はMIDIファイルをOGG Vorbis形式に変換し、destへ出力する。
 //
-// 実行される実効的なコマンドはPython版(subprocess.run)と同一:
+// 実行される実効的なコマンドは以下の通り:
 // `fluidsynth -ni -g 1.0 -r <sampleRate> -F <一時WAV> <soundfont> <source>`
 // に続けて
 // `ffmpeg -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> <dest>`
 //
-// why not: Python版はFluidSynth/FFmpegそれぞれについてFileNotFoundError（未
-// インストール）とsubprocess.TimeoutExpired（タイムアウト）を区別した専用
-// メッセージを返すが、Go版はCommandRunner抽象化により両者とも単一のerr値に
-// 収束する（video.goのVideoConverter.Convertと同じ簡略化）。区別が必要になれば
-// CommandRunnerの実装側でセンチネルエラーを定義して呼び出し元に伝播させる。
+// why not: FluidSynth/FFmpegそれぞれの未インストールとタイムアウトを区別した
+// 専用メッセージを返すこともできるが、CommandRunner抽象化により両者とも
+// 単一のerr値に収束する（video.goのVideoConverter.Convertと同じ簡略化）。
+// 区別が必要になればCommandRunnerの実装側でセンチネルエラーを定義して
+// 呼び出し元に伝播させる。
 func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	if _, err := os.Stat(source); err != nil {
 		return ConversionResult{
@@ -223,9 +219,8 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	}
 	tmpWavPath := tmpWav.Name()
 	_ = tmpWav.Close()
-	// why: Python版はtempfile.NamedTemporaryFile(delete=False)で作成した一時WAVを
-	// try/finallyで確実に削除する。Go版もFluidSynth/FFmpegどちらが失敗しても
-	// 一時ファイルが残らないようdeferで無条件に削除する。
+	// why: FluidSynth/FFmpegどちらが失敗しても一時ファイルが残らないよう
+	// deferで無条件に削除する。
 	defer func() { _ = os.Remove(tmpWavPath) }()
 
 	if result := c.runFluidsynth(source, tmpWavPath); result != nil {

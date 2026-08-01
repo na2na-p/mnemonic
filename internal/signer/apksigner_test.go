@@ -30,9 +30,9 @@ func TestNewDefaultApkSignerRunner_NilRunnerFallsBackToExecCommandRunner(t *test
 }
 
 func TestKeystoreConfig_KeyPasswordDefaultsToNil(t *testing.T) {
-	// KeystoreConfigはPython版の@dataclass(frozen=True)に相当する不変値。
-	// Goの構造体はフィールド変更メソッドを提供しないことで不変性の契約を踏襲する
-	// （internal/apperr.Resultと同じ設計方針）。
+	// KeystoreConfigは不変値として扱う。Goの構造体はフィールド変更メソッドを
+	// 提供しないことで不変性の契約を保つ（internal/apperr.Resultと同じ
+	// 設計方針）。
 	cfg := signer.KeystoreConfig{
 		KeystorePath:     "keystore.jks",
 		KeyAlias:         "my_alias",

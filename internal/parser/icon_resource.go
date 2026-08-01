@@ -159,15 +159,14 @@ func descendToData(rsrc []byte, rsrcVA uint32, parentDir []resourceDirEntry) ([]
 // ツリー全体)の生データと、そのRVA(readResourceDataEntryのRVA→オフセット
 // 変換に使う基準値)を返す。
 //
-// why not(セクション名".rsrc"だけで探さない理由): Windowsローダー・pefile・
-// icoextractはいずれもOptionalHeaderのデータディレクトリ
-// (IMAGE_DIRECTORY_ENTRY_RESOURCE、インデックス2)が指すRVAを正とし、
-// セクション名では探さない——セクション名は単なるラベルであり、パッカーや
-// 難読化ツールが自由にリネームできる。名前だけで探すと、リンカ後に
-// セクションをリネーム/パックしたEXEに対してだけ本パッケージが
-// アイコンを取りこぼす(レビューで実証: 同一PEの.rsrcを.dataへ
-// リネームしただけでPython版[pefile経由]は抽出に成功するがセクション名
-// 探索は失敗する)。データディレクトリが無い/空(サイズ0)の場合のみ、
+// why not(セクション名".rsrc"だけで探さない理由): Windowsローダーは
+// OptionalHeaderのデータディレクトリ(IMAGE_DIRECTORY_ENTRY_RESOURCE、
+// インデックス2)が指すRVAを正とし、セクション名では探さない——セクション名は
+// 単なるラベルであり、パッカーや難読化ツールが自由にリネームできる。名前
+// だけで探すと、リンカ後にセクションをリネーム/パックしたEXEに対してだけ
+// 本パッケージがアイコンを取りこぼす(同一PEの.rsrcを.dataへリネームした
+// だけでデータディレクトリ経由の抽出は成功するがセクション名探索は失敗する
+// ことを確認済み)。データディレクトリが無い/空(サイズ0)の場合のみ、
 // フォールバックとしてセクション名".rsrc"で探す。
 func locateResourceSection(peFile *pe.File) (rsrc []byte, rsrcVA uint32, err error) {
 	if dir, ok := resourceDataDirectory(peFile); ok && dir.Size > 0 {
@@ -248,12 +247,11 @@ func sectionDataContainingRVA(peFile *pe.File, rva uint32) ([]byte, uint32, erro
 // extractBestIcon はpeFileのRT_GROUP_ICON/RT_ICONリソースから先頭の
 // アイコングループを取得し、その中で最大サイズのフレームをデコードして返す。
 //
-// why not(先頭グループを選ぶ理由): Python版が委譲するicoextractは、グループ
-// 選択オプション未指定時にリソースディレクトリの並び順で最初に現れる
-// RT_GROUP_ICONグループ(通常はリンカが最初に埋め込んだ既定アイコン=アプリの
-// メインアイコン)を既定として抽出する。readResourceDirectoryのコメントの
-// とおりPEリソースディレクトリのエントリは名前付き→ID昇順で格納されるため、
-// 「先頭エントリ」を選べばicoextractの既定選択と一致する。
+// why not(先頭グループを選ぶ理由): リソースディレクトリの並び順で最初に
+// 現れるRT_GROUP_ICONグループ(通常はリンカが最初に埋め込んだ既定アイコン=
+// アプリのメインアイコン)を既定として抽出する。readResourceDirectoryの
+// コメントのとおりPEリソースディレクトリのエントリは名前付き→ID昇順で
+// 格納されるため、「先頭エントリ」を選べばアプリの既定アイコンと一致する。
 func extractBestIcon(peFile *pe.File) (image.Image, error) {
 	rsrc, rsrcVA, err := locateResourceSection(peFile)
 	if err != nil {

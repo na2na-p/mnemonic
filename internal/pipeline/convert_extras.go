@@ -41,8 +41,7 @@ func (b *BuildPipeline) normalizeCriticalFilenames(directory string) error {
 		return fmt.Errorf("ファイル名正規化のための走査に失敗しました: %w", err)
 	}
 
-	// 深い階層から処理する（Python版のkey=lambda p: len(p.parts), reverse=True
-	// と同じ方針）。
+	// 深い階層から処理する（パス階層の深い順にソートする）。
 	sort.Slice(allPaths, func(i, j int) bool {
 		return len(strings.Split(allPaths[i], string(filepath.Separator))) >
 			len(strings.Split(allPaths[j], string(filepath.Separator)))
@@ -172,21 +171,18 @@ func sameUnderlyingFile(a, b string) bool {
 
 // adjustScripts はdirectory配下の全.ks/.tjsファイルにScriptAdjusterを適用する。
 //
-// why not: Python版は大文字小文字のバリエーション6パターン
-// （.ks/.KS/.Ks/.tjs/.TJS/.Tjs）ごとにrglobを繰り返すが、これはLinuxの
-// 大文字小文字を区別するファイルシステムでも確実に拾うための工夫であり、
-// 大文字小文字を区別しないファイルシステム（例: macOS既定）では同一
-// ファイルに複数回ヒットしうる。Go版は1回のWalkDirで拡張子を
-// strings.EqualFoldで比較するため、大文字小文字を区別するファイルシステム
-// でもPython版と同じ集合を1回の走査で漏れなく捕捉でき、かつ
-// 大文字小文字を区別しないファイルシステムでの二重適用も起こらない。
+// why not: 大文字小文字のバリエーション（.ks/.KS/.Ks/.tjs/.TJS/.Tjs）ごとに
+// 走査を繰り返す方式も考えられるが、大文字小文字を区別しないファイル
+// システム（例: macOS既定）では同一ファイルに複数回ヒットしうる。1回の
+// WalkDirで拡張子をstrings.EqualFoldで比較することで、大文字小文字を
+// 区別するファイルシステムでも1回の走査で漏れなく捕捉でき、かつ大文字
+// 小文字を区別しないファイルシステムでの二重適用も起こらない。
 //
 // why not: --skip-video時はDefaultRulesWithoutVideoExtensions（動画拡張子
 // 書き換えルールを除いたルール集合）を使う。SkipVideo時はVideoConverterが
 // 登録されず動画ファイルは無変換のまま(拡張子も実体も元のまま)なので、
 // DefaultRulesのまま適用すると参照だけが.mpgへ書き換わり、実体の無い.mpgを
-// 指す参照が残る（T-220でMIDIが踏んだのと同じ「実体の無いファイルを指す」
-// 不具合）。
+// 指す参照が残る不具合になる。
 func (b *BuildPipeline) adjustScripts(directory string) error {
 	var rules []converter.AdjustmentRule
 	if b.config.SkipVideo {
@@ -233,8 +229,7 @@ func copyPolyfillFilesUsing(directory string, fontFetcher *builder.FontFetcher) 
 		data, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + name)
 		if err != nil {
 			// why: リソースは埋め込みFSでビルド時に固定されるため通常発生しない。
-			// Python版のimportlib.resources参照が(FileNotFoundError, TypeError)を
-			// 握りつぶしてcontinueする方針を踏襲し、見つからなければスキップする。
+			// 見つからない場合はスキップする防御的な実装とする。
 			continue
 		}
 
@@ -243,9 +238,8 @@ func copyPolyfillFilesUsing(directory string, fontFetcher *builder.FontFetcher) 
 		}
 	}
 
-	// フォント取得の失敗はビルドを継続する（Python版のFontDownloadError/
-	// OSErrorをログ警告のみで握りつぶす方針を踏襲。本パッケージにロガーの
-	// 注入口が無いため、ここでは静かに無視する）。
+	// フォント取得の失敗はビルドを継続する（ログ警告のみで握りつぶす方針。
+	// 本パッケージにロガーの注入口が無いため、ここでは静かに無視する）。
 	_ = copyFontFile(systemDir, fontFetcher)
 
 	return nil

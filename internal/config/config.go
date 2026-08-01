@@ -3,9 +3,9 @@ package config
 
 // Config はビルド設定のルート値。
 //
-// PackageName / AppName はPythonの `str | None` に相当し、未指定を明示するため
-// ポインタで表現する（空文字列と未指定を区別する必要があるため、ゼロ値の
-// 空文字列をsentinelとして扱わない）。
+// PackageName / AppName は未指定を明示するためポインタで表現する
+// （空文字列と未指定を区別する必要があるため、ゼロ値の空文字列を
+// sentinelとして扱わない）。
 type Config struct {
 	PackageName     *string
 	AppName         *string
@@ -28,8 +28,8 @@ type ImageConfig struct {
 
 // Quality は画像品質設定を表す。
 //
-// Python版は `quality: int | str` という合併型だったが、Goには合併型がないため
-// プリセット文字列（"high"等）か0-100の整数のいずれかを保持する値型として表現する。
+// Goには合併型がないため、プリセット文字列（"high"等）か0-100の整数の
+// いずれかを保持する値型として表現する。
 type Quality struct {
 	// Preset はIsInt=falseの場合に有効なプリセット文字列。
 	Preset string
@@ -47,7 +47,7 @@ type VideoConfig struct {
 
 // EncodingConfig は文字コード設定を表す。
 type EncodingConfig struct {
-	// Source はPythonの `source: str | None = None`（自動検出）に相当する。
+	// Source は未指定の場合に自動検出することを表す。
 	Source *string
 	Target string
 }

@@ -46,8 +46,7 @@ type ProgressDisplay interface {
 // LogConfig はログ出力の動作を制御する設定。
 type LogConfig struct {
 	VerboseLevel VerboseLevel
-	// LogFile はログ出力先ファイルパス。空文字列の場合はファイル出力なし
-	// （Pythonの `log_file: Path | None = None` に相当）。
+	// LogFile はログ出力先ファイルパス。空文字列の場合はファイル出力なし。
 	LogFile  string
 	UseColor bool
 	UseEmoji bool
@@ -64,8 +63,7 @@ func DefaultLogConfig() LogConfig {
 
 // Statistics はビルドサマリに表示する統計情報を表す。
 //
-// OutputPath / PackageName はポインタとし、未設定（Pythonでいう
-// `"output_path" in statistics` が偽の状態）を表現する。
+// OutputPath / PackageName はポインタとし、未設定であることを表現する。
 type Statistics struct {
 	OutputPath *string
 	// OutputSize はOutputPathが設定されている場合のみ意味を持つ（バイト単位）。
@@ -77,9 +75,8 @@ var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // BuildLogger はビルドパイプラインのログ出力を管理する。
 //
-// Python版はコンテキストマネージャ（__enter__/__exit__）でログファイルの
-// クローズを保証していたが、GoではCloseメソッドを公開しio.Closerとして扱う
-// のが自然なため、呼び出し側は `defer logger.Close()` で同等の保証を得る。
+// GoではCloseメソッドを公開しio.Closerとして扱うのが自然なため、呼び出し側は
+// `defer logger.Close()` でログファイルのクローズを保証する。
 type BuildLogger struct {
 	config LogConfig
 	stdout io.Writer

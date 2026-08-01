@@ -63,9 +63,8 @@ func TestMainCommand_Options(t *testing.T) {
 		{name: "正常系: ヘルプ表示", args: []string{"--help"}, wantSubstr: "吉里吉里ゲーム"},
 		// why not: バージョン文字列をversion.String()参照で自己言及的に検証すると、
 		// version.valueが書き換わっても常に一致してしまいテストが実質何も
-		// ピン留めしない。Python版がtest_main_optionsで__version__の実際の
-		// デフォルト値"0.1.0"をリテラルで検証していたのと同様、Go版の既定値
-		// "0.1.0-dev"（internal/version/version.go）をリテラルでピン留めする。
+		// ピン留めしない。既定値"0.1.0-dev"（internal/version/version.go）を
+		// リテラルでピン留めする。
 		{name: "正常系: バージョン表示", args: []string{"--version"}, wantSubstr: "0.1.0-dev"},
 	}
 
@@ -115,8 +114,7 @@ func TestBuildCommand_InvalidInputType(t *testing.T) {
 	assert.Equal(t, 1, result.exitCode)
 }
 
-// stubBuildRunner はbuildRunnerのテスト用スタブ。Python版のMock(BuildPipeline)
-// に相当する。
+// stubBuildRunner はbuildRunnerのテスト用スタブ。
 type stubBuildRunner struct {
 	validateErrs []string
 	runResult    pipeline.Result

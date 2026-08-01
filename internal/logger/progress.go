@@ -45,17 +45,16 @@ func NewConsoleProgressDisplay(useColor, useEmoji bool) *ConsoleProgressDisplay 
 
 // NewConsoleProgressDisplayWithWriter は出力先を指定してConsoleProgressDisplayを生成する。
 //
-// Python版は常にsys.stdoutへ直接printしていたが、テストでt.Parallel()を安全に使うため
-// io.Writerを注入可能にした（logger.NewWithWritersと同じ設計判断）。
+// テストでt.Parallel()を安全に使うためio.Writerを注入可能にした
+// （logger.NewWithWritersと同じ設計判断）。
 func NewConsoleProgressDisplayWithWriter(useColor, useEmoji bool, out io.Writer) *ConsoleProgressDisplay {
 	return &ConsoleProgressDisplay{useColor: useColor, useEmoji: useEmoji, out: out}
 }
 
 // UseColor はカラー出力設定を返す。
 //
-// Python版でも実際の色付けロジックには使われておらず、フィールドとして
-// 保持されるのみだった（将来のANSIカラー対応向けの予約フィールド）。
-// 挙動互換のため同じ構造を踏襲する。
+// 実際の色付けロジックには使われておらず、フィールドとして保持されるのみ
+// である（将来のANSIカラー対応向けの予約フィールド）。
 func (d *ConsoleProgressDisplay) UseColor() bool {
 	return d.useColor
 }
@@ -109,8 +108,7 @@ func (d *ConsoleProgressDisplay) Update(current int, message string) {
 	}
 
 	// 呼び出し側がtotalを超える値や負値を渡しても panic せず表示上は 0-100% に
-	// 丸め込む（Python版はint()の除算で例外を投げず、単に100%超/負の表示になる
-	// 程度で落ちなかったため、Goでも少なくともクラッシュしない挙動に揃える）。
+	// 丸め込む（不正な入力値でクラッシュしないための防御的な実装）。
 	clamped := current
 	if clamped < 0 {
 		clamped = 0

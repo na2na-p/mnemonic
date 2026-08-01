@@ -17,7 +17,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// copyFile はsrcの内容をdstへコピーする（Pythonのshutil.copy2相当）。
+// copyFile はsrcの内容をdstへコピーする。
 func copyFile(src, dst string) error {
 	in, err := os.Open(src) //nolint:gosec // 呼び出し元で存在検証済みのパイプライン内部生成パスを読む用途のため妥当
 	if err != nil {
@@ -43,8 +43,8 @@ func copyFile(src, dst string) error {
 	return nil
 }
 
-// copyTree はsrc配下のファイル・ディレクトリ構造を丸ごとdstへコピーする
-// （Pythonのshutil.copytree(dirs_exist_ok=True)相当）。
+// copyTree はsrc配下のファイル・ディレクトリ構造を丸ごとdstへコピーする。
+// dstに同名のファイル・ディレクトリが既に存在する場合は上書きする。
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -73,8 +73,7 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// withSuffix はpathの拡張子をsuffixへ置き換えたパスを返す
-// （Pythonの pathlib.Path.with_suffix 相当）。
+// withSuffix はpathの拡張子をsuffixへ置き換えたパスを返す。
 func withSuffix(path, suffix string) string {
 	base := strings.TrimSuffix(path, filepath.Ext(path))
 
@@ -107,8 +106,7 @@ func extractTemplateZip(templatePath, destDir string) error {
 // why not: エントリ名はテンプレートZIP内データに由来し外部入力として
 // 信頼できないため、展開先がdestDir外に脱出しないことを検証する
 // （zip slip対策。internal/parser/xp3.goのsafeJoin、internal/builder/
-// project_generator.goのsafeJoinPathと同じ理由）。Python版のzipfile.
-// ZipFile.extractallには対応するパストラバーサル対策がない。
+// project_generator.goのsafeJoinPathと同じ理由）。
 func extractZipEntry(f *zip.File, destDir string) error {
 	destPath, err := safeJoin(destDir, f.Name)
 	if err != nil {

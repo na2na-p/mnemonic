@@ -23,12 +23,11 @@ var (
 
 	// ErrTLG5InvalidBlockHeight はblock_heightが0以下の場合のエラー。
 	//
-	// why not: Python参照実装はblock_height==0をガードせずブロック数計算
-	// (height + block_height - 1) // block_heightでZeroDivisionErrorを
-	// 未捕捉のまま送出する（呼び出し元プロセスがクラッシュする）。mnemonicは
-	// 信頼できないゲームアセットを処理するCLIであり、不正なTLG5ファイル1件で
-	// ビルド全体がpanicで落ちるのは受容できないため、Go版はここでガードし
-	// 通常のerrorとして返す。
+	// why not: block_height==0をガードしないままブロック数計算
+	// (height + block_height - 1) / block_heightを行うとゼロ除算になる。
+	// mnemonicは信頼できないゲームアセットを処理するCLIであり、不正なTLG5
+	// ファイル1件でビルド全体がpanicで落ちるのは受容できないため、ここで
+	// ガードし通常のerrorとして返す。
 	ErrTLG5InvalidBlockHeight = errors.New("ブロック高さが不正です")
 
 	// ErrTLG5InvalidDimensions はwidth/heightが0以下、または許容上限
@@ -131,14 +130,13 @@ func (d *TLG5Decoder) ParseHeader(data []byte) (TLG5Header, error) {
 // 変換する。
 //
 // why not: krkrz（吉里吉里ネイティブC++実装）のTVPLoadTLG5ローダーは、この
-// バイトを「チャンネル数」（3=RGB、4=RGBA）として解釈する。一方、Python
-// 参照実装（mnemonic feat/exe-icon-extraction）は「24=RGB、32=RGBA」という
-// ビット深度風の値としてのみ解釈しており、colors=4のように実機で生成された
-// RGBA TLG5ファイルを誤って3チャンネルとしてデコードしチャンネル境界が
-// ズレる(desync)欠陥を引き継いでいた。どちらの表記のTLG5ファイルも実在し
-// うる（レビューア差分フィクスチャ生成器はPython流の24/32を書き出す）ため、
-// 本実装は両方の表記を受け付けるハイブリッド解釈とし、それ以外の値は
-// ErrTLG5InvalidColorDepthとして拒否する。
+// バイトを「チャンネル数」（3=RGB、4=RGBA）として解釈する。一方、24=RGB、
+// 32=RGBAというビット深度風の値としてのみ解釈する実装も存在し、colors=4の
+// ように実機で生成されたRGBA TLG5ファイルを誤って3チャンネルとしてデコード
+// しチャンネル境界がズレる(desync)欠陥を持つケースがあった。どちらの表記の
+// TLG5ファイルも実在しうる（一部のツールは24/32というビット深度風の値を
+// 書き出す）ため、本実装は両方の表記を受け付けるハイブリッド解釈とし、
+// それ以外の値はErrTLG5InvalidColorDepthとして拒否する。
 func channelCountFromColorDepth(colorDepth byte) (int, error) {
 	switch colorDepth {
 	case 3, 24:
@@ -266,12 +264,12 @@ func (d *TLG5Decoder) Decode(data []byte) (image.Image, error) {
 // （slide/slidePos）は変更しない。この格納パスを通過した後の圧縮ブロックは、
 // 格納ブロック直前の辞書状態をそのまま引き継いでバックリファレンスを解決する。
 //
-// why not(辞書をチャンクごとにリセットしない): 旧実装（および移植元のPython参照
-// 実装）はLZSSDecoder.Decodeをチャンク（ブロック×チャンネル）ごとにスライド辞書を
-// ゼロ初期化して呼んでいたが、これはkrkrz非準拠であり、実RGBA .tlgアセット
-// （ブロック境界をまたぐバックリファレンスを含む）をノイズにデコードする欠陥
-// だった（実証済み）。現実装ではlzssは画像1枚につき1つで、全チャンクをまたいで
-// 辞書が持続する（tlg5.go DecodeおよびLZSSDecoderのwhy not参照）。
+// why not(辞書をチャンクごとにリセットしない): LZSSDecoder.Decodeをチャンク
+// （ブロック×チャンネル）ごとにスライド辞書をゼロ初期化して呼ぶ実装はkrkrz
+// 非準拠であり、実RGBA .tlgアセット（ブロック境界をまたぐバックリファレンス
+// を含む）をノイズにデコードする欠陥になる。本実装ではlzssは画像1枚につき
+// 1つで、全チャンクをまたいで辞書が持続する（tlg5.go DecodeおよびLZSS
+// Decoderのwhy not参照）。
 func decodeBlock(lzss *LZSSDecoder, mark byte, blockData []byte, pixelCount int) ([]byte, error) {
 	switch mark {
 	case tlg5BlockMarkCompressed:
@@ -306,7 +304,7 @@ func applyDeltaDecoding(channel, deltaData []byte, width, yStart, rows int) {
 		prevRowOffset := (y - 1) * width
 
 		// 各行で水平累積をリセット。byte型の加算はGoの仕様上mod 256で
-		// wrapするため、Python版の `& 0xFF` に相当する挙動になる。
+		// wrapするため、明示的な`& 0xFF`と同じ挙動になる。
 		var horizontalAccum byte
 
 		for x := range width {

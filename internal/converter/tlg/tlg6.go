@@ -24,8 +24,7 @@ var (
 	//
 	// why not: TLG6はゴロム・ライス符号によるエントロピー符号化と複数の
 	// フィルタリング手法を組み合わせた可逆圧縮形式であり実装コストが高い。
-	// Python参照実装（feat/exe-icon-extraction）もヘッダ解析のみ実装し
-	// decode()はNotImplementedErrorを送出する（本タスクのNonGoals）。
+	// ヘッダ解析のみを実装し、本体デコードはスコープ外とする。
 	ErrTLG6NotImplemented = errors.New("TLG6デコードは未実装です")
 )
 

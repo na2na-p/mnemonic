@@ -38,8 +38,7 @@ type BuildPipeline struct {
 	// 呼び出し・phasesCompleted集計・統計収集・一時ディレクトリのクリーンアップ）
 	// を個々のフェーズ実装の詳細から切り離してテストするため、構造体フィールドと
 	// して差し替え可能にする（internal/converter.ConversionManager.SleepFuncと
-	// 同じ設計方針。Python版はmocker.patch.object(pipeline, "_execute_phase")で
-	// 同等のテスト分離を行っていた）。
+	// 同じ設計方針）。
 	executePhase func(Phase) error
 
 	// keystorePath/keystoreValid/keystoreGenerateはデバッグ用キーストアの

@@ -13,7 +13,6 @@ import (
 )
 
 // GetPasswordのwhite-boxテスト。term.ReadPasswordは実端末のfdを要求するため、
-// Python版がgetpass.getpassをunittest.mockでパッチしていたのと同様に、
 // readPasswordフィールドへ差し替えて検証する。
 func TestDefaultPasswordProvider_GetPassword(t *testing.T) {
 	t.Parallel()

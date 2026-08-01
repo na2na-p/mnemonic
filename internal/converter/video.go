@@ -95,7 +95,7 @@ func (execCommandRunner) Run(ctx context.Context, name string, args ...string) (
 
 // VideoInfo は動画ファイルのメタデータを表す不変値。
 //
-// AudioCodecが空文字列の場合、Python版のNone（音声トラックなし）に相当する。
+// AudioCodecが空文字列の場合、音声トラックなしを表す。
 type VideoInfo struct {
 	Width           int
 	Height          int
@@ -170,8 +170,8 @@ func (c *VideoConverter) IsFFmpegAvailable() bool {
 // (パススルー)。それ以外はffmpegで変換する。出力は一時ファイルへ書き込み、
 // サイズが0より大きいことを確認してからdestへrenameする(fail-loud)。
 // 変換元ファイルが存在しない・ffmpegが失敗する・出力が0バイトの場合は
-// StatusFailedのConversionResultを返す(err=nil、Python版の全既知失敗を
-// 自身でConversionResultへ変換する設計を踏襲)。
+// StatusFailedのConversionResultを返す(err=nil、既知の失敗を自身で
+// ConversionResultへ変換する設計)。
 func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) {
 	if _, err := os.Stat(source); err != nil {
 		return ConversionResult{
@@ -355,7 +355,7 @@ type ffprobeFormat struct {
 
 // GetVideoInfo は動画ファイルの情報をffprobeで取得する。
 //
-// 実行される実効的なffprobeコマンドはPython版(ffmpeg.probe)と同一:
+// 実行される実効的なffprobeコマンドは以下の通り:
 // `ffprobe -show_format -show_streams -of json <file>`
 func (c *VideoConverter) GetVideoInfo(filePath string) (VideoInfo, error) {
 	if _, err := os.Stat(filePath); err != nil {

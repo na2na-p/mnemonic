@@ -22,10 +22,9 @@ import (
 // ErrTLGDecodeNotImplemented はTLG画像のデコードが未実装であることを示す
 // センチネルエラー。
 //
-// why not: TLG6の本体デコード実装は本PRのスコープ外（Python版もTLG6Decoder.
-// decode()でNotImplementedErrorを送出し、ヘッダのマジックバイト判定と
-// ヘッダ解析のみ実装する）。TLG5は本PRで実装済みのため、このエラーは
-// TLG6形式のファイルに対してのみ返る。
+// why not: TLG6の本体デコード実装はスコープ外であり、ヘッダのマジックバイト
+// 判定とヘッダ解析のみ実装する。TLG5は実装済みのため、このエラーはTLG6形式の
+// ファイルに対してのみ返る。
 var ErrTLGDecodeNotImplemented = errors.New("TLGデコードは未実装です")
 
 // ErrUnsupportedImageFormat はstdlib/x-imageで対応していない画像拡張子を
@@ -156,10 +155,9 @@ func readTLGSource(filePath string) ([]byte, error) {
 
 // GetInfo はTLG画像のメタ情報を取得する。
 //
-// why not: Python版はTLG6に対してもparse_headerのみを呼びメタ情報取得に
-// 成功する（decode()のみがNotImplementedErrorを送出する）。Go版も同様に
-// TLG6のヘッダ解析は実装済みのTLG6Decoder.ParseHeaderで完結するため、
-// GetInfoはTLG5/TLG6のいずれでもErrTLGDecodeNotImplementedを返さない。
+// why not: TLG6のヘッダ解析は実装済みのTLG6Decoder.ParseHeaderで完結するため、
+// GetInfoはTLG5/TLG6のいずれでもErrTLGDecodeNotImplementedを返さない
+// （decode()本体のみが未実装であるため）。
 func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 	data, err := readTLGSource(filePath)
 	if err != nil {
@@ -238,16 +236,13 @@ func (d *TLGImageDecoder) DecodeToFile(source, dest string) error {
 //
 // why not(losslessAlphaとのパリティ差異): この関数はTLGImageDecoder.
 // DecodeToFile（ImageConverterを介さない低レベルなデコード専用ユーティリ
-// ティ）専用であり、ImageConverterのlosslessAlpha設定を受け取らない。Python
-// 参照実装のTLGImageDecoder.decode_to_fileは単に`image.save(dest)`を呼ぶ
-// のみで、Pillowの.webp保存はlossless未指定時は既定でロッシーになる
-// （ImageConverter._save_as_webpのようなhas_alpha分岐を持たない）。
-// これに対し本実装はimageHasAlpha(img)がtrueなら常にLossless=trueにする。
-// これはPillowの既定と厳密には一致しないが、losslessAlphaを設定する手段が
-// 無いこの関数の性質上、アルファ精度を暗黙に欠落させるよりも安全側に倒す
-// 意図的な選択である。ImageConverter経由の変換（Convert/ConvertFromImage）
-// は既にlosslessAlphaを正しく反映するsaveAsWebpを使うため、この差異は
-// TLGImageDecoder.DecodeToFileを直接呼ぶ経路にのみ影響する。
+// ティ）専用であり、ImageConverterのlosslessAlpha設定を受け取らない。
+// losslessAlphaを設定する手段が無いこの関数の性質上、アルファ精度を暗黙に
+// 欠落させるよりも安全側に倒し、imageHasAlpha(img)がtrueなら常に
+// Lossless=trueにする意図的な選択である。ImageConverter経由の変換
+// （Convert/ConvertFromImage）は既にlosslessAlphaを正しく反映するsaveAsWebp
+// を使うため、この差異はTLGImageDecoder.DecodeToFileを直接呼ぶ経路にのみ
+// 影響する。
 func encodeImageToFile(img image.Image, dest string, quality int) error {
 	f, err := os.Create(dest) //nolint:gosec // ビルド成果物の出力用途のため妥当
 	if err != nil {
@@ -290,8 +285,7 @@ type ImageConverter struct {
 // （krkrsdl2互換のためのデフォルト。WebP出力が必要な場合はNewImageConverter
 // WithFormatを使う）。
 // qualityはQualityPresetの値（95/85/70）または任意の0-100の整数を指定する。
-// qualityが0以下の場合はQualityHigh（Python版のデフォルト引数
-// quality: QualityPreset | int = QualityPreset.HIGHに相当）を使用する。
+// qualityが0以下の場合はQualityHighを既定値として使用する。
 func NewImageConverter(quality int, losslessAlpha bool) *ImageConverter {
 	return NewImageConverterWithFormat(OutputFormatPNG, quality, losslessAlpha)
 }
@@ -352,16 +346,15 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 
 // Convert は画像ファイルを指定された形式に変換し、destへ出力する。
 //
-// why not: Python版のImageConverter.convert()は_validate_source・TLG未実装
-// エラー・PIL.Image.openの失敗を自身で捕捉せず呼び出し元(ConversionManager)へ
-// 伝播させる（他のConverterと異なりtry/exceptで囲まれていない）。Go版もこれに
-// 倣い、これらの失敗はConversionResultではなくerrとして返す。
+// why not: 他のConverterと異なり、validateSource・TLG未実装エラー・画像
+// デコードの失敗を自身で捕捉せず、呼び出し元(ConversionManager)へerrとして
+// 伝播させる。これらの失敗はConversionResultではなくerrとして返す。
 //
-// why not(decodeSourceの対応拡張子): can_convert/SupportedExtensionsは.tlg
-// のみだが、convert()自体はPython版と同様に.bmp/.jpg/.jpeg/.png/.tlgを
-// 直接処理できる（ConversionManager経由では.tlg以外はルーティングされない
-// が、convert_from_image等、呼び出し元がConvertを直接呼ぶ経路のために
-// decodeSourceの分岐は維持する）。
+// why not(decodeSourceの対応拡張子): CanConvert/SupportedExtensionsは.tlg
+// のみだが、Convert()自体は.bmp/.jpg/.jpeg/.png/.tlgを直接処理できる
+// （ConversionManager経由では.tlg以外はルーティングされないが、
+// ConvertFromImage等、呼び出し元がConvertを直接呼ぶ経路のためにdecodeSource
+// の分岐は維持する）。
 func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := validateSource(source); err != nil {
 		return ConversionResult{}, err
@@ -432,10 +425,9 @@ func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 
 // saveAsPNG は画像をPNG形式で保存する内部メソッド。
 //
-// why not: PythonのPillowはmodeが"RGB"/"RGBA"/"L"等の範囲外の場合のみ
-// convert()を呼ぶモード変換分岐を持つが、Goのimage/png.Encodeは任意の
-// image.Imageを受け付けそのカラーモデルに応じて適切なPNGを書き出すため、
-// Go版に相当するモード変換分岐は不要（image/pngが吸収する）。
+// why not: Goのimage/png.Encodeは任意のimage.Imageを受け付け、そのカラー
+// モデルに応じて適切なPNGを書き出すため、モード変換分岐は不要
+// （image/pngが吸収する）。
 func (c *ImageConverter) saveAsPNG(img image.Image, dest, source string, bytesBefore int64) (ConversionResult, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
@@ -462,10 +454,8 @@ func (c *ImageConverter) saveAsPNG(img image.Image, dest, source string, bytesBe
 
 // saveAsWebp は画像をWebP形式で保存する内部メソッド。
 //
-// why not: Python版はhas_alpha かつ not lossless_alphaの場合と、has_alphaなしの
-// 場合とで明示的にimage.convert("RGB")を呼び分けるが、github.com/gen2brain/webp
-// のEncodeはimage.Imageを内部で必要な形式へ変換するため、Go版では明示的な
-// RGB変換を行わずEncodeへ委譲する（Pillow固有のモード変換要求がGoには無いため）。
+// why not: github.com/gen2brain/webpのEncodeはimage.Imageを内部で必要な形式へ
+// 変換するため、明示的なRGB変換を行わずEncodeへ委譲する。
 func (c *ImageConverter) saveAsWebp(img image.Image, dest, source string, bytesBefore int64) (ConversionResult, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
 		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
@@ -503,10 +493,11 @@ type opaquer interface {
 
 // imageHasAlpha はimgが実質的なアルファチャンネルを持つかを判定する。
 //
-// why not: PythonのPIL.Image.modeは "RGBA/LA/PA" というフォーマット上の
-// チャンネル構成で判定する（全ピクセルが不透明でも"RGBA"ならアルファあり
-// 扱い）。Goのimage.Imageには統一的なモード情報が無いため、まず
-// image/png.Decodeの具象型で判定する: stdlib image/pngはカラータイプ4/6
+// why not: 画像フォーマットが仕様上アルファチャンネルを持つかを判定したい
+// （全ピクセルが不透明であっても、フォーマット上アルファチャンネルを持つ
+// なら「アルファあり」として扱いたい）。Goのimage.Imageには統一的な
+// モード情報が無いため、まずimage/png.Decodeの具象型で判定する: stdlib
+// image/pngはカラータイプ4/6
 // （グレースケール+アルファ／トゥルーカラー+アルファ）およびtRNSチャンクに
 // よる色キー透過を*image.NRGBA/*image.NRGBA64としてのみデコードする
 // （アルファの無いカラータイプ0/2/3はGray/RGBA/RGBA64/Palettedになる）ため、
@@ -522,8 +513,8 @@ type opaquer interface {
 //
 // 既知の残差: 32bpp BMPでアルファチャンネルを許可しない場合
 // (golang.org/x/image/bmp decodeNRGBAのallowAlpha=false)も*image.NRGBAで
-// 返るため、実質不透明でもhasAlpha=trueになる。Python版テスト・本パッケージの
-// テストが対象とする24bpp BMP/PNGのケースでは発生しない。
+// 返るため、実質不透明でもhasAlpha=trueになる。本パッケージのテストが対象とする
+// 24bpp BMP/PNGのケースでは発生しない。
 //
 // TLG5デコード結果（internal/converter/tlg.TLG5Decoder.Decode）はcolorsに
 // 応じて具象型を使い分ける（RGB(3チャンネル)は*image.RGBA、RGBA(4チャンネル)

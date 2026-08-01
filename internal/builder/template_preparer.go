@@ -71,11 +71,10 @@ func NewTemplatePreparer(projectDir string, sdl2Cache *SDL2SourceCache) *Templat
 // （iconPathはファイルが存在しない場合もスキップされ、代わりにデフォルト
 // アイコンを生成する）。pluginsInfoがnilの場合、プラグインのjniLibs配置は
 // スキップされる（呼び出し元が事前にPluginFetcherで取得したものを渡す
-// 想定。why not: Python版は_copy_plugins_to_jnilibsがplugins_info=None時に
-// 自前でPluginFetcher().get_plugins()を呼びダウンロードを試みるが、Go版は
-// テストが実ネットワークに触れないようにするため、この不利ダウンロード
-// フォールバックを持たない。呼び出し元（internal/pipeline）が明示的に
-// fetchPlugins()の結果を渡す設計に一本化した）。
+// 想定。why not: テストが実ネットワークに触れないようにするため、
+// pluginsInfo=nilの場合に自前でダウンロードを試みるフォールバックは
+// 持たない。呼び出し元（internal/pipeline）が明示的にfetchPlugins()の
+// 結果を渡す設計に一本化した）。
 func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath string, pluginsInfo *PluginsInfo) error {
 	if err := p.extractJNILibs(); err != nil {
 		return err
@@ -144,7 +143,7 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 // 付きのフルファイル名を指定するため、libプレフィックス付きのファイルのみ
 // 配置すれば良い。pluginsInfoがnilの場合は何も行わない（Prepareのdocコメント
 // 参照）。プラグインファイルが見つからない場合はスキップする
-// （ベストエフォート、Python版のlogger.warningに相当する握りつぶし）。
+// （ベストエフォートとしてエラーを握りつぶす）。
 func (p *TemplatePreparer) copyPluginsToJNILibs(pluginsInfo *PluginsInfo) error {
 	if pluginsInfo == nil {
 		return nil
@@ -686,10 +685,9 @@ func addExportedIfMissing(tag string) string {
 
 // xmlAttrEscaper はXML属性値向けのエスケープ処理を行う。
 //
-// why not: 標準ライブラリのhtml.EscapeStringはPythonのhtml.escape(quote=True)と
-// 異なる数値文字参照を用いる（"を&#34;、'を&#39;にエスケープする）。
-// テストはPython版が生成する&quot;/&#x27;という具体的なエスケープ結果を
-// 検証しているため、Python版と同一の変換表を持つreplacerを自前で用意する。
+// why not: 標準ライブラリのhtml.EscapeStringは"を&#34;、'を&#39;という
+// 異なる数値文字参照でエスケープする。"を&quot;、'を&#x27;にエスケープする
+// 独自の変換表を持つreplacerを自前で用意する。
 var xmlAttrEscaper = strings.NewReplacer(
 	"&", "&amp;",
 	"<", "&lt;",

@@ -259,17 +259,14 @@ func (d *GameDetector) detectScriptEncoding(scripts []string) string {
 	return ""
 }
 
-// detectCharset はrawDataの文字コードを推定し、Python版chardetの語彙に
-// 正規化して返す。
+// detectCharset はrawDataの文字コードを推定し、共通の語彙に正規化して返す。
 //
 // why not: github.com/saintfish/chardet には専用のASCII判定器がなく、
 // 純ASCIIバイト列に対しても単バイト系のフォールバック候補
-// （例: "ISO-8859-1"、低信頼度）を返す。一方Python版が使うchardetは
-// 全バイトが0x7F以下の場合に専用の高速パスで必ず"ascii"を返す
-// （ゲーム構成検出結果に含まれる文字コード名はGetSummaryの表示や
-// PR4の再エンコード判定に使われるため、この語彙差はユーザー可視の
-// 挙動差になる）。そのため、まずGo側でも同じ判定を先に行い、
-// 純ASCIIなら"ascii"を返してchardetの推定より優先する。
+// （例: "ISO-8859-1"、低信頼度）を返す。ゲーム構成検出結果に含まれる
+// 文字コード名はGetSummaryの表示や再エンコード判定に使われるため、この
+// 判定差はユーザー可視の挙動差になる。そのため、まずGo側で純ASCIIかを
+// 判定し、"ascii"を返してchardetの推定より優先する。
 func detectCharset(detector *chardet.Detector, rawData []byte) (string, bool) {
 	if isASCII(rawData) {
 		return "ascii", true
@@ -322,16 +319,15 @@ func (d *GameDetector) detectTitle() string {
 // extractTitle はUTF-8、次いでcp932(Shift_JIS)としてデコードを試み、
 // System.titleの値を抽出する。
 //
-// why not: Python版はcp932を先に試し、UnicodeDecodeErrorが発生した場合のみ
-// utf-8へフォールバックする。しかしcp932の"strict"デコードはコードページの
-// 未定義コードポイントでのみ失敗し、その判定にはcp932専用の完全な変換表が
-// 要る（golang.org/x/text/encoding/japaneseのデコーダはレンジベースで
-// 寛容にデコードしてしまい、未定義コードポイントでもエラーを返さない）。
-// 一方、Shift_JIS系の2バイト文字列が有効なUTF-8として解釈できることは
-// 実質的にありえないため、まずutf8.Validで判定してUTF-8を優先させれば、
-// 「cp932で失敗したらutf-8を使う」というPython版の実効的な結果
-// （cp932エンコードのファイルはcp932として、utf-8エンコードのファイルは
-// utf-8として読める）と同じ着地点になる。
+// why not: cp932を先に試し、デコード失敗時のみutf-8へフォールバックする
+// 方式も考えられるが、cp932の"strict"デコードはコードページの未定義コード
+// ポイントでのみ失敗し、その判定にはcp932専用の完全な変換表が要る
+// （golang.org/x/text/encoding/japaneseのデコーダはレンジベースで寛容に
+// デコードしてしまい、未定義コードポイントでもエラーを返さない）。一方、
+// Shift_JIS系の2バイト文字列が有効なUTF-8として解釈できることは実質的に
+// ありえないため、まずutf8.Validで判定してUTF-8を優先させれば、cp932
+// エンコードのファイルはcp932として、utf-8エンコードのファイルはutf-8と
+// して読める、という同じ着地点になる。
 func extractTitle(raw []byte) (string, bool) {
 	if utf8.Valid(raw) {
 		if m := titleRegexp.FindStringSubmatch(string(raw)); m != nil {

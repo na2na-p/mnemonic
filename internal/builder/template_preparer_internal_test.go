@@ -36,8 +36,6 @@ func buildSDL2CacheFixture(t *testing.T) *SDL2SourceCache {
 	return cache
 }
 
-// TestTemplatePreparer_CreateDefaultIcon はPython版
-// TestTemplatePreparerCreateDefaultIconの移植。
 func TestTemplatePreparer_CreateDefaultIcon(t *testing.T) {
 	t.Parallel()
 
@@ -99,8 +97,6 @@ func TestTemplatePreparer_CreateDefaultIcon(t *testing.T) {
 	})
 }
 
-// TestTemplatePreparer_FetchSDL2Sources はPython版
-// TestTemplatePreparerFetchSDL2Sourcesの移植。
 func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 	t.Parallel()
 

@@ -397,11 +397,11 @@ func TestAssetScanner_WithConfig(t *testing.T) {
 	t.Run("正常系: 最初に一致したルールのconverterが無効な場合、後続ルールへフォールバックしない", func(t *testing.T) {
 		t.Parallel()
 
-		// Python版(_get_conversion_rule_override)は最初にパターンが一致した
-		// ルールでreturnし、converterが未知でも次のルールを試さない。
-		// このケースは1番目のルールが一致しconverterが無効なため、2番目の
-		// "skip"ルールへフォールバックせず、拡張子デフォルト(copy、PNGは
-		// krkrsdl2がネイティブサポートするため変換不要)のままになるべき。
+		// 最初にパターンが一致したルールでreturnし、converterが未知でも
+		// 次のルールを試さない。このケースは1番目のルールが一致しconverterが
+		// 無効なため、2番目の"skip"ルールへフォールバックせず、拡張子デフォルト
+		// (copy、PNGはkrkrsdl2がネイティブサポートするため変換不要)のままに
+		// なるべき。
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "icon.png"), []byte("\x89PNG"))
 

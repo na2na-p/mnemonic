@@ -8,12 +8,12 @@ import (
 
 // KeystoreConfig はAPK署名に必要なキーストアの設定情報を表す不変値。
 //
-// Python版は@dataclass(frozen=True)で不変性を保証していたが、Goの構造体は
-// 値渡しされるため、フィールドを変更するメソッドを提供しないことで
-// 「フィールド代入禁止」という契約を踏襲する（internal/apperr.Resultと同じ設計方針）。
+// Goの構造体は値渡しされるため、フィールドを変更するメソッドを提供しない
+// ことで「フィールド代入禁止」という契約を保つ（internal/apperr.Resultと
+// 同じ設計方針）。
 //
-// KeyPasswordがnilの場合、KeystorePasswordを使用する（Python版のkey_password=None
-// に相当）。空文字列と未指定(nil)を区別するため*stringを使う。
+// KeyPasswordがnilの場合、KeystorePasswordを使用する。空文字列と未指定(nil)
+// を区別するため*stringを使う。
 type KeystoreConfig struct {
 	KeystorePath     string
 	KeyAlias         string

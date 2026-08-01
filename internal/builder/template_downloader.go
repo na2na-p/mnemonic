@@ -37,10 +37,8 @@ const downloadTimeout = 300 * time.Second
 // downloadMaxRetries はファイルダウンロードのリトライ回数
 // （初回試行を含まない再試行回数）。
 //
-// why not: Python版にはリトライ処理が存在しないが、本PRのタスク定義で
-// 「ダウンロード...リトライ」が明示的に要求されているため、Go版では
-// ネットワークレベルの一時的エラー（タイムアウト・接続エラー）に限定して
-// ダウンロード処理にのみリトライを追加した（Python版からの意図的な拡張）。
+// why not: ネットワークレベルの一時的エラー（タイムアウト・接続エラー）に
+// 限定してダウンロード処理にのみリトライを追加する。
 const downloadMaxRetries = 2
 
 // downloadRetryInterval はリトライ間隔。
@@ -398,7 +396,7 @@ func (d *TemplateDownloader) downloadFileOnce(downloadURL, destination string) e
 }
 
 // verifyFileIntegrity はダウンロードしたファイルの整合性を検証する
-// （ファイルサイズの一致のみを確認する。Python版と同様ハッシュ検証は行わない）。
+// （ファイルサイズの一致のみを確認し、ハッシュ検証は行わない）。
 func (d *TemplateDownloader) verifyFileIntegrity(filePath string, expectedSize int64) error {
 	info, err := os.Stat(filePath)
 	if err != nil {

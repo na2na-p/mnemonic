@@ -12,9 +12,9 @@ import (
 //
 // why not: zipalignのisAligned/apksignerのverifyは非ゼロ終了コードを
 // 「コマンド失敗」ではなく「未アラインメント/検証失敗」という正常な戻り値
-// として扱う（Python版のsubprocess.run(check=False)と同じ設計）。そのため
-// 終了コード・stdout・stderrをそのまま呼び出し元へ返し、プロセスの起動自体に
-// 失敗した場合のみerrorを返す（internal/builder.RunResultと同じ設計方針）。
+// として扱う。そのため終了コード・stdout・stderrをそのまま呼び出し元へ返し、
+// プロセスの起動自体に失敗した場合のみerrorを返す（internal/builder.RunResult
+// と同じ設計方針）。
 type RunResult struct {
 	ExitCode int
 	Stdout   string

@@ -21,15 +21,13 @@ import (
 // （例: macOSのAPFS既定設定）上にある場合、このテストをスキップする。
 //
 // why not: os.Rename("Foo.tmp", "foo.tmp")は大文字小文字を区別しない
-// ファイルシステム上では単なる同一ファイルの表記変更になり、Python版
-// （pathlib経由でも同じOS依存の挙動）を含め、リネーム後も旧表記の
-// パスでos.Statが成功し続ける。これはリネーム処理自体の不具合ではなく
-// ファイルシステムの性質であり、Python版もこの環境では同じ挙動になる
-// （レビュー指摘: 本番コードを変更すべき問題ではない）。CI/DevContainerの
-// 実行環境（Linux、大文字小文字を区別する）では本テストは実際に
-// リネームの旧名不在を検証する。判定はconstではなく実際のt.TempDir()を
-// probeして行う（tmpディレクトリのマウント設定次第でホストのデフォルト
-// と異なる場合があるため）。
+// ファイルシステム上では単なる同一ファイルの表記変更になり、リネーム後も
+// 旧表記のパスでos.Statが成功し続ける。これはリネーム処理自体の不具合では
+// なくファイルシステムの性質であり、本番コードを変更すべき問題ではない。
+// CI/DevContainerの実行環境（Linux、大文字小文字を区別する）では本テストは
+// 実際にリネームの旧名不在を検証する。判定はconstではなく実際の
+// t.TempDir()をprobeして行う（tmpディレクトリのマウント設定次第でホストの
+// デフォルトと異なる場合があるため）。
 func skipIfCaseInsensitiveFS(t *testing.T, dir string) {
 	t.Helper()
 
@@ -41,8 +39,6 @@ func skipIfCaseInsensitiveFS(t *testing.T, dir string) {
 	}
 }
 
-// TestBuildPipeline_NormalizeCriticalFilenames はPython版
-// TestBuildPipelineNormalizeCriticalFilenamesの移植。
 func TestBuildPipeline_NormalizeCriticalFilenames(t *testing.T) {
 	t.Parallel()
 
@@ -122,8 +118,7 @@ func TestBuildPipeline_NormalizeCriticalFilenames(t *testing.T) {
 	})
 }
 
-// TestBuildPipeline_AdjustScripts はPython版
-// TestBuildPipelineAdjustScriptsの移植。ScriptAdjuster自体は別途
+// TestBuildPipeline_AdjustScripts はScriptAdjuster自体は別途
 // script_test.goで検証済みのため、ここではpipeline側の再帰探索と
 // 呼び出しが行われることを実際の内容変化で確認する。
 func TestBuildPipeline_AdjustScripts(t *testing.T) {
@@ -236,8 +231,6 @@ func TestBuildPipeline_AdjustScripts_SkipVideo(t *testing.T) {
 	})
 }
 
-// TestBuildPipeline_RemovePluginDirectory はPython版
-// TestBuildPipelineRemovePluginDirectoryの移植。
 func TestBuildPipeline_RemovePluginDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -303,8 +296,6 @@ func TestBuildPipeline_RemovePluginDirectory(t *testing.T) {
 	})
 }
 
-// TestBuildPipeline_CopyPolyfillFiles はPython版
-// TestBuildPipelineCopyPolyfillFilesの移植。
 func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 	t.Parallel()
 
@@ -803,8 +794,6 @@ func (f fakeIconExtractor) Extract(string, string) (string, error) {
 	return f.path, f.err
 }
 
-// TestBuildPipeline_FindGameIcon_FallsBackToExeExtraction はPython版
-// test_extracts_icon_from_exe_when_no_icon_fileの移植。
 func TestBuildPipeline_FindGameIcon_FallsBackToExeExtraction(t *testing.T) {
 	t.Parallel()
 

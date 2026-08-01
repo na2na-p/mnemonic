@@ -266,7 +266,7 @@ func (f *PluginFetcher) downloadZip(url, context string) ([]byte, error) {
 }
 
 // extractSOFromZip はZIPファイルから対象ファイルを抽出する。
-// nameがtargetFilenameで終わる最初のエントリを対象とする（Python版のname.endswith相当）。
+// nameがtargetFilenameで終わる最初のエントリを対象とする。
 func extractSOFromZip(zipContent []byte, targetFilename, context string) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
 	if err != nil {

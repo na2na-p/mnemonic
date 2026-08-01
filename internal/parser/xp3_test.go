@@ -16,8 +16,8 @@ import (
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
-// minimalXP3Bytes はPython版テストで使われる最小限のXP3ファイル
-// （簡易マジック + パディング、ファイルインデックスは持たない）を返す。
+// minimalXP3Bytes は最小限のXP3ファイル（簡易マジック + パディング、
+// ファイルインデックスは持たない）を返す。
 func minimalXP3Bytes() []byte {
 	return []byte{'X', 'P', '3', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00}
 }
@@ -309,11 +309,9 @@ func TestXP3EncryptionChecker_RaiseIfEncrypted(t *testing.T) {
 
 // --- 標準インデックス（バージョン1）を持つ実XP3アーカイブのビルダー ---
 //
-// 単一セグメントの往復検証（構築→解析→展開→内容一致）に関しては、Python版の
-// テストスイートには対応するフィクスチャヘルパーが存在しない（簡易マジック
-// のみの最小ファイルで検証している）。しかしXP3Archiveの本体ロジック
-// （zlib解凍・チャンク解析・オフセット算出）はこのパスを通らないと一切
-// 検証されないため、Go移植では独自にビルダーを追加している。
+// XP3Archiveの本体ロジック（zlib解凍・チャンク解析・オフセット算出）は
+// 簡易マジックのみの最小ファイルでは検証できないため、単一セグメントの
+// 往復検証（構築→解析→展開→内容一致）用に独自のビルダーを用意している。
 // 複数セグメント関連（xp3SegmentSpec.segments経由）についても、同様の
 // 理由からこのビルダーへ統合した。
 //
@@ -359,7 +357,7 @@ func (e xp3EntrySpec) totalOriginalSize() uint64 {
 // が続く形式）のXP3アーカイブをバイト列として構築する。
 // 各エントリはresolvedSegments()が返す1つ以上のセグメントとしてデータ領域に
 // 順に配置され、segmチャンクにも同じ順でセグメントレコードが書き込まれる
-// （Python版delta 3a17127の複数segmレコード対応と対をなすテストフィクスチャ）。
+// （複数segmレコードに対応したテストフィクスチャ）。
 func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 	t.Helper()
 
@@ -400,8 +398,8 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 	for i, e := range entries {
 		var entryBody bytes.Buffer
 
-		// infoサブチャンク（original_size/sizeはPython版delta 3a17127以降
-		// 読み飛ばされる値のため、合計値をそのまま書けば十分）。
+		// infoサブチャンク（original_size/sizeはパース側で読み飛ばされる値のため、
+		// 合計値をそのまま書けば十分）。
 		var info bytes.Buffer
 		var flags uint32
 		if e.encryptFlag {
@@ -419,10 +417,9 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 		writeChunkHeader(&entryBody, "info", info.Bytes())
 
 		// segmサブチャンク（セグメントごとに28バイトのレコードを連結）。
-		// フラグは0x07（Python版delta 3a17127のテストフィクスチャ
-		// `flags = 0x07 if is_comp else 0x00`に合わせたマルチビット値）。
-		// パース側の判定はflags&0x07 != 0のため0x01でも判定結果は同じだが、
-		// Python版フィクスチャとバイト列レベルで一致させる。
+		// フラグは0x07（マルチビット値）。パース側の判定はflags&0x07 != 0の
+		// ため0x01でも判定結果は同じだが、実際のXP3アーカイブで観測される値と
+		// バイト列レベルで一致させる。
 		var segm bytes.Buffer
 		for _, seg := range entrySegments[i] {
 			var segmFlags uint32
@@ -673,7 +670,7 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 
 	var info bytes.Buffer
 	writeUint32(&info, 0)                      // flags
-	writeUint64(&info, 5)                      // originalSize（Python版delta以降読み飛ばされる）
+	writeUint64(&info, 5)                      // originalSize（パース側で読み飛ばされる）
 	writeUint64(&info, 5)                      // size（同上）
 	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
 	for _, u := range nameUTF16 {
@@ -728,7 +725,7 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 
 	var info bytes.Buffer
 	writeUint32(&info, 0)                      // flags
-	writeUint64(&info, 5)                      // originalSize（Python版delta以降読み飛ばされる）
+	writeUint64(&info, 5)                      // originalSize（パース側で読み飛ばされる）
 	writeUint64(&info, 5)                      // size（同上）
 	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
 	for _, u := range nameUTF16 {
@@ -767,7 +764,7 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 	assert.FileExists(t, filepath.Join(outputDir, "secret.dat"))
 }
 
-// --- 複数セグメント対応（Python版delta 3a17127相当）のテスト ---
+// --- 複数セグメント対応のテスト ---
 
 func TestXP3FileEntry_TotalSize(t *testing.T) {
 	t.Parallel()
@@ -1025,10 +1022,9 @@ func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
 // nameを確定できるがsegmチャンクを欠く（あるいは28バイト未満で1件も有効な
 // セグメントを構成できない）場合に、エントリ自体が破棄されることをpinする。
 //
-// parseSingleEntryの「name == "" || len(segments) == 0」判定
-// （Python版の`if name and segments:`に対応）はこれまでテストされておらず、
-// reviewerがlen(segments)==0の条件を取り除くミューテーションを入れても
-// 全テストが通過することを確認していた。
+// parseSingleEntryの「name == "" || len(segments) == 0」判定は、
+// len(segments)==0の条件を取り除くミューテーションを入れても検出されない
+// 可能性があったため、このテストで固定する。
 func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 	t.Parallel()
 
@@ -1094,8 +1090,8 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 // TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes は、
 // segmのis_compressedフラグ（0x07）が立っていてもSize==OriginalSizeの場合は
 // 「圧縮後サイズ==元サイズ」つまり実質未圧縮を意味するため解凍を試みず、
-// アーカイブ上の生バイト列をそのまま採用すること（Python版の
-// `is_compressed and size != original_size`ガードと同じ）をpinする。
+// アーカイブ上の生バイト列をそのまま採用すること（is_compressedかつ
+// size != original_sizeの場合のみ解凍するガード条件）をpinする。
 //
 // 生バイト列自体を「たまたま正当なzlibストリームだが別の内容を指す」もの
 // にしておくことで、ガード条件（Size != OriginalSize）が取り除かれた場合
@@ -1128,7 +1124,7 @@ func TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes(t *test
 	}
 
 	var segm bytes.Buffer
-	writeUint32(&segm, 0x07)                    // is_compressed = true（Python版フィクスチャと同じ多ビットフラグ）
+	writeUint32(&segm, 0x07)                    // is_compressed = true（マルチビットフラグ）
 	writeUint64(&segm, uint64(offset))          //nolint:gosec // テストヘルパーであり非負であることが既知
 	writeUint64(&segm, uint64(len(rawPayload))) // size
 	writeUint64(&segm, uint64(len(rawPayload))) // original_size（sizeと同一 → 解凍を試みてはいけない）

@@ -260,9 +260,7 @@ func (g *ProjectGenerator) updateAndroidManifest(outputDir string, config Projec
 	text := string(content)
 	// why not: Go正規表現のReplaceAllStringは置換文字列中の"$"をグループ参照として
 	// 解釈するため、config.PackageName/AppNameに"$"が含まれる場合に意図しない
-	// 置換結果になりうる。Func版で単純な文字列連結にすることでこれを避ける
-	// （Pythonのre.subは置換が単純文字列なら"$"を特別扱いしないため、この対応は
-	// Go版特有の差分）。
+	// 置換結果になりうる。Func版で単純な文字列連結にすることでこれを避ける。
 	text = manifestPackagePattern.ReplaceAllStringFunc(text, func(string) string {
 		return fmt.Sprintf(`package="%s"`, config.PackageName)
 	})

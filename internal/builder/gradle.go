@@ -34,8 +34,7 @@ const DefaultGradleTimeout = 1800 * time.Second
 // why not: converter.CommandRunner（video.go）は非ゼロ終了コードを暗黙に
 // errorへ畳み込む設計だが、Gradleのbuild/cleanは終了コード0以外を
 // 「ビルド失敗」として自身で判定し、標準出力・標準エラーを結合したログを
-// 保持し続ける必要がある（Python版のsubprocess.run(check=False)と同じ設計）。
-// そのため終了コード・stdout・stderrをそのまま呼び出し元へ返す専用の結果型を
+// 保持し続ける必要がある。そのため終了コード・stdout・stderrをそのまま呼び出し元へ返す専用の結果型を
 // 用意し、実行自体が失敗した場合（wrapper未検出・タイムアウト等）のみ
 // errorを返すインターフェースにする。
 type RunResult struct {
@@ -101,8 +100,7 @@ func (execCommandRunner) Run(ctx context.Context, workDir string, env []string, 
 
 // BuildResult はGradleビルド結果を表す不変値。
 //
-// APKPathがnilの場合、Python版のNone（ビルドは成功したがAPKファイルが
-// 見つからない）に相当する。
+// APKPathがnilの場合、ビルドは成功したがAPKファイルが見つからないことを表す。
 type BuildResult struct {
 	Success   bool
 	APKPath   *string
@@ -121,8 +119,7 @@ type GradleBuilder struct {
 //
 // timeoutが0以下の場合はDefaultGradleTimeout（30分）を使用する。
 // runnerがnilの場合はos/execベースの既定実装を使用する。
-// 初期化時にgradle.propertiesへキャッシュ無効化設定を書き込む
-// （Python版__init__の_disable_gradle_caching呼び出しに相当）。
+// 初期化時にgradle.propertiesへキャッシュ無効化設定を書き込む。
 func NewGradleBuilder(projectPath string, timeout time.Duration, runner CommandRunner) (*GradleBuilder, error) {
 	if timeout <= 0 {
 		timeout = DefaultGradleTimeout
@@ -254,8 +251,7 @@ func (b *GradleBuilder) runGradle(args ...string) (RunResult, error) {
 	fullArgs := append([]string{gradlew}, args...)
 	fullArgs = append(fullArgs, "--no-daemon", "--no-build-cache", "--rerun-tasks", "--stacktrace")
 
-	// why not: ロケール関連の問題を回避するため、Python版と同様にLC_ALL/LANGを
-	// C.utf8へ強制する。
+	// why not: ロケール関連の問題を回避するため、LC_ALL/LANGをC.utf8へ強制する。
 	env := append(os.Environ(), "LC_ALL=C.utf8", "LANG=C.utf8")
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
@@ -264,8 +260,7 @@ func (b *GradleBuilder) runGradle(args ...string) (RunResult, error) {
 	return b.runner.Run(ctx, b.projectPath, env, fullArgs)
 }
 
-// capitalize はPythonのstr.capitalize()と等価な変換を行う
-// （先頭文字を大文字化し、残りを小文字化する）。
+// capitalize は先頭文字を大文字化し、残りを小文字化する変換を行う。
 func capitalize(s string) string {
 	if s == "" {
 		return s
@@ -340,8 +335,7 @@ func (b *GradleBuilder) CheckGradleWrapper() bool {
 //
 // 標準的なファイル名（release: app-release-unsigned.apk → app-release.apkの順、
 // それ以外: app-<buildType>.apk）を優先して探し、どれも無ければディレクトリ内の
-// APKファイルを1つ返す（Python版get_apk_pathの標準名優先→globフォールバックと
-// 同じ設計）。
+// APKファイルを1つ返す（標準名優先→globフォールバックの設計）。
 //
 // why not: krkrsdl2テンプレートのapp/build.gradleはoutputFileNameを
 // "${app_name}_${architecture}.apk"のようにカスタマイズしており、標準名では
@@ -372,8 +366,8 @@ func (b *GradleBuilder) GetAPKPath(buildType string) *string {
 	}
 
 	// why not: filepath.Globが返す順序はOS/ファイルシステム依存で非決定的なため、
-	// テストの再現性を保つ目的でソートしてから先頭を採用する（Python版のglob()は
-	// 順序を保証しないが、テストはAPKが1つのみのケースしか要求しないため実害はない）。
+	// テストの再現性を保つ目的でソートしてから先頭を採用する（テストはAPKが1つの
+	// みのケースしか要求しないため実害はない）。
 	matches, err := filepath.Glob(filepath.Join(apkDir, "*.apk"))
 	if err != nil || len(matches) == 0 {
 		return nil

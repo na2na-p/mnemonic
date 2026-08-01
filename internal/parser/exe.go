@@ -62,9 +62,9 @@ func (e *EmbeddedXP3Extractor) FindEmbeddedXP3() ([]EmbeddedXP3Info, error) {
 	fileSize := int64(len(content))
 
 	// XP3マジックバイトをスキャンしてオフセットを記録する。
-	// posをoffset+1から再開することで、Python版と同様に1バイトずつ
-	// 前進しながら重複を許容した探索を行う（bytes.Indexは重複開始位置を
-	// 見逃さないため、offset+len(magic)からの再開よりも安全）。
+	// posをoffset+1から再開することで、1バイトずつ前進しながら重複を許容した
+	// 探索を行う（bytes.Indexは重複開始位置を見逃さないため、offset+len(magic)
+	// からの再開よりも安全）。
 	var offsets []int64
 	pos := 0
 	for {

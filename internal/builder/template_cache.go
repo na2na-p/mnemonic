@@ -29,9 +29,8 @@ const defaultRefreshDays = 7
 //
 // why not: internal/cacheパッケージの関数を直接呼ぶと、TemplateCacheの
 // 単体テストが実ファイルシステムのキャッシュディレクトリ（$HOME配下）に
-// 依存してしまう。Python版もCacheManager Protocolで抽象化しテストでは
-// MagicMockに差し替えていたため、Go版でも同様に利用側（本パッケージ）で
-// インターフェースを定義しgomockでモックする。
+// 依存してしまう。利用側（本パッケージ）でインターフェースを定義し
+// gomockでモックする。
 type CacheManager interface {
 	// GetCacheDir はキャッシュのルートディレクトリを返す。
 	GetCacheDir() (string, error)
@@ -94,8 +93,7 @@ func (c *TemplateCache) metadataPath(version string) (string, error) {
 }
 
 // readMetadata はversionのメタデータファイルを読み込む。
-// ファイルが存在しない、またはパース不能な場合はok=falseを返す
-// （Python版がOSError/JSONDecodeErrorを捕捉してNoneを返すのと同じ扱い）。
+// ファイルが存在しない、またはパース不能な場合はok=falseを返す。
 func (c *TemplateCache) readMetadata(version string) (templateMetadata, bool) {
 	path, err := c.metadataPath(version)
 	if err != nil {

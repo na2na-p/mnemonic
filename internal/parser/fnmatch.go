@@ -6,17 +6,18 @@ import (
 	"strings"
 )
 
-// matchGlob はPythonの fnmatch.fnmatch(name, pattern) と等価なマッチングを行う。
+// matchGlob はUnix fnmatch(3)相当のマッチングを行う（"*"がパス区切りを含む
+// 任意の文字列にマッチする）。
 //
 // why not: Go標準の path.Match / filepath.Match は"*"が"/"を越えてマッチしない
-// （シェルのグロブ相当）が、Pythonのfnmatchは"*"がパス区切りを含む任意の文字列に
-// マッチする（正規表現の".*"相当）。exclude/conversion_rulesパターン
-// （例: "voice/*.ogg"）はfnmatchのこの性質に依存しているため、Go版では
-// fnmatch.translateのロジックを再実装したうえでregexpに変換して判定する。
+// （シェルのグロブ相当）が、exclude/conversion_rulesパターン
+// （例: "voice/*.ogg"）は"*"がパス区切りを含む任意の文字列にマッチする
+// （正規表現の".*"相当）性質に依存している。そのためfnmatch相当の変換
+// ロジックを実装したうえでregexpに変換して判定する。
 func matchGlob(name, pattern string) bool {
 	if runtime.GOOS == "windows" {
-		// Python版はos.path.normcaseを介して照合するため、Windowsでは
-		// パターン・対象文字列とも大文字小文字を無視する。
+		// Windowsのファイルシステムは大文字小文字を区別しないため、
+		// パターン・対象文字列とも小文字化してから照合する。
 		name = strings.ToLower(name)
 		pattern = strings.ToLower(pattern)
 	}
@@ -35,16 +36,17 @@ func matchGlob(name, pattern string) bool {
 
 // translateFnmatch はfnmatchパターンをGo正規表現ソースへ変換する。
 //
-// CPython fnmatch.translate() (3.12) の変換規則を移植したものだが、以下の2点は
-// 意味を保存しない既知の差分として残っている（拡張子・ディレクトリ名によるglob
-// という現実的な設定パターンでは踏まないため許容している。いずれも
-// regexp.Compileがエラーを返し、結果としてmatchGlobはfalseを返す）:
-//   - 文字クラス内のバックスラッシュ（例: "[a\b]"）: Python版は"-"を含まない
-//     文字クラスの中身のバックスラッシュを"\\\\"へエスケープしリテラル扱いに
-//     するが、本実装は素通しするため生成される正規表現の意味が変わりうる。
-//   - 逆順・空レンジ（例: "[b-a]"）: Python版は無効なレンジを検出して除去・
-//     結合するが、本実装は素通しするため、Goの正規表現エンジンが受理しない
-//     （開始>終了のレンジをコンパイルエラーにする）。
+// fnmatch相当の変換規則を実装したものだが、以下の2点は意味を保存しない
+// 既知の差分として残っている（拡張子・ディレクトリ名によるglobという
+// 現実的な設定パターンでは踏まないため許容している。いずれもregexp.Compile
+// がエラーを返し、結果としてmatchGlobはfalseを返す）:
+//   - 文字クラス内のバックスラッシュ（例: "[a\b]"）: "-"を含まない文字クラス
+//     の中身のバックスラッシュを"\\\\"へエスケープしリテラル扱いにする
+//     実装も考えられるが、本実装は素通しするため生成される正規表現の意味が
+//     変わりうる。
+//   - 逆順・空レンジ（例: "[b-a]"）: 無効なレンジを検出して除去・結合する
+//     実装も考えられるが、本実装は素通しするため、Goの正規表現エンジンが
+//     受理しない（開始>終了のレンジをコンパイルエラーにする）。
 func translateFnmatch(pattern string) string {
 	var b strings.Builder
 	b.WriteString("^")

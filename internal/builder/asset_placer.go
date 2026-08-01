@@ -43,13 +43,12 @@ func (p *AssetPlacer) assetsDir() string {
 
 // matchesAnyPattern はnameがpatternsのいずれかにfnmatch相当で一致するかを判定する。
 //
-// why not: Python版はfnmatch.fnmatch(file_path.name, pattern)でファイル名
-// （ディレクトリ区切りを含まないbasename）のみを照合する。filepath.Matchは
-// "*"がパス区切りを越えてマッチしないglob実装だが、ここではbasenameのみを
-// 渡すためパス区切りは登場せず、"*"/"?"/文字クラスの挙動はfnmatchと実質的に
-// 一致する（internal/parser/fnmatch.goのような完全なfnmatch.translate相当の
-// 再実装は、ドット付き拡張子・固定ファイル名という単純なパターンにしか
-// 使われないこの用途では過剰なため採用しない）。
+// why not: この関数はfilepath.Matchでbasename（ディレクトリ区切りを含まない
+// ファイル名）のみを照合する用途に限定される。filepath.Matchは"*"がパス
+// 区切りを越えてマッチしないglob実装だが、ここではbasenameのみを渡すため
+// パス区切りは登場せず、ドット付き拡張子・固定ファイル名という単純な
+// パターンの照合には十分である（internal/parser/fnmatch.goのような完全な
+// fnmatch.translate相当の再実装は、この用途では過剰なため採用しない）。
 func matchesAnyPattern(name string, patterns []string) bool {
 	for _, pattern := range patterns {
 		if ok, err := filepath.Match(pattern, name); err == nil && ok {
@@ -219,9 +218,8 @@ func updateExistingAaptOptions(content string, extensions []string, isKotlin boo
 		// why not: noCompressLinePattern の group1（先頭の空白。直前行との改行を含む）を
 		// 捨てて丸ごと置換すると、noCompressが既存aaptOptionsの2行目以降にある場合
 		// （例: cruncherEnabled falseの次の行）に直前行との改行が失われ、
-		// 1行に連結されてGradleの構文エラーになる（レビュー指摘で発見）。
-		// Python版のre.sub(pattern, f"\\1{...}", content)と同様、group1を保持し
-		// noCompress部分のみを置換する。
+		// 1行に連結されてGradleの構文エラーになる。group1を保持しつつ
+		// noCompress部分のみを置換することで、直前行の改行を失わない。
 		return noCompressLinePattern.ReplaceAllStringFunc(content, func(match string) string {
 			groups := noCompressLinePattern.FindStringSubmatch(match)
 			if groups == nil {
@@ -239,15 +237,12 @@ func updateExistingAaptOptions(content string, extensions []string, isKotlin boo
 
 // addNewAaptOptions はandroidブロックの末尾にaaptOptionsブロックを新規追加する。
 //
-// why not: Python版は`content = f"{android_start}{android_body}{aapt_block}\n{android_end}"`
-// のように、正規表現マッチしたandroid{...}ブロックの3グループのみでcontent
-// 全体を置き換えていた。これはandroidブロックの前後に他のトップレベル
-// ブロック（dependencies{}等）やコメントがある実際のbuild.gradleでは、
-// マッチ範囲外のテキストが丸ごと消える データロス バグである。Go版は
-// ReplaceAllStringFuncでマッチした範囲だけをその場で置換するため、
-// android{}ブロックの前後のテキストは保持される（Python版からの意図的な
-// 修正・改善であり、削除された範囲を復元する仕様ではないため出力は
-// Python版と完全一致しない）。
+// why not: ReplaceAllStringFuncでマッチした範囲だけをその場で置換する設計に
+// より、android{}ブロックの前後にある他のトップレベルブロック
+// （dependencies{}等）やコメントを保持する。マッチしたandroid{...}ブロックの
+// 3グループのみでcontent全体を再構築して置き換える実装は、androidブロックの
+// 前後に他のトップレベルブロックやコメントがある実際のbuild.gradleでは
+// マッチ範囲外のテキストが丸ごと消えるデータロスにつながるため採用しない。
 func addNewAaptOptions(content string, extensions []string, isKotlin bool) string {
 	noCompressLine := buildNoCompressLine(extensions, isKotlin)
 	aaptBlock := "    aaptOptions {\n" + noCompressLine + "\n    }"

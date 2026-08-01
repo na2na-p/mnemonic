@@ -41,9 +41,8 @@ type DefaultPasswordProvider struct {
 	// term.ReadPasswordを使う既定実装にフォールバックする。
 	//
 	// why not: term.ReadPasswordは実端末のfdを要求し単体テストでの差し替えが
-	// 困難（Python版はgetpass.getpassをunittest.mockでパッチしていた）。
-	// パッケージ変数の書き換えはt.Parallel()配下のテスト同士で競合するため、
-	// 構造体フィールドとして差し替え口を持たせる。
+	// 困難。パッケージ変数の書き換えはt.Parallel()配下のテスト同士で競合する
+	// ため、構造体フィールドとして差し替え口を持たせる。
 	readPassword func(fd uintptr) ([]byte, error)
 }
 

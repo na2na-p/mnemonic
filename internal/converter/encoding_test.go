@@ -60,10 +60,9 @@ func TestEncodingDetector_Detect(t *testing.T) {
 	t.Run("申し送り: BOM付きUTF-8はutf-8-sigではなくutf-8として検出される", func(t *testing.T) {
 		t.Parallel()
 
-		// why: PythonのchardetはBOM付き入力に"utf-8-sig"を返すが、
-		// Go側(saintfish/chardet)は常に"UTF-8"を返す。EncodingConverter.Convert
-		// のスキップ判定は生バイト列のBOM有無で独立して行うため、この語彙差は
-		// 検出結果の名称に現れないことをここでピン留めする。
+		// why: Go側(saintfish/chardet)はBOM付き入力に対しても常に"UTF-8"を返す。
+		// EncodingConverter.Convertのスキップ判定は生バイト列のBOM有無で独立して
+		// 行うため、この語彙差は検出結果の名称に現れないことをここでピン留めする。
 		result, err := detector.Detect(filepath.Join(fixturesDir(t), "utf8_bom.txt"))
 
 		require.NoError(t, err)
@@ -330,9 +329,8 @@ func TestEncodingConverter_Convert(t *testing.T) {
 	t.Run("正常系: ASCIIのみの.iniファイルはSKIPPEDになる", func(t *testing.T) {
 		t.Parallel()
 
-		// why: レビュー指摘の回帰防止。ASCII短絡が無いと自動検出が
-		// utf-8ではないエンコーディング名を返しFAILEDになってしまう
-		// （Python版はchardetが"ascii"を返しutf-8へ正規化されてSKIPPEDになる）。
+		// why: ASCII短絡が無いと自動検出がutf-8ではないエンコーディング名を返し
+		// FAILEDになってしまうことの回帰を防止する。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "config.ini")
 		dest := filepath.Join(dir, "dest.ini")
@@ -371,9 +369,8 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		source := filepath.Join(dir, "source.txt")
 		dest := filepath.Join(dir, "dest.txt")
 
-		// why not: 短い文字列だとgithub.com/saintfish/chardetの検出精度が
-		// Python版chardetより低く、shift_jis以外に誤検出されることがあるため
-		// 十分な長さのテキストを使用する（Python版テストの他ケースと同じ対応）。
+		// why not: 短い文字列だとgithub.com/saintfish/chardetの検出精度が低く、
+		// shift_jis以外に誤検出されることがあるため十分な長さのテキストを使用する。
 		writeSJIS(t, source, "バイトサイズテストです。日本語の文章を十分な長さにして文字コード検出の精度を確保します。")
 
 		c := converter.NewEncodingConverter("", "")

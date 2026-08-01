@@ -16,10 +16,9 @@ type ProgressCallback func(progress Progress)
 // Result はパイプライン実行結果を表す値。
 //
 // 成功/失敗の状態、出力ファイルパス、統計情報などを含む。
-// OutputPathはPythonの `Path | None` に相当し、失敗時のNoneを表現するため
-// ポインタとする。Statisticsはフェーズごとの所要時間（float64、秒）と
-// 処理件数（int）等、値の型が混在するためPython版のdict[str, Any]と同様
-// map[string]anyとする。
+// OutputPathは失敗時の未設定を表現するためポインタとする。Statisticsは
+// フェーズごとの所要時間（float64、秒）と処理件数（int）等、値の型が
+// 混在するためmap[string]anyとする。
 type Result struct {
 	Success         bool
 	OutputPath      *string

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 )
 
-// copyFile はsrcの内容をdstへコピーする（Pythonのshutil.copy2相当）。
+// copyFile はsrcの内容をdstへコピーする。
 // 既存のdstは上書きされる。
 func copyFile(src, dst string) error {
 	in, err := os.Open(src) //nolint:gosec // 呼び出し元で存在検証済みのファイルを読む用途のため妥当
