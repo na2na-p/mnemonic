@@ -935,15 +935,24 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 
 		testCases := []struct {
 			name         string
+			packageName  string
 			activityName string
 			wantName     string
 		}{
-			// 先頭ドット省略形（テスト全体で使われている表記）
-			{name: "正常系: 先頭ドット省略形", activityName: ".KirikiriSDL2Activity", wantName: ".KirikiriSDL2GameActivity"},
+			// 先頭ドット省略形（テスト全体で使われている表記）。相対解決形は
+			// build.gradleのnamespace（packageName）を通じて解決されるため、
+			// プレフィックスをそのまま保持してよい。
+			{name: "正常系: 先頭ドット省略形", packageName: "com.example.game", activityName: ".KirikiriSDL2Activity", wantName: ".KirikiriSDL2GameActivity"},
 			// パッケージ省略形（fork krkrsdl2実テンプレートの実際の表記）
-			{name: "正常系: パッケージ省略形", activityName: "KirikiriSDL2Activity", wantName: "KirikiriSDL2GameActivity"},
-			// 完全修飾
-			{name: "正常系: 完全修飾", activityName: "pw.uyjulian.krkrsdl2.KirikiriSDL2Activity", wantName: "pw.uyjulian.krkrsdl2.KirikiriSDL2GameActivity"},
+			{name: "正常系: パッケージ省略形", packageName: "com.example.game", activityName: "KirikiriSDL2Activity", wantName: "KirikiriSDL2GameActivity"},
+			// 完全修飾かつpackageNameがfork版パッケージと異なる場合。
+			// updateJavaSourceは生成クラスを常にpackageName配下へ配置するため、
+			// 書き換え後もpackageNameを指す必要がある（元のfork版パッケージ
+			// 接頭辞pw.uyjulian.krkrsdl2.を保持すると実在しないクラスを
+			// 指してしまう。rewriteActivityNameのwhy-not参照）。
+			{name: "正常系: 完全修飾（packageNameが異なる）", packageName: "com.example.game", activityName: "pw.uyjulian.krkrsdl2.KirikiriSDL2Activity", wantName: "com.example.game.KirikiriSDL2GameActivity"},
+			// 完全修飾かつpackageNameがfork版パッケージ自身と一致する場合
+			{name: "正常系: 完全修飾（packageNameがfork版と一致）", packageName: "pw.uyjulian.krkrsdl2", activityName: "pw.uyjulian.krkrsdl2.KirikiriSDL2Activity", wantName: "pw.uyjulian.krkrsdl2.KirikiriSDL2GameActivity"},
 		}
 
 		for _, tc := range testCases {
@@ -964,16 +973,24 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 `)
 
 				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
-				require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+				require.NoError(t, p.Prepare(tc.packageName, "My Game", "", "", nil))
 
 				content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 				require.NoError(t, err)
 				text := string(content)
 				assert.Contains(t, text, `android:name="`+tc.wantName+`"`)
-				assert.NotContains(t, text, `android:name="`+tc.activityName+`"`)
+				if tc.activityName != tc.wantName {
+					assert.NotContains(t, text, `android:name="`+tc.activityName+`"`)
+				}
 				// android.intent.action.MAINのandroid:name属性まで誤って
 				// 書き換えられていないことを確認する
 				assert.Contains(t, text, `android:name="android.intent.action.MAIN"`)
+
+				// 書き換え後のandroid:nameが実際に生成されたクラスファイルを
+				// 指していることを確認する（ActivityNotFoundException回帰防止）。
+				packagePath := filepath.Join(strings.Split(tc.packageName, ".")...)
+				gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", packagePath, "KirikiriSDL2GameActivity.java")
+				assert.FileExists(t, gameActivityFile)
 			})
 		}
 	})

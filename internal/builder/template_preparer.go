@@ -99,7 +99,7 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 		return err
 	}
 
-	if err := p.updateManifest(); err != nil {
+	if err := p.updateManifest(packageName); err != nil {
 		return err
 	}
 
@@ -615,16 +615,47 @@ var (
 
 // activityNameForkClassPattern はAndroidManifest.xmlのandroid:name属性値が
 // forkActivityClassName（fork版クラス、パッケージ名書き換えのみで素通し
-// 出力される）を指す箇所にマッチする。実テンプレートで確認された以下の
-// 参照形態をすべて許容し、クラス名部分のみをgameActivityClassNameへ置き換え、
-// プレフィックス（Androidのコンポーネント名解決規則上の相対/絶対の区別）は
-// そのまま保持する。
-//   - パッケージ省略形: android:name="KirikiriSDL2Activity"
-//   - 先頭ドット省略形: android:name=".KirikiriSDL2Activity"
+// 出力される）を指す箇所にマッチする。実テンプレートで確認されているのは
+// パッケージ省略形のみだが、以下の3形態すべてを許容する。
+//   - パッケージ省略形: android:name="KirikiriSDL2Activity"（実テンプレートの表記）
+//   - 先頭ドット省略形: android:name=".KirikiriSDL2Activity"（本パッケージの
+//     テストで使っている表記。実テンプレートでは未確認）
 //   - 完全修飾: android:name="pw.uyjulian.krkrsdl2.KirikiriSDL2Activity"
+//     （実テンプレートでは未確認。書き換え方針はrewriteActivityName参照）
+//
+// キャプチャグループ:
+//  1. 先頭ドット（相対解決の省略形。無ければ空文字列）
+//  2. fork版パッケージの完全修飾プレフィックス（無ければ空文字列）
 var activityNameForkClassPattern = regexp.MustCompile(
-	`android:name="((?:\.)?(?:pw\.uyjulian\.krkrsdl2\.)?)` + forkActivityClassName + `"`,
+	`android:name="(\.?)((?:pw\.uyjulian\.krkrsdl2\.)?)` + forkActivityClassName + `"`,
 )
+
+// rewriteActivityName はactivityNameForkClassPatternのマッチ全体(match)を、
+// gameActivityClassNameを指すandroid:name属性へ書き換える。
+//
+// why not（完全修飾形でプレフィックスを保持しない理由）: updateJavaSourceは
+// 生成する2クラス（forkActivityClassName・gameActivityClassName）を常に
+// packageName配下へ配置する。完全修飾形で元のfork版パッケージ接頭辞
+// （pw.uyjulian.krkrsdl2.）をそのまま保持すると、packageNameが
+// "pw.uyjulian.krkrsdl2"以外の場合に実在しないクラス
+// （pw.uyjulian.krkrsdl2.KirikiriSDL2GameActivity）を指すことになり
+// ActivityNotFoundExceptionになる。updateJavaSourceの実際の配置先
+// （packageName）とManifestの参照先を一致させるため、完全修飾形の
+// プレフィックスは保持せずpackageNameへ置き換える。相対解決形
+// （先頭ドット省略形・パッケージ省略形）はAndroidのコンポーネント名解決
+// 規則上すでにnamespace（build.gradleのnamespace = packageName。
+// updateBuildGradle参照）を通じてpackageNameに解決されるため、
+// プレフィックスをそのまま保持してよい。
+func rewriteActivityName(match string, packageName string) string {
+	sub := activityNameForkClassPattern.FindStringSubmatch(match)
+	dotPrefix, fqcnPrefix := sub[1], sub[2]
+
+	if fqcnPrefix != "" {
+		return fmt.Sprintf(`android:name="%s.%s"`, packageName, gameActivityClassName)
+	}
+
+	return `android:name="` + dotPrefix + gameActivityClassName + `"`
+}
 
 var applicationTagPattern = regexp.MustCompile(`<application[^>]*>`)
 
@@ -641,7 +672,7 @@ const ScreenOrientationSensorLandscape = "sensorLandscape"
 // android:extractNativeLibs="true"の付与、activityへの
 // android:screenOrientation="sensorLandscape"の付与、起動activityの
 // android:nameのgameActivityClassNameへの書き換え）。
-func (p *TemplatePreparer) updateManifest() error {
+func (p *TemplatePreparer) updateManifest(packageName string) error {
 	manifestPath := filepath.Join(p.projectDir, "app", "src", "main", "AndroidManifest.xml")
 
 	content, err := os.ReadFile(manifestPath) //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
@@ -655,8 +686,10 @@ func (p *TemplatePreparer) updateManifest() error {
 	// 起動activityはforkActivityClassName（パッケージ名書き換えのみで
 	// 素通し出力されるfork版クラス）ではなく、mnemonic独自機能
 	// （アセットコピー等）を実装するgameActivityClassNameを起動させる
-	// 必要がある。activityNameForkClassPattern参照。
-	text = activityNameForkClassPattern.ReplaceAllString(text, `android:name="${1}`+gameActivityClassName+`"`)
+	// 必要がある。activityNameForkClassPattern・rewriteActivityName参照。
+	text = activityNameForkClassPattern.ReplaceAllStringFunc(text, func(match string) string {
+		return rewriteActivityName(match, packageName)
+	})
 
 	// applicationタグにextractNativeLibs="true"を追加する。これにより
 	// ネイティブライブラリがAPKから展開され、dlopen（krkrsdl2プラグインの
