@@ -166,7 +166,34 @@ function KirikiriMenuOpener_openLevel(menuItem, title)
 			continue;
 		}
 
-		target.fireClick();
+		// why not: KAG3標準のonHelpAboutMenuItemClickのように、リーフ項目の
+		// クリックハンドラがnew global.KAGWindow(...)等でサブWindowを開き
+		// showModalで表示するものがある。krkrsdl2/AndroidのSDLは同時に1つの
+		// ウィンドウしか作成できないため、こうしたハンドラは「Cannot create
+		// SDL window: Android only supports one window」のネイティブ例外を
+		// 送出する。どのメニュー項目がこの例外を起こすかはゲーム側スクリプト
+		// 次第で列挙できないため、リーフ実行そのものを一律にtry/catchで保護し、
+		// 未処理例外ダイアログでエンジンをフリーズさせずメニューを閉じて
+		// ゲームへ復帰させる。
+		try
+		{
+			target.fireClick();
+		}
+		catch (e)
+		{
+			// why not: System.inform自体が無い/失敗する環境でも、通知を
+			// 諦めるだけでメニューは必ず閉じる必要があるため、メッセージ
+			// 取得とinform呼び出しを内側のtry/catchでまとめて保護し、
+			// 最終的に握りつぶす。
+			try
+			{
+				var message = (e !== void && e.message !== void) ? e.message : ("" + e);
+				global.System.inform(message);
+			}
+			catch (e2)
+			{
+			}
+		}
 		return true;
 	}
 }
