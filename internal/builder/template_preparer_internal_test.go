@@ -359,6 +359,32 @@ func TestGenerateGameActivityJava(t *testing.T) {
 		assert.Contains(t, got, "super.onCreate(savedInstanceState);")
 	})
 
+	t.Run("正常系: onCreateの内部処理がsNativeLibDir設定→copyAssetsToInternal→super.onCreateの順序で実行される", func(t *testing.T) {
+		t.Parallel()
+
+		// SDLActivity.onCreate()はgetArguments()を呼び、getArgumentsは
+		// sNativeLibDir != nullでプラグイン検索パスの有無を分岐する。
+		// この順序が崩れる（例: super.onCreate()を先に呼ぶ）と、
+		// sNativeLibDirがまだ設定されていない状態でgetArgumentsが呼ばれ、
+		// プラグイン検索パスが無言で欠落する。assert.Containsの部分一致では
+		// この順序崩れを検知できないため、出現位置(strings.Index)で
+		// 順序そのものを検証する。
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+
+		idxSetNativeLibDir := strings.Index(got, "sNativeLibDir = getApplicationInfo()")
+		idxCopyAssets := strings.Index(got, "copyAssetsToInternal();")
+		idxSuperOnCreate := strings.Index(got, "super.onCreate(")
+
+		require.NotEqual(t, -1, idxSetNativeLibDir, "sNativeLibDirの設定処理が見つからない")
+		require.NotEqual(t, -1, idxCopyAssets, "copyAssetsToInternal()の呼び出しが見つからない")
+		require.NotEqual(t, -1, idxSuperOnCreate, "super.onCreate()の呼び出しが見つからない")
+
+		assert.Less(t, idxSetNativeLibDir, idxSuperOnCreate, "sNativeLibDirの設定はsuper.onCreate()より前である必要がある")
+		assert.Less(t, idxCopyAssets, idxSuperOnCreate, "copyAssetsToInternal()はsuper.onCreate()より前である必要がある")
+	})
+
 	t.Run("正常系: 必要なimportが重複なく含まれる", func(t *testing.T) {
 		t.Parallel()
 

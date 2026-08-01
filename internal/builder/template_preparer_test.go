@@ -653,7 +653,7 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 	t.Run("正常系: fork版がonCreateを持っていても生成一式がjavac的に衝突しない（onCreate定義が各ファイルに1つずつ）", func(t *testing.T) {
 		t.Parallel()
 
-		// realForkKirikiriSDL2ActivityJavaはfork krkrsdl2 T-231で追加された
+		// realForkKirikiriSDL2ActivityJavaはfork krkrsdl2で追加された
 		// onCreateオーバーライド（WindowInsetsリスナー登録）を含む。
 		// KirikiriSDL2Activity.java（fork版、素通し出力）と
 		// KirikiriSDL2GameActivity.java（mnemonic独自、サブクラス）の
