@@ -69,10 +69,8 @@ func parseGrpIconDir(data []byte) ([]grpIconEntry, error) {
 // selectLargestGrpIconEntry はentries内で面積(width*height)最大のフレームを
 // 返す。同面積の場合は先に現れたものを優先する。
 //
-// why not(strict ">"で比較する理由): Python版(参照実装)はPillowのICOデコード
-// 結果を`if size > max_size`で走査して最大フレームを選ぶ。`>=`ではなく`>`の
-// ため、同面積が複数あれば最初に見つかったフレームが選ばれる。Go版も挙動を
-// 一致させるため同じ比較演算子を使う。
+// why not(strict ">"で比較する理由): `>=`ではなく`>`で比較することで、
+// 同面積のフレームが複数ある場合は最初に見つかったフレームが選ばれる。
 func selectLargestGrpIconEntry(entries []grpIconEntry) grpIconEntry {
 	best := entries[0]
 	bestArea := best.width * best.height

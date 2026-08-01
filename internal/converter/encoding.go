@@ -31,11 +31,10 @@ var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big
 
 // encodingAliases はchardetが返すエンコーディング名とSupportedEncodingsの対応マッピング。
 //
-// why not: "utf-8-sig"のエイリアスはPython版chardetがBOM付きUTF-8に対して
-// 返す名称を吸収するために存在する。github.com/saintfish/chardetはBOMの
-// 有無に関わらず常に"UTF-8"を返す（PR3のchardet移植と同様の語彙差）ため
-// Go側でこのエイリアスが実際に引かれることはないが、Python版との対応表を
-// 明示するため、また将来chardet実装が変わった場合の防御として残す。
+// why not: "utf-8-sig"のエイリアスはBOM付きUTF-8を示す一般的なエンコーディング
+// 名を吸収するために存在する。github.com/saintfish/chardetはBOMの有無に
+// 関わらず常に"UTF-8"を返すため、Go側でこのエイリアスが実際に引かれることは
+// ないが、将来chardet実装が変わった場合の防御として残す。
 var encodingAliases = map[string]string{
 	"shift-jis": "shift_jis",
 	"shiftjis":  "shift_jis",
@@ -90,7 +89,7 @@ func isSupportedEncoding(enc string) bool {
 
 // EncodingDetectionResult は文字コード検出結果を表す不変値。
 //
-// Encodingが空文字列の場合、Python版のNone（検出できなかった場合）に相当する。
+// Encodingが空文字列の場合、検出できなかったことを表す。
 type EncodingDetectionResult struct {
 	Encoding    string
 	Confidence  float64
@@ -126,14 +125,12 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 	// why not: github.com/saintfish/chardetには専用のASCII判定器が無く、純ASCII
 	// バイト列に対しても単バイト系のフォールバック候補（例: "ISO-8859-1"、低信頼度）
 	// を返すことがある（internal/parser/detector.goのdetectCharsetと同じ既知差異）。
-	// Python版chardetは全バイトが0x7F以下の場合に専用の高速パスで必ず"ascii"を
-	// 返し、_ENCODING_ALIASESでutf-8に正規化される。この差を放置すると、
-	// ASCIIのみの.ini/.txt/.ks/.csvがGo版ではsupportedEncodingsに含まれない
-	// エンコーディング名として検出されConvertがFAILEDを返してしまう
-	// （Python版はSKIPPEDになる）。そのためGo側でも同じ判定を先に行い、
-	// chardetの推定より優先する。ESC(0x1B)はISO-2022-JP等7bitエンコーディングの
-	// 制御文字であり、これを含む入力をASCII短絡させるとchardetの正しい
-	// ISO-2022-JP判定を潰してしまうため除外する。
+	// この差を放置すると、ASCIIのみの.ini/.txt/.ks/.csvがsupportedEncodingsに
+	// 含まれないエンコーディング名として検出され、本来SKIPPEDが適切なはずの
+	// ケースでConvertがFAILEDを返してしまう。そのためGo側でもASCII判定を
+	// 先に行い、chardetの推定より優先する。ESC(0x1B)はISO-2022-JP等7bit
+	// エンコーディングの制御文字であり、これを含む入力をASCII短絡させると
+	// chardetの正しいISO-2022-JP判定を潰してしまうため除外する。
 	if isASCII(data) {
 		return EncodingDetectionResult{Encoding: "utf-8", Confidence: 1.0, IsSupported: true}
 	}
@@ -256,9 +253,9 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 
 // Convert はsourceの文字コードを変換し、destへ出力する。
 //
-// Python版と同様、既知の失敗（ファイル未存在・デコード/エンコード失敗）は
+// 既知の失敗（ファイル未存在・デコード/エンコード失敗）は
 // ConversionResult{Status: StatusFailed}として返し、errは常にnilとなる
-// （Python版がこれらをConversionResult返却で処理し例外を送出しないため）。
+// （呼び出し元がConversionResultのStatusで失敗を判定できるようにするため）。
 func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, error) {
 	if _, err := os.Stat(source); err != nil {
 		return ConversionResult{
@@ -333,8 +330,8 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 // ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 検出されたソース
 // エンコーディング)を返す。
 //
-// Python版のconvert_bytesと同様、デコード/エンコード失敗はerrとして伝播する
-// （Convertと異なりこのメソッドはPython版でも例外を捕捉しないため）。
+// デコード/エンコード失敗はerrとして伝播する（Convertと異なり、このメソッドは
+// 失敗を捕捉せず呼び出し元へそのまま伝播させる設計のため）。
 func (c *EncodingConverter) ConvertBytes(data []byte) ([]byte, string, error) {
 	sourceEncoding := c.resolveSourceEncoding(data)
 

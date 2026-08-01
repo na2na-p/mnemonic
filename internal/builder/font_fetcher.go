@@ -20,7 +20,7 @@ const (
 	// KoruriVersion はKoruriフォントのバージョン識別子。
 	//
 	// why not: GitHubリリースにはZIPアセットが存在しないため、リポジトリのmasterブランチ
-	// から直接TTFを取得する（Python版と同じ制約）。そのためバージョンはブランチ名に留まる。
+	// から直接TTFを取得する。そのためバージョンはブランチ名に留まる。
 	KoruriVersion = "master"
 	// KoruriFontName はフォント名。
 	KoruriFontName = "Koruri-Regular"

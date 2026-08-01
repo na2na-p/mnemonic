@@ -14,8 +14,8 @@ const DefaultMaxAgeDays = 7
 
 // Info はキャッシュディレクトリの情報を表す。
 //
-// TemplateVersion / TemplateExpiresInDays はテンプレートキャッシュが存在しない場合
-// Pythonの `None` に相当するためポインタで未設定を表現する。
+// TemplateVersion / TemplateExpiresInDays はテンプレートキャッシュが存在しない場合の
+// 未設定を表現するため、ポインタとする。
 type Info struct {
 	Directory             string
 	SizeBytes             int64
@@ -30,10 +30,10 @@ func Dir() (string, error) {
 
 // DirForOS はgoos（runtime.GOOSと同じ値域）に応じたキャッシュディレクトリを返す。
 //
-// Python版はplatform.systemをテストでモックしていたが、Goのruntime.GOOSは
-// コンパイル時定数でありモックできない。そのため実装本体をgoos引数で受け取る形に
-// 分離し、Dir()はruntime.GOOSを渡す薄いラッパーとすることでテスト容易性を確保する
-// （CLAUDE.mdの「外部依存は注入可能にする」方針に沿った設計）。
+// Goのruntime.GOOSはコンパイル時定数でありモックできない。そのため実装本体を
+// goos引数で受け取る形に分離し、Dir()はruntime.GOOSを渡す薄いラッパーとする
+// ことでテスト容易性を確保する（CLAUDE.mdの「外部依存は注入可能にする」
+// 方針に沿った設計）。
 func DirForOS(goos string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -56,8 +56,7 @@ func DirForOS(goos string) (string, error) {
 
 		return filepath.Join(home, "AppData", "Local", "mnemonic", "cache"), nil
 	default:
-		// Python版のelse節（Linux/Darwin/Windows以外）はXDG_CACHE_HOMEを見ずhome/.cacheに
-		// 固定していたため、その挙動をそのまま踏襲する。
+		// Linux/Darwin/Windows以外のOSではXDG_CACHE_HOMEを見ずhome/.cacheに固定する。
 		return filepath.Join(home, ".cache", "mnemonic"), nil
 	}
 }

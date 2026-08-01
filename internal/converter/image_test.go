@@ -18,9 +18,9 @@ import (
 	"github.com/na2na-p/mnemonic/internal/converter"
 )
 
-// テストで用いる画像サイズ。wazoreベースのWebPエンコーダの初回呼び出しコストは
+// テストで用いる画像サイズ。wazeroベースのWebPエンコーダの初回呼び出しコストは
 // 主にWASMモジュールのインスタンス化に起因し画素数への依存は小さいが、
-// CI時間短縮のためPython版(100x100)より小さいサイズに揃える。
+// CI時間短縮のため小さいサイズに揃える。
 const testImageSize = 8
 
 var (
@@ -76,7 +76,7 @@ func writePNGFixture(t *testing.T, path string, c color.RGBA) {
 // 渡すとOpaque()==trueを検出しアルファチャンネル無しのカラータイプで
 // 書き出してしまう（image/png/writer.goのopaque(m)判定）。そのため
 // 「フォーマット上アルファチャンネルを持つが全ピクセルは不透明なPNG」
-// （PythonのPillowがmode="RGBA"で保存した場合の実際の挙動）を
+// （何らかの画像処理ツールがRGBAモードで保存した場合に生じうる状態）を
 // stdlibのpng.Encodeだけで再現できない。Opaque()を偽装してこの
 // 最適化を回避し、テスト用フィクスチャとして意図的な状態を作る。
 type forceAlphaImage struct {
@@ -137,10 +137,9 @@ const (
 )
 
 // buildTLG5Fixture はwidth x tlg5FixtureHeightの単色TLG5画像バイト列を生成
-// するテストヘルパー（Python版のcreate_tlg5_test_dataに相当。アルゴリズム
-// 自体のテストはinternal/converter/tlg側で行うため、ここでは
-// ImageConverter/TLGImageDecoder統合経路の検証に十分な単純なフィクスチャ
-// のみを生成する）。
+// するテストヘルパー（アルゴリズム自体のテストはinternal/converter/tlg側で
+// 行うため、ここではImageConverter/TLGImageDecoder統合経路の検証に十分な
+// 単純なフィクスチャのみを生成する）。
 func buildTLG5Fixture(width int, colorDepth byte) []byte {
 	const (
 		height      = tlg5FixtureHeight
@@ -791,9 +790,8 @@ func TestImageConverter_Convert(t *testing.T) {
 	t.Run("正常系: quality=0はQualityHighにフォールバックする", func(t *testing.T) {
 		t.Parallel()
 
-		// why: レビュー指摘の回帰防止。Python版はquality: QualityPreset | int =
-		// QualityPreset.HIGHという既定引数を持つため、Go版でNewImageConverterへ
-		// ゼロ値を渡した場合もHIGH(95)相当にフォールバックすることをピン留めする。
+		// why: NewImageConverterへゼロ値を渡した場合もHIGH(95)相当にフォールバック
+		// することをピン留めする。
 		c := converter.NewImageConverter(0, true)
 		assert.Equal(t, int(converter.QualityHigh), c.Quality())
 	})
@@ -857,11 +855,9 @@ func TestImageConverter_Convert(t *testing.T) {
 	t.Run("正常系: 全ピクセル不透明でもフォーマット上アルファを持つPNGはロスレスになる(WebP出力時)", func(t *testing.T) {
 		t.Parallel()
 
-		// why: レビュー指摘の回帰防止。PythonのPIL.Image.mode=="RGBA"は全ピクセル
-		// 不透明でもアルファありとして扱いlossless=Trueで保存される。Go版が
-		// Opaque()だけで判定していた旧実装ではここがロッシーパスに落ちて
-		// いたため、フォーマット上アルファを持つPNG(*image.NRGBA)を
-		// ロスレスパスへ通すことをピン留めする。
+		// why: フォーマット上アルファを持つPNG(*image.NRGBA)は、全ピクセルが
+		// 不透明であってもロスレスパスへ通すことをピン留めする
+		// （Opaque()のみで判定するとロッシーパスに落ちてしまう回帰を防ぐ）。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "opaque_alpha.png")
 		writeOpaqueAlphaPNGFixture(t, source, color.RGBA{R: 255, A: 255})
@@ -900,8 +896,8 @@ func TestImageConverter_Convert(t *testing.T) {
 
 		// why: TLG5Decoder.Decodeはcolors==3(RGB)の場合image.RGBAを返しA=255
 		// 固定になる。imageHasAlphaがNRGBAModelのみをアルファ有り扱いする
-		// ため、RGB由来の画像はhasAlpha=falseとなりロッシーパスになる
-		// （Python版のmode="RGB"はhas_alpha=Falseに相当）ことをピン留めする。
+		// ため、RGB由来の画像はhasAlpha=falseとなりロッシーパスになることを
+		// ピン留めする。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "test.tlg")
 		writeFile(t, source, buildTLG5Fixture(2, 24))

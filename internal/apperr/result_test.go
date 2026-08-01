@@ -34,7 +34,6 @@ func TestExitCode_Constants(t *testing.T) {
 func TestResult_ZeroValueDefaultsToExitSuccess(t *testing.T) {
 	t.Parallel()
 
-	// Pythonの `exit_code: ExitCode = ExitCode.SUCCESS` に相当する挙動:
 	// フィールドを明示しない場合はExitSuccess相当のゼロ値になる。
 	result := apperr.Result{Success: true, Message: "ok"}
 

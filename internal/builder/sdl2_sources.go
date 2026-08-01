@@ -15,8 +15,7 @@ import (
 // センチネルエラー群。
 //
 // ErrSDL2SourceFetchNetwork / ErrSDL2SourceFetchTimeout / ErrSDL2SourceCache は
-// いずれもErrSDL2SourceFetcherと二重にラップする（Python版の例外階層
-// SDL2SourceFetcherError <- {NetworkError, TimeoutError, CacheError}相当）。
+// いずれもErrSDL2SourceFetcherと二重にラップする。
 // これによりerrors.Is(err, ErrSDL2SourceFetcher)がすべての具体エラーで真になる。
 var (
 	// ErrSDL2SourceFetcher はSDL2 Javaソース取得に関する基本エラー。
@@ -34,7 +33,7 @@ var (
 const sdlCommit = "53dea9830964eee8b5c2a7ee0a65d6e268dc78a1"
 
 // sdlCommitShortLen はSDL2CacheCurrentVersionとして使うsdlCommitの先頭文字数
-// （Python版CURRENT_VERSIONと同じ8文字の短縮形）。
+// （8文字の短縮形）。
 const sdlCommitShortLen = 8
 
 // SDL2CacheCurrentVersion は現在のキャッシュバージョン（SDLコミットSHAの短縮形）。

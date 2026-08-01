@@ -21,8 +21,7 @@ type FileStats struct {
 
 // GameInfo はゲーム情報を表す値。
 //
-// DetectedEncodingが空文字列の場合、Python版のNone（検出できなかった場合）に
-// 相当する。
+// DetectedEncodingが空文字列の場合、検出できなかったことを表す。
 type GameInfo struct {
 	Engine           string
 	Scripts          FileStats
@@ -41,8 +40,7 @@ var (
 
 // DetectEngine はエンジンを検出する（"kirikiri" / "rpgmaker" / "unknown"）。
 //
-// pathの直下（非再帰）のエントリのみを走査する（Python版のpath.iterdir()に
-// 相当）。
+// pathの直下（非再帰）のエントリのみを走査する。
 func DetectEngine(path string) string {
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -79,7 +77,7 @@ func CollectFileStats(path string, extensions []string) FileStats {
 
 	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil //nolint:nilerr // Python版と同様、走査不能なエントリはスキップする
+			return nil //nolint:nilerr // 走査不能なエントリはスキップする
 		}
 		if d.IsDir() {
 			return nil
@@ -128,14 +126,12 @@ func AnalyzeGame(path string) GameInfo {
 //
 // why not: 複数のスクリプトファイルが混在するディレクトリでは、最初に見つかった
 // ファイルの検出結果を採用し以降は走査しない（下のfilepath.WalkDir内のearly
-// return参照）。Python版はpath.rglob("*")の列挙順（OSのディレクトリエントリ順
-// —— 多くの場合ファイルシステム依存で作成順や無秩序になる）に依存するため、
-// 同じディレクトリでも実行ごと・環境ごとに異なるファイルが「最初の1件」に
-// なりうり、結果として検出されるエンコーディングが非決定的になる欠陥がある
-// （実機で確認: 同一fixtureに対しPython "utf-8" / Go "ascii" のように結果が
-// 割れた）。Go版はfilepath.WalkDirがディレクトリエントリを常にファイル名の
-// 辞書順で返すことを利用し、意図的にPython版の非決定性を踏襲せず
-// 「辞書順で最初に見つかったファイルが勝つ」という決定的な規則に統一する
+// return参照）。OSのディレクトリエントリ順は多くの場合ファイルシステム依存で
+// 作成順や無秩序になるため、それに依存すると同じディレクトリでも実行ごと・
+// 環境ごとに異なるファイルが「最初の1件」になりうり、結果として検出される
+// エンコーディングが非決定的になってしまう。filepath.WalkDirがディレクトリ
+// エントリを常にファイル名の辞書順で返すことを利用し、「辞書順で最初に
+// 見つかったファイルが勝つ」という決定的な規則に統一する
 // （TestAnalyzeGame_EncodingDetectionIsDeterministicByLexicalOrderでピン留め）。
 func detectEncoding(path string, extensions []string) string {
 	extLower := make(map[string]struct{}, len(extensions))
@@ -172,13 +168,12 @@ func detectEncoding(path string, extensions []string) string {
 	return encoding
 }
 
-// detectCharset はdataの文字コードを推定し、Python版chardetの語彙に正規化して返す。
+// detectCharset はdataの文字コードを推定し、共通の語彙に正規化して返す。
 //
 // why not: github.com/saintfish/chardetには専用のASCII判定器がなく、純ASCII
-// バイト列に対しても単バイト系のフォールバック候補（低信頼度）を返すことがある。
-// Python版が使うchardetは全バイトが0x7F以下の場合に必ず"ascii"を返すため、
-// internal/parser/detector.goのdetectCharsetと同じ理由でここでも同じ判定を
-// 先に行う。
+// バイト列に対しても単バイト系のフォールバック候補（低信頼度）を返すことが
+// ある。internal/parser/detector.goのdetectCharsetと同じ理由でここでも
+// ASCII判定を先に行う。
 func detectCharset(detector *chardet.Detector, data []byte) (string, bool) {
 	if isASCII(data) {
 		return "ascii", true

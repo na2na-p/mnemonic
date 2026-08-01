@@ -16,8 +16,8 @@ import (
 
 // fixturesDir はGameDetectorテスト用の静的フィクスチャディレクトリを返す。
 //
-// Python版 tests/fixtures/parser/game_samples/ と同一構成のダミーゲーム
-// ディレクトリをGo移植用にtestdata配下へ複製したもの。
+// GameDetectorのテスト用に用意したダミーゲームディレクトリ
+// （testdata配下）。
 func fixturesDir(t *testing.T) string {
 	t.Helper()
 
@@ -358,13 +358,13 @@ func TestGameDetector_Integration(t *testing.T) {
 }
 
 // TestGameDetector_ScriptEncodingDetection はchardet結果の文字コード名が
-// Python版chardetの語彙（"ascii"/"utf-8"/"shift_jis"）に正規化されることを
-// 固定するリグレッションテスト。
+// 共通の語彙（"ascii"/"utf-8"/"shift_jis"）に正規化されることを固定する
+// リグレッションテスト。
 //
 // github.com/saintfish/chardet は純ASCII入力に対して専用の判定器を持たず
-// "ISO-8859-1"（低信頼度）等を返すことがあり、Python版chardetの"ascii"と
-// 語彙が一致しない問題があったため（GetSummary出力やPR4の再エンコード判定に
-// 影響するユーザー可視の差分）、detectCharsetのASCII優先判定を固定する。
+// "ISO-8859-1"（低信頼度）等を返すことがあり、"ascii"という一貫した結果に
+// ならない問題がある（GetSummary出力や再エンコード判定に影響するユーザー
+// 可視の差分）ため、detectCharsetのASCII優先判定を固定する。
 func TestGameDetector_ScriptEncodingDetection(t *testing.T) {
 	t.Parallel()
 

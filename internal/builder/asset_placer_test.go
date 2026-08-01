@@ -206,11 +206,9 @@ func TestAssetPlacer_ConfigureBuildGradle(t *testing.T) {
 	t.Run("正常系: androidブロック外のトップレベル定義が保持される", func(t *testing.T) {
 		t.Parallel()
 
-		// レビュー指摘: Python版はandroid{}ブロックのマッチ3グループのみで
-		// content全体を置き換えるため、ブロック外のトップレベル定義
-		// （例: 末尾のdependencies{}）が消えるデータロスバグを持つ。
-		// Go版はReplaceAllStringFuncでマッチ範囲のみを置換するため保持される
-		// ことを確認する（addNewAaptOptionsのwhy not参照）。
+		// ReplaceAllStringFuncでマッチ範囲のみを置換するため、androidブロック外の
+		// トップレベル定義（例: 末尾のdependencies{}）が保持されることを確認する
+		// （addNewAaptOptionsのwhy not参照）。
 		projectPath := filepath.Join(t.TempDir(), "surrounding_blocks_project")
 		buildGradle := filepath.Join(projectPath, "app", "build.gradle")
 		require.NoError(t, os.MkdirAll(filepath.Dir(buildGradle), 0o750))

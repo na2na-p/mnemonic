@@ -13,13 +13,12 @@ import (
 // AdjustmentRule はスクリプト調整ルールを表す不変値。
 //
 // 正規表現パターンと置換文字列のペアを保持する。Patternは
-// regexp.MustCompileに渡す前に(?m)（複数行モード）を付与して評価される
-// （Python版がre.MULTILINEフラグ付きでコンパイルするのと同じ挙動）。
+// regexp.MustCompileに渡す前に(?m)（複数行モード）を付与して評価される。
 // Replacementは正規表現の後方参照をGoのregexp構文（$1、$2、…）で指定する。
 //
 // Applyが非nilの場合、Pattern/Replacementの代わりにこの関数で変換される。
 //
-// why not: Goのregexp(RE2)はPythonのre（バックトラック方式）と異なり
+// why not: Goのregexp(RE2)はバックトラック方式の正規表現エンジンと異なり
 // 否定先読み((?!...))に対応しない。[layopt]へのtype=alpha自動追加ルール
 // （「type=が未指定の場合のみ追加」）はこの制約により単純なPattern文字列
 // だけでは表現できないため、この関数で同じ意味論を実現する。
@@ -32,10 +31,9 @@ type AdjustmentRule struct {
 
 // DefaultRules はScriptAdjusterのデフォルト調整ルール。
 //
-// MIDI系ルール（MIDISoundBuffer以降）はPR11'（T-211）で追加した。適用順序は
-// Python版と同一に保つ必要がある: MIDISoundBuffer→WaveSoundBuffer変換が
-// 先に走ることで、変換前の"MIDISoundBuffer.midiOut(...)" 呼び出しも次の
-// midiOut置換ルールで捕捉される。
+// MIDI系ルール（MIDISoundBuffer以降）は適用順序を維持する必要がある:
+// MIDISoundBuffer→WaveSoundBuffer変換が先に走ることで、変換前の
+// "MIDISoundBuffer.midiOut(...)" 呼び出しも次のmidiOut置換ルールで捕捉される。
 var DefaultRules = []AdjustmentRule{
 	{
 		Pattern:     `^(\s*)(Plugins\.link\(["'].*?\.dll["']\);)`,
@@ -118,25 +116,20 @@ var DefaultRules = []AdjustmentRule{
 	},
 	// その他のDLLプラグインをコメントアウト（extrans以外）。
 	//
-	// why not: Python版パターンは`module="(?!extrans")`という否定先読みを
-	// 持つが、".dll\"に一致する現実的な値（例: "extrans.dll"）に対しては
-	// 常にlookaheadが素通りする（"extrans"直後は"."であり、リテラル
-	// `extrans"`には一致しないため）。つまりこの先読みはextrans.dllを
-	// 実質的に除外しない死んだ制約であり、この時点で既にextrans.dllは
-	// 前段のルールで"libextrans.so"へ変換済み（".dll"で終わらなくなり
-	// このパターン自体にマッチしなくなる）のため除外は不要。RE2は
-	// 否定先読みに対応しないため、この不要な制約を持たないプレーンな
-	// パターンで同一の実効的な挙動を再現する。
+	// why not: extrans.dllを除外する否定先読み（module="(?!extrans")`のような
+	// パターン）を検討する余地があるが、この時点で既にextrans.dllは前段の
+	// ルールで"libextrans.so"へ変換済み（".dll"で終わらなくなりこのパターン
+	// 自体にマッチしなくなる）ため除外は不要。RE2は否定先読みに対応しないため、
+	// この不要な制約を持たないプレーンなパターンで同一の実効的な挙動を
+	// 再現する。
 	//
-	// why not(krmovie.dllの二重コメントアウト): この副作用としてPython版
-	// では、krmovie.dllルール適用後も置換結果の文字列中に元の
-	// `[loadplugin module="krmovie.dll"]`が置換文字列の一部として
-	// 文字通り残るため、本ルールが同じ部分文字列に再度マッチし
-	// 二重にコメントアウトされる（";# ;# ... # Disabled for Android
-	// # Disabled: not supported on krkrsdl2"）。これはPython版の実際の
-	// 挙動であり、意図的な仕様ではなく偶発的な副作用と考えられるが、
-	// 本チケットはPython版DEFAULT_RULESの最終状態と順序の一致を要求する
-	// ため、Go版でも忠実に同じ挙動を再現する。
+	// why not(krmovie.dllの二重コメントアウト): krmovie.dllルール適用後も
+	// 置換結果の文字列中に元の`[loadplugin module="krmovie.dll"]`が置換
+	// 文字列の一部として文字通り残るため、本ルールが同じ部分文字列に再度
+	// マッチし二重にコメントアウトされる（";# ;# ... # Disabled for Android
+	// # Disabled: not supported on krkrsdl2"）。意図的な仕様ではなく偶発的な
+	// 副作用と考えられるが、DEFAULT_RULESの最終状態と順序の一致を維持する
+	// ため、この挙動をそのまま許容する。
 	{
 		Pattern:     `(\[loadplugin\s+module="[^"]*\.dll"\])`,
 		Replacement: `;# $1 # Disabled for Android`,
@@ -145,10 +138,9 @@ var DefaultRules = []AdjustmentRule{
 	// レイヤー透過修正: [layopt layer=N] に type=alpha を自動追加。
 	// krkrsdl2のSIMDeエミュレーション問題により、明示的なtype指定が必要。
 	//
-	// why not: Python版パターン`\[layopt\b(?![^\]]*\btype=)([^\]]*\blayer=
-	// [0-9]+[^\]]*)\]`は「type=が未指定の場合のみ追加」を否定先読みで
-	// 表現するが、RE2は否定先読みに対応しないため、タグ全体を先に
-	// キャプチャしGo側でtype=の有無を判定するapplyLayoptAlphaRuleへ委譲する。
+	// why not: 「type=が未指定の場合のみ追加」は否定先読みで自然に表現できるが、
+	// RE2は否定先読みに対応しないため、タグ全体を先にキャプチャしGo側で
+	// type=の有無を判定するapplyLayoptAlphaRuleへ委譲する。
 	{
 		Description: "レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
 		Apply:       applyLayoptAlphaRule,
@@ -189,17 +181,13 @@ func DefaultRulesWithoutVideoExtensions() []AdjustmentRule {
 
 var (
 	layoptTagPattern = regexp.MustCompile(`\[layopt\b([^\]]*)\]`)
-	// why not: Python版の元パターンはlayer=[0-9]+の後ろに\bを付けないため
-	// "layer=12abc"のような後続文字があっても数字部分でマッチする。Go側も
-	// 末尾に\bを付けず同じ挙動にする（レビュー指摘: 付けると"layer=12abc"が
-	// マッチしなくなり、Python版と挙動が乖離する）。
+	// why not: layer=[0-9]+の後ろに\bを付けると"layer=12abc"のような後続
+	// 文字がある場合にマッチしなくなる。末尾に\bを付けず、後続文字の有無に
+	// 関わらず数字部分でマッチさせる。
 	layoptNumericLayerCheck = regexp.MustCompile(`\blayer=[0-9]+`)
-	// why not: Python版の元パターンは(?!type=)ではなく(?![^\]]*\btype=)、
-	// すなわち「\btype=」という単語境界付きの部分文字列が無いことを要求する。
-	// strings.Contains(attrs, "type=")は"hittype="や"subtype="のような、
-	// "type="の直前が単語構成文字であるため実際にはtype属性ではない
-	// 部分文字列にも誤って一致してしまう（レビュー指摘）。\btype=で
-	// Python版の単語境界付きマッチと同じ判定にする。
+	// why not: strings.Contains(attrs, "type=")は"hittype="や"subtype="の
+	// ような、"type="の直前が単語構成文字であるため実際にはtype属性ではない
+	// 部分文字列にも誤って一致してしまう。\btype=で単語境界付きの判定にする。
 	layoptTypeCheck = regexp.MustCompile(`\btype=`)
 )
 
@@ -264,8 +252,8 @@ func (a *ScriptAdjuster) CanConvert(filePath string) bool {
 
 // Convert はスクリプトファイルに調整ルールを適用し、destへ出力する。
 //
-// Python版のconvert()はtry/except Exceptionで全ての失敗を捕捉して
-// ConversionResult{Status: StatusFailed}へ変換するため、Go版もerrは常にnilを返す。
+// 既知の失敗はConversionResult{Status: StatusFailed}へ変換するため、
+// errは常にnilを返す。
 func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) {
 	if _, err := os.Stat(source); err != nil {
 		return ConversionResult{
@@ -280,17 +268,14 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
 	}
 
-	// Python版はsource.read_text(encoding="utf-8-sig")でBOMを自動除去してから
-	// 読み込む。入力に既にBOMが付いていても二重付与しないよう、出力時に
-	// 付与し直す前提でここで一旦取り除く。
+	// 入力に既にBOMが付いていても二重付与しないよう、出力時に付与し直す
+	// 前提でここで一旦取り除く。
 	content = bytes.TrimPrefix(content, utf8BOM)
 
-	// why: Python版はsource.read_text(encoding="utf-8")でUTF-8として厳密に
-	// デコードし、不正なバイト列（例: Shift_JISのままのファイル）は
-	// UnicodeDecodeErrorとしてtry/exceptに捕捉されStatus: FAILEDになる。
-	// Goのstring(content)はUTF-8を検証しないため、この検証を省略すると
-	// 不正なバイト列を含む内容がそのままSUCCESSとして書き出されてしまう
-	// （文字化けの温存）。utf8.Validで同じ失敗パスを再現する。
+	// why: Goのstring(content)はUTF-8を検証しないため、この検証を省略すると
+	// 不正なバイト列（例: Shift_JISのままのファイル）を含む内容がそのまま
+	// SUCCESSとして書き出されてしまう（文字化けの温存）。utf8.Validで
+	// Status: FAILEDとなる失敗パスを設ける。
 	if !utf8.Valid(content) {
 		return ConversionResult{
 			SourcePath:  source,
@@ -336,8 +321,7 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 	}
 
 	// 吉里吉里(KiriKiriZ)はBOM無しUTF-8をShift_JISとして誤解釈するため、
-	// ScriptAdjusterが扱う.ks/.tjsは常にBOM付きUTF-8で書き出す
-	// （Python版のdest.write_text(encoding="utf-8-sig")に相当）。
+	// ScriptAdjusterが扱う.ks/.tjsは常にBOM付きUTF-8で書き出す。
 	adjustedBytes := append(append([]byte{}, utf8BOM...), []byte(adjusted)...)
 	if err := os.WriteFile(dest, adjustedBytes, 0o644); err != nil { //nolint:gosec // ビルド成果物の出力用途のため妥当な権限
 		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
@@ -355,9 +339,9 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 
 // AdjustContent はcontentに調整ルールを適用し、(調整後の内容, 調整回数)を返す。
 //
-// why not: Python版はfilename引数を受け取るが本体では未使用（startup.tjs判定は
-// convert()側でsource.nameを直接見て行う）。Go版では使われない引数を持たせず、
-// この関数のシグネチャをそのユースケースに合わせて単純化する。
+// why not: startup.tjs判定はConvert()側でsource.nameを直接見て行うため、
+// この関数にfilename引数は不要である。使われない引数を持たせず、この関数の
+// シグネチャをそのユースケースに合わせて単純化する。
 func (a *ScriptAdjuster) AdjustContent(content string) (string, int) {
 	return applyRules(content, a.rules)
 }

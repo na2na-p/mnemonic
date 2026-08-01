@@ -41,7 +41,8 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("%w: %w", ErrInvalidYAML, err)
 	}
 
-	// 空ファイルはPython版同様デフォルト設定として扱う（yaml.safe_load("")もNoneを返す）。
+	// 空ファイルはデフォルト設定として扱う（goccy/go-yamlのUnmarshalは空文字列に
+	// 対してdocをnilのままにする）。
 	if doc == nil {
 		doc = map[string]any{}
 	}
@@ -56,10 +57,8 @@ func Load(path string) (Config, error) {
 
 // merge はYAMLから得た生データをデフォルト値とマージする。
 //
-// Python版は個々のキーの型を検証せず、存在すればそのまま採用する
-// （動的型付けであるため実行時エラーにならない）。Goは静的型付けのため、
-// 型が一致しないキーは無視してデフォルト値を維持する（黙って無視する設計は
-// Python版の「エラーにしない」という挙動を型安全な形で踏襲したもの）。
+// Goは静的型付けのため、型が一致しないキーはエラーにせず無視してデフォルト値を
+// 維持する（不正な設定値でCLI実行が失敗しないようにするための意図的な設計）。
 func merge(data map[string]any, def Config) Config {
 	cfg := def
 
@@ -156,7 +155,7 @@ func parseQuality(v any, def Quality) Quality {
 }
 
 // parseConversionRules はconversion_rulesのリストを変換する。
-// pattern/converterのいずれかを欠く要素はPython版同様スキップする。
+// pattern/converterのいずれかを欠く要素はスキップする。
 func parseConversionRules(data []any) []ConversionRule {
 	if data == nil {
 		return nil
@@ -239,8 +238,7 @@ func stringSliceValue(data map[string]any, key string) ([]string, bool) {
 // toInt はgoccy/go-yamlがデコードする数値型（int64/uint64/float64）をintへ正規化する。
 // version_code等の設定値はint型の範囲に収まる想定だが、YAML上は任意の大きさの
 // 整数を書けてしまうため、int変換でオーバーフローする値は不正値として拒否する
-// （黙ってラップアラウンドさせるとPython版の「そのまま代入する」挙動より
-// 悪い結果——符号反転した意図しない値——になりかねないため）。
+// （黙ってラップアラウンドさせると符号反転した意図しない値になりかねないため）。
 func toInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:

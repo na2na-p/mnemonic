@@ -26,8 +26,7 @@ const (
 	AssetOther  AssetType = "other"
 )
 
-// allAssetTypes はAssetManifest.GetSummaryでの列挙順を定義する
-// （Pythonの `for asset_type in AssetType` に相当する宣言順）。
+// allAssetTypes はAssetManifest.GetSummaryでの列挙順を定義する。
 var allAssetTypes = []AssetType{AssetScript, AssetImage, AssetAudio, AssetVideo, AssetOther}
 
 // ConversionAction は変換アクションを表す。
@@ -49,7 +48,7 @@ const (
 type extensionRule struct {
 	assetType AssetType
 	action    ConversionAction
-	target    string // 空文字列は変換なし（Pythonの None に相当）
+	target    string // 空文字列は変換なしを表す
 }
 
 // extensionRules は拡張子ごとの種別・変換アクション・変換後フォーマットの対応表。
@@ -140,7 +139,7 @@ func (m AssetManifest) FilterByAction(action ConversionAction) []AssetFile {
 
 // GetSummary は種別ごとのファイル数を取得する。
 //
-// ファイル数が0の種別はPython版と同様にキーを含めない。
+// ファイル数が0の種別はキーを含めない。
 func (m AssetManifest) GetSummary() map[AssetType]int {
 	summary := make(map[AssetType]int)
 	for _, assetType := range allAssetTypes {
@@ -251,12 +250,8 @@ func (s *AssetScanner) shouldExclude(relSlash string) bool {
 
 // conversionRuleOverride はconversion_rules設定から上書きアクションを決定する。
 //
-// why not: Python版(_get_conversion_rule_override)は最初にパターンが一致した
-// ルールでreturnし、converter名が未知の場合でも次のルールへは進まない
-// （_CONVERTER_TO_ACTION.get()がNoneを返すだけで、呼び出し側はNoneなら
-// 上書きしない扱いになる）。そのため本実装も「最初に一致したパターン」で
-// 探索を打ち切り、そのconverterが無効なら上書きなし(false)を返す
-// （後続のルールにフォールバックしない）。
+// why not: 最初にパターンが一致したルールで探索を打ち切り、そのconverterが
+// 無効なら上書きなし(false)を返す（後続のルールにフォールバックしない）。
 func (s *AssetScanner) conversionRuleOverride(relSlash string) (ConversionAction, bool) {
 	for _, rule := range s.config.ConversionRules {
 		if !matchGlob(relSlash, rule.Pattern) {

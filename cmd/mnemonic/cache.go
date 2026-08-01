@@ -75,10 +75,10 @@ func newCacheCleanCmd(cacheDir func() (string, error)) *cobra.Command {
 
 // confirm はpromptを表示し、標準入力からy/yesの応答を読み取る。
 //
-// why not: Python版はclick.confirm（typer.confirm）を使い、無効な入力への
-// 再プロンプトや既定値（Enterキーのみでの応答）等の高機能な対話UIを提供する。
-// CLIテストが送るのは"y\n"/"n\n"の単純な応答のみであり、Go版はテストされる
-// 範囲の挙動（y/yesで真、それ以外は偽）のみを素朴な一行読み取りで実装する。
+// why not: 無効な入力への再プロンプトや既定値（Enterキーのみでの応答）等の
+// 高機能な対話UIは提供しない。CLIテストが送るのは"y\n"/"n\n"の単純な応答のみ
+// であり、テストされる範囲の挙動（y/yesで真、それ以外は偽）のみを素朴な
+// 一行読み取りで実装する。
 func confirm(cmd *cobra.Command, prompt string) bool {
 	fmt.Fprint(cmd.OutOrStdout(), prompt) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 

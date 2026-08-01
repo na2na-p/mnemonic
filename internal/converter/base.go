@@ -16,8 +16,6 @@ var (
 )
 
 // ConversionStatus は変換ステータスを表す。
-//
-// Python版 ConversionStatus(Enum) の移植。
 type ConversionStatus string
 
 // ConversionStatusの各値。
@@ -29,8 +27,7 @@ const (
 
 // ConversionResult は単一ファイルの変換結果を表す不変値。
 //
-// Python版 @dataclass(frozen=True) ConversionResult の移植。
-// DestPathが空文字列の場合はPython版のNone（変換失敗・スキップ時）に相当する。
+// DestPathが空文字列の場合は変換失敗・スキップ時を表す。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
@@ -66,10 +63,9 @@ func (r ConversionResult) IsSuccess() bool {
 // ErrSourceIsDirectoryを返す。
 //
 // why not: EncodingConverter/ScriptAdjuster/VideoConverterは自前の
-// 存在チェックでConversionResult{Status: StatusFailed}を返す（Python版が
-// os.path.exists()相当のチェックを行い例外を出さない設計のため）。
-// ImageConverterのみPython版が_validate_sourceを使い例外を呼び出し元へ
-// 伝播させるため、Go版でもerrorを返す形でこの関数を使うのはImageConverterのみ。
+// 存在チェックでConversionResult{Status: StatusFailed}を返す設計のため、
+// ここでのerror伝播は使わない。ImageConverterのみこの関数を使い、errorを
+// 呼び出し元へ伝播させる。
 func validateSource(source string) error {
 	info, err := os.Stat(source)
 	if err != nil {

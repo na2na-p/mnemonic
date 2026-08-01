@@ -572,10 +572,9 @@ func TestSDL2CacheCurrentVersion(t *testing.T) {
 	})
 }
 
-// TestSDL2SourceErrorHierarchy はPython版の例外階層
-// (SDL2SourceFetcherError <- {NetworkError, TimeoutError, CacheError}) に相当する、
-// Fetch/RestoreToが実際に返すエラーがErrSDL2SourceFetcher（基底）と
-// 各具体センチネルの両方を満たすこと（errors.Is）を検証する。
+// TestSDL2SourceErrorHierarchy はFetch/RestoreToが実際に返すエラーが
+// ErrSDL2SourceFetcher（基底）と各具体センチネルの両方を満たすこと
+// （errors.Is）を検証する。
 func TestSDL2SourceErrorHierarchy(t *testing.T) {
 	t.Parallel()
 

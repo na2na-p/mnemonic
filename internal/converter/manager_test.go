@@ -15,7 +15,6 @@ import (
 )
 
 // mockConverter はConversionManagerのテスト用Converter実装。
-// Python版のMockConverterに相当する。
 type mockConverter struct {
 	extensions      []string
 	failCount       int
@@ -322,11 +321,10 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 	t.Run("正常系: 並列実行時も進捗コールバックはロック内で単調増加に呼ばれる", func(t *testing.T) {
 		t.Parallel()
 
-		// why: レビュー指摘の回帰防止。ProgressCallbackがcompletedCountの更新と
-		// 同じロック区間内で呼ばれることを検証する。コールバック自体には
-		// 意図的に追加のmutexを持たせず、ConversionManager側の排他制御だけで
-		// スライスへの追記が安全（-raceでクリーン）かつ1..Nの単調増加になる
-		// ことを確認する（Python版がwith lock:内でcallbackを呼ぶ挙動と同一）。
+		// why: ProgressCallbackがcompletedCountの更新と同じロック区間内で呼ばれる
+		// ことを検証する。コールバック自体には意図的に追加のmutexを持たせず、
+		// ConversionManager側の排他制御だけでスライスへの追記が安全（-raceで
+		// クリーン）かつ1..Nの単調増加になることを確認する。
 		const fileCount = 50
 
 		dir := t.TempDir()

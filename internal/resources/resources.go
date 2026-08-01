@@ -20,10 +20,8 @@ var SystemPolyfillFS embed.FS
 // MenuOpener.tjs、MIDISoundBuffer_stub.tjs、PolyfillInitialize.tjs、
 // SaveDataPath_patch.tjs、VideoOverlay_stub.tjs）を同梱する。このうち
 // SaveDataPath_patch.tjsだけはコピー対象から除外する（どこからも参照されない
-// 未使用リソースであり、Python版の_copy_polyfill_filesが対象とする5ファイル
-// にも含まれていないため、意図的に除外されていると判断した）。MenuOpener.tjs
-// はPython版に存在しないmnemonic独自の新規ポリフィルであり、Python版との
-// 対応関係とは独立にコピー対象へ含める。
+// 未使用リソースであり、意図的に除外している）。MenuOpener.tjsはmnemonic
+// 独自のポリフィルであり、コピー対象に含める。
 var SystemPolyfillFiles = []string{
 	"PolyfillInitialize.tjs",
 	"MenuItem_stub.tjs",

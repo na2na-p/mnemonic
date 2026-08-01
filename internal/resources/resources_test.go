@@ -44,9 +44,8 @@ func TestSystemPolyfillFiles_CopyList(t *testing.T) {
 
 	// why: コピー対象ファイルの一覧・順序をピン留めする。SaveDataPath_patch.tjs
 	// は同梱されているがコピー対象には含まれない（resources.goのwhy not
-	// コメント参照）。MenuOpener.tjsはPython版に存在しないmnemonic独自の
-	// 追加であり、この一覧はもはや「Python版のコピー対象と一致する」とは
-	// 言えないため、一覧そのものをピン留めするテストとして扱う。
+	// コメント参照）。MenuOpener.tjsはmnemonic独自の追加であり、この一覧
+	// そのものをピン留めするテストとして扱う。
 	want := []string{
 		"PolyfillInitialize.tjs",
 		"MenuItem_stub.tjs",

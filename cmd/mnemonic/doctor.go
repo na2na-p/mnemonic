@@ -44,9 +44,8 @@ func newDoctorCmd() *cobra.Command {
 
 // printDependencyTable は依存ツールチェック結果を表形式で出力する。
 //
-// why not: Python版はrich.Table（ANSI装飾・罫線付き）で描画するが、CLI
-// テストがANSIエスケープの有無に依存しないよう、Go版はtext/tabwriterによる
-// プレーンテキストの整形のみを行う。
+// why not: ANSI装飾・罫線付きの表描画は行わない。CLIテストがANSIエスケープの
+// 有無に依存しないよう、text/tabwriterによるプレーンテキストの整形のみを行う。
 func printDependencyTable(w io.Writer, results []doctor.CheckResult) {
 	fmt.Fprintln(w, "依存ツールチェック結果") //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 

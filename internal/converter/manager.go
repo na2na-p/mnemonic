@@ -18,11 +18,11 @@ import (
 // 定義する。EncodingConverter/ScriptAdjuster/ImageConverter/VideoConverterは
 // 同一パッケージ内で構造的にこのインターフェースを満たす。
 //
-// Convertがerrorを返すのは、Python版で「呼び出し元(ConversionManager)まで
-// 例外が伝播するケース」（ImageConverterの_validate_sourceやTLG未実装エラー等）を
-// Goの慣用的なエラー戻り値として表現するため。EncodingConverter/ScriptAdjuster/
-// VideoConverterはPython版で全ての既知の失敗を自身でConversionResultへ変換して
-// いるためerr=nilを返す（詳細は各Convertメソッドのdocコメントを参照）。
+// Convertがerrorを返すのは、呼び出し元(ConversionManager)まで失敗が伝播する
+// ケース（ImageConverterのvalidateSourceやTLG未実装エラー等）をGoの慣用的な
+// エラー戻り値として表現するため。EncodingConverter/ScriptAdjuster/
+// VideoConverterは全ての既知の失敗を自身でConversionResultへ変換している
+// ためerr=nilを返す（詳細は各Convertメソッドのdocコメントを参照）。
 type Converter interface {
 	CanConvert(filePath string) bool
 	Convert(source, dest string) (ConversionResult, error)
@@ -30,8 +30,7 @@ type Converter interface {
 
 	// GetOutputExtension はsourcePathに対する変換後ファイルの拡張子
 	// （ドット付き小文字、例: ".png"）を返す。拡張子を変更しない場合は
-	// 空文字列を返す（Python版BaseConverter.get_output_extensionの
-	// デフォルト戻り値Noneに相当）。
+	// 空文字列を返す。
 	GetOutputExtension(sourcePath string) string
 }
 
@@ -43,7 +42,7 @@ type RetryConfig struct {
 	BackoffMultiplier float64
 }
 
-// DefaultRetryConfig はPython版RetryConfigのデフォルト値と同一の設定を返す。
+// DefaultRetryConfig はリトライ設定の既定値を返す。
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{MaxAttempts: 3, BackoffBase: 1.0, BackoffMultiplier: 2.0}
 }
@@ -86,8 +85,7 @@ type ConversionManager struct {
 
 	// SleepFunc はリトライ待機に使う関数。既定はtime.Sleep。
 	//
-	// why: テストでリトライ待機時間を検証・高速化するため注入可能にする
-	// （Python版がtime.sleepをpatchしてテストするのに相当）。
+	// why: テストでリトライ待機時間を検証・高速化するため注入可能にする。
 	SleepFunc func(time.Duration)
 }
 
@@ -133,13 +131,12 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 
 // ConvertFiles は複数ファイルを並列変換し、サマリーを返す。
 //
-// why not: Python版のThreadPoolExecutorはタスクをsubmitし完了順にfutureを
-// 回収する。Goではerrgroup.WithContextは最初のエラーで打ち切る挙動になるが、
+// why not: Goではerrgroup.WithContextは最初のエラーで打ち切る挙動になるが、
 // convertWithRetry内で既に全ての失敗を捕捉しConversionResultへ変換している
 // ため「エラーで打ち切る」概念がそもそも無い。そのため、MaxWorkers個の
 // goroutineがタスクチャネルを消費し、結果を全て収集し切るまで待つ
-// 単純なワーカープールを採用した（Python版のThreadPoolExecutorに最も近い
-// 「境界付き並列度・全結果収集」という性質を素直に表現できるため）。
+// 単純なワーカープールを採用した（境界付き並列度・全結果収集という性質を
+// 素直に表現できるため）。
 func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	summary := ConversionSummary{Total: len(files)}
 
@@ -165,12 +162,11 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 			for task := range tasksCh {
 				result := m.convertWithRetry(task.Source, task.Dest)
 
-				// why: Python版はwith lock: completed_count += 1; callback(...)と
-				// ロック内でコールバックを呼ぶ。ロック解放後に呼ぶと、複数の
-				// goroutineがcompletedCountの読み取り値をまたいで並行にコール
-				// バックを呼び出し得るため、コールバック側の状態（外部スライスへの
-				// 追記等）に対してデータレースや順序の非単調性を引き起こす。
-				// そのためロック区間内で呼び出し、Python版と同じ直列化を行う。
+				// why: ロック解放後にコールバックを呼ぶと、複数のgoroutineが
+				// completedCountの読み取り値をまたいで並行にコールバックを
+				// 呼び出し得るため、コールバック側の状態（外部スライスへの追記等）
+				// に対してデータレースや順序の非単調性を引き起こす。
+				// そのためロック区間内で呼び出し、直列化する。
 				mu.Lock()
 				completedCount++
 				if m.ProgressCallback != nil {
@@ -367,11 +363,9 @@ func withExtension(path, ext string) string {
 // MemoryPerWorkerMBのメモリを想定する。availableMemoryMBがnilの場合は
 // 自動検出を試みる。
 //
-// why not: Python版はpsutilが利用可能ならメモリ量から、無ければCPUコア数のみ
-// から計算する（psutilはoptional dependency）。Go Library SSOTにはpsutil相当の
-// クロスプラットフォームメモリ検出ライブラリが無いため、Go版の自動検出は常に
-// Python版のpsutil未インストール時のフォールバック（CPUコア数のみで計算）と
-// 同じ経路になる。
+// why not: Go Library SSOTにはクロスプラットフォームのメモリ量検出ライブラリが
+// 無いため、availableMemoryMBが明示されない場合の自動検出はCPUコア数のみで
+// 計算する経路になる。
 func CalculateWorkers(availableMemoryMB *int) int {
 	return calculateWorkersFor(availableMemoryMB, runtime.NumCPU())
 }

@@ -266,11 +266,9 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 	t.Run("異常系: Shift_JISのままの非UTF-8ファイルはFAILEDを返す", func(t *testing.T) {
 		t.Parallel()
 
-		// why: レビュー指摘の回帰防止。Python版はsource.read_text(encoding="utf-8")
-		// がUnicodeDecodeErrorを送出しtry/exceptでFAILEDになる。Go版がstring()への
-		// 変換前にUTF-8妥当性を検証していないと、不正なバイト列がそのまま
-		// SUCCESSとして書き出されてしまう（文字化けの温存）ため、この失敗パスを
-		// ピン留めする。
+		// why: string()への変換前にUTF-8妥当性を検証していないと、不正な
+		// バイト列がそのままSUCCESSとして書き出されてしまう（文字化けの
+		// 温存）ため、この失敗パスをピン留めする。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "sjis.ks")
 		dest := filepath.Join(dir, "output", "sjis.ks")
@@ -468,8 +466,7 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 	t.Run("正常系: 入力のUTF-8 BOMは読み込み時に自動除去される", func(t *testing.T) {
 		t.Parallel()
 
-		// why: Python版はsource.read_text(encoding="utf-8-sig")でBOMを自動除去する。
-		// 入力側に既にBOMが付いていても、出力に二重付与されないことを確認する。
+		// why: 入力側に既にBOMが付いていても、出力に二重付与されないことを確認する。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "test.ks")
 		dest := filepath.Join(dir, "output", "test.ks")
@@ -493,8 +490,6 @@ var utf8BOMBytes = []byte{0xef, 0xbb, 0xbf}
 
 // TestScriptAdjuster_MidiRules はMIDIファイル参照の変換ルール
 // （MIDISoundBuffer→WaveSoundBuffer、拡張子.mid/.midi→.ogg）をテストする。
-//
-// Python版 TestScriptAdjusterMidiRules の移植。
 func TestScriptAdjuster_MidiRules(t *testing.T) {
 	t.Parallel()
 
@@ -688,8 +683,6 @@ func TestScriptAdjuster_VideoRules(t *testing.T) {
 
 // TestScriptAdjuster_MidiOutRule はWaveSoundBuffer.midiOut呼び出しの
 // 空文置換ルールをテストする。
-//
-// Python版 TestScriptAdjusterMidiOutRule の移植。
 func TestScriptAdjuster_MidiOutRule(t *testing.T) {
 	t.Parallel()
 
@@ -801,7 +794,7 @@ func TestScriptAdjuster_SaveDataLocationRule(t *testing.T) {
 
 // TestScriptAdjuster_LoadpluginRules はloadpluginタグのDLL参照を
 // krkrsdl2向けの.soへ変換する、または未対応プラグインをコメントアウトする
-// ルール群をテストする。Python版 TestScriptAdjusterLoadpluginRules の移植。
+// ルール群をテストする。
 func TestScriptAdjuster_LoadpluginRules(t *testing.T) {
 	t.Parallel()
 
@@ -891,7 +884,6 @@ func TestScriptAdjuster_LoadpluginRules(t *testing.T) {
 
 // TestScriptAdjuster_LayerAlphaRule はレイヤー透過修正
 // （[layopt layer=N]へのtype=alpha自動追加、krkrsdl2対応）をテストする。
-// Python版 TestScriptAdjusterLayerAlphaRules の移植。
 func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
 	t.Parallel()
 
@@ -912,8 +904,7 @@ func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
 
 		// why: strings.Contains(attrs, "type=")は"hittype="のような、直前が
 		// 単語構成文字であるため実際にはtype属性ではない部分文字列にも誤って
-		// 一致してしまう。Python版の\btype=（単語境界付き）と同じ判定に
-		// する必要がある（レビュー指摘）。
+		// 一致してしまう。\btype=のような単語境界付きの判定にする必要がある。
 		adjuster := converter.NewScriptAdjuster(nil, true)
 		content := "[layopt hittype=foo layer=0]"
 
@@ -950,10 +941,9 @@ func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
 	t.Run("正常系: layer=数値の後に他の文字が続いてもtype=alphaが追加される", func(t *testing.T) {
 		t.Parallel()
 
-		// why: Python版のlayer=[0-9]+には後続の単語境界(\b)要求が無いため、
-		// "layer=12abc"のように数字の後に他の文字が続いてもマッチする。
-		// Go版がlayer=[0-9]+\bのように末尾に\bを付けると"layer=12abc"に
-		// マッチしなくなりPython版と乖離する（レビュー指摘）。
+		// why: layer=[0-9]+\bのように末尾に単語境界(\b)を付けると"layer=12abc"の
+		// ように数字の後に他の文字が続く場合にマッチしなくなる。末尾に\bを
+		// 付けず、後続文字の有無に関わらずマッチさせる。
 		testCases := []struct {
 			name    string
 			content string
@@ -1075,15 +1065,14 @@ func TestScriptAdjuster_LayerAlphaRule(t *testing.T) {
 	})
 }
 
-// TestScriptAdjuster_DefaultRulesOrder はDefaultRulesの並び順がPython版
-// DEFAULT_RULESの最終状態と一致することをピン留めする。
+// TestScriptAdjuster_DefaultRulesOrder はDefaultRulesの並び順がピン留めされた
+// 順序と一致することを検証する。
 //
 // why: MIDISoundBuffer→WaveSoundBuffer変換ルールが先に走ることで、
 // 変換前の"MIDISoundBuffer.midiOut(...)"呼び出しも次のmidiOut置換ルールで
-// 捕捉される（T-211由来の順序制約）。今回追加するsaveDataLocationルールは
-// Plugins.link無効化ルールの直後、MIDISoundBuffer変換ルールの直前に位置する
-// 必要がある（他のルールと干渉しない独立したルールのため、この位置自体に
-// 機能的な依存はないが、Python版DEFAULT_RULESの宣言順と一致させることで
+// 捕捉される。saveDataLocationルールはPlugins.link無効化ルールの直後、
+// MIDISoundBuffer変換ルールの直前に位置する（他のルールと干渉しない独立した
+// ルールのため、この位置自体に機能的な依存はないが、宣言順を固定することで
 // 差分レビューを容易にする）。loadplugin系・layopt系ルールは末尾に追加される。
 func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
 	t.Parallel()

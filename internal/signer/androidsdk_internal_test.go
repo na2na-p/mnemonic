@@ -10,8 +10,7 @@ import (
 )
 
 // findAndroidBuildToolのwhite-boxテスト。
-// Python版のTestDefault*RunnerFind*系のシナリオ
-// （ANDROID_HOME優先探索・バージョンソート・PATHフォールバック）を
+// ANDROID_HOME優先探索・バージョンソート・PATHフォールバックのシナリオを
 // ZipalignRunner/ApkSignerRunner両方に共通する探索ロジックとしてまとめて検証する。
 func TestFindAndroidBuildTool(t *testing.T) {
 	t.Run("正常系: ANDROID_HOMEのbuild-toolsから検出", func(t *testing.T) {

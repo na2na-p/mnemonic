@@ -16,12 +16,9 @@ import (
 
 // TestGetDefaultSoundfontPath はGetDefaultSoundfontPathの探索優先順位をテストする。
 //
-// converter.MuseScoreSoundfontPath / FluidR3SoundfontPath はパッケージ変数
-// （Python版のクラス属性モンキーパッチに相当）を書き換えるため、このテストは
-// 他のテストとの並行実行を避けてt.Parallel()を呼ばない
-// （goimportsやgo test -race -shuffle=onでの競合を避けるため）。
-//
-// Python版 TestMidiConverterGetDefaultSoundfontPath の移植。
+// converter.MuseScoreSoundfontPath / FluidR3SoundfontPath はパッケージ変数を
+// 書き換えるため、このテストは他のテストとの並行実行を避けてt.Parallel()を
+// 呼ばない（goimportsやgo test -race -shuffle=onでの競合を避けるため）。
 func TestGetDefaultSoundfontPath(t *testing.T) {
 	t.Run("正常系: MuseScore Generalが存在する場合はそれを返す", func(t *testing.T) {
 		dir := t.TempDir()
@@ -61,8 +58,6 @@ func TestGetDefaultSoundfontPath(t *testing.T) {
 // がこれらを書き換えるため、このテストはt.Parallel()を呼ばず競合を避ける
 // （tparallelは「サブテストがParallelなら親も」を要求するため、混在させず
 // カスタム値のテスト(TestNewMidiConverter_CustomValues)を関数ごと分離した）。
-//
-// Python版 TestMidiConverterInit の一部（デフォルト初期化）の移植。
 func TestNewMidiConverter_DefaultValues(t *testing.T) {
 	c := converter.NewMidiConverter("", 0, "", 0, 0, nil)
 
@@ -75,8 +70,6 @@ func TestNewMidiConverter_DefaultValues(t *testing.T) {
 
 // TestNewMidiConverter_CustomValues はNewMidiConverterへのカスタム値指定を
 // テストする。
-//
-// Python版 TestMidiConverterInit の一部（カスタム初期化）の移植。
 func TestNewMidiConverter_CustomValues(t *testing.T) {
 	t.Parallel()
 
@@ -91,8 +84,6 @@ func TestNewMidiConverter_CustomValues(t *testing.T) {
 }
 
 // TestMidiConverter_SupportedExtensions はSupportedExtensionsをテストする。
-//
-// Python版 TestMidiConverterSupportedExtensions の移植。
 func TestMidiConverter_SupportedExtensions(t *testing.T) {
 	t.Parallel()
 
@@ -108,12 +99,10 @@ func TestMidiConverter_SupportedExtensions(t *testing.T) {
 
 // TestMidiConverter_GetOutputExtension はGetOutputExtensionをテストする。
 //
-// why not: baseline Python版はBaseConverter.get_output_extensionの
-// デフォルト（拡張子を変更しない）のままだが、Go版Converterインターフェースは
-// PR9(T-209)でGetOutputExtensionを追加した際にManagerがこれを使い出力先の
-// 拡張子をリネームする設計になった。MIDI変換の出力実体は常にOGGであるため、
-// ".ogg"を返すのがConverterインターフェースの契約として正しい
-// （Python版はconvert()呼び出し側がdestを明示的に.oggで渡す前提の設計だった）。
+// why not: Converterインターフェースは、Managerが出力先の拡張子をリネーム
+// する際にGetOutputExtensionを使う設計になっている。MIDI変換の出力実体は
+// 常にOGGであるため、".ogg"を返すのがConverterインターフェースの契約として
+// 正しい。
 func TestMidiConverter_GetOutputExtension(t *testing.T) {
 	t.Parallel()
 
@@ -122,8 +111,6 @@ func TestMidiConverter_GetOutputExtension(t *testing.T) {
 }
 
 // TestMidiConverter_CanConvert はCanConvertをテストする。
-//
-// Python版 TestMidiConverterCanConvert の移植。
 func TestMidiConverter_CanConvert(t *testing.T) {
 	t.Parallel()
 
@@ -152,8 +139,6 @@ func TestMidiConverter_CanConvert(t *testing.T) {
 }
 
 // TestMidiConverter_IsFluidsynthAvailable はIsFluidsynthAvailableをテストする。
-//
-// Python版 TestMidiConverterIsFluidSynthAvailable の移植。
 func TestMidiConverter_IsFluidsynthAvailable(t *testing.T) {
 	t.Parallel()
 
@@ -192,8 +177,6 @@ func TestMidiConverter_IsFluidsynthAvailable(t *testing.T) {
 }
 
 // TestMidiConverter_Convert はConvertをテストする。
-//
-// Python版 TestMidiConverterConvert の移植。
 func TestMidiConverter_Convert(t *testing.T) {
 	t.Parallel()
 

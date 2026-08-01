@@ -15,11 +15,10 @@ import (
 // cliExitError はコマンド実行の終了コードを保持するsentinelエラー。
 //
 // why not: cobraはRunEが返したエラーを既定でstderrへ"Error: <message>"の
-// 形式で出力してしまうが、本CLIの各コマンドは既にPython版（typer/rich）と
-// 互換のメッセージを自前でOutOrStdout/ErrOrStderrへ出力済みである。cobraに
-// よる二重出力を避けるため、Errorメッセージを空にしたsentinelでExitCodeのみを
-// run()へ伝え、rootCmd.SilenceErrors/SilenceUsageと組み合わせてcobra自身の
-// 出力を抑止する。
+// 形式で出力してしまうが、本CLIの各コマンドは既にメッセージを自前で
+// OutOrStdout/ErrOrStderrへ出力済みである。cobraによる二重出力を避けるため、
+// Errorメッセージを空にしたsentinelでExitCodeのみをrun()へ伝え、
+// rootCmd.SilenceErrors/SilenceUsageと組み合わせてcobra自身の出力を抑止する。
 type cliExitError struct {
 	code apperr.ExitCode
 }
@@ -29,12 +28,11 @@ func (e *cliExitError) Error() string { return "" }
 // exitWith はcodeがExitSuccessでない場合にcliExitErrorを返す
 // （codeがExitSuccessの場合はnil、すなわちコマンド成功を表す）。
 //
-// why not: 現状すべての呼び出し元はapperr.ExitErrorを渡しており、これは
-// Python版（typer）がbuild/doctor/cacheコマンドの全失敗経路で一律
-// typer.Exit(1)を使っている挙動にそのまま合わせているため（テスト互換性の
-// ため意図的に単純化）。apperr.ExitInvalidInput/ExitDependencyErrorという
-// より詳細な終了コードは将来Python版から意図的に踏み出す際の拡張余地として
-// 型を残す。
+// why not: 現状すべての呼び出し元はapperr.ExitErrorを渡しており、
+// build/doctor/cacheコマンドの全失敗経路を一律の終了コードとして扱っている
+// （テスト互換性のため意図的な単純化）。apperr.ExitInvalidInput/
+// ExitDependencyErrorというより詳細な終了コードは、将来呼び出し元ごとに
+// 使い分ける拡張余地として型を残す。
 //
 //nolint:unparam // 上記の理由によりcodeは現状ExitError固定だが、型はapperr.ExitCodeのまま残す
 func exitWith(code apperr.ExitCode) error {

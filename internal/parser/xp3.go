@@ -173,8 +173,8 @@ func (a *XP3Archive) parseArchive() error {
 // parseFileIndex はファイルインデックスをパースする。
 //
 // テスト用の最小限のXP3ファイル（ヘッダー19バイト未満、または完全な
-// 11バイトマジックを持たない簡易形式）の場合、Python版と同様に
-// パースエラーとはせず空のファイル一覧のまま処理を終える。
+// 11バイトマジックを持たない簡易形式）の場合、パースエラーとはせず空の
+// ファイル一覧のまま処理を終える。
 func (a *XP3Archive) parseFileIndex(f io.ReadSeeker, header []byte) {
 	if len(header) < 19 {
 		return
@@ -231,7 +231,7 @@ func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) {
 
 	// バージョン1: フラグの後に(compressed_size, original_size)がある。
 	// original_sizeは解凍後サイズの検証に使える可能性があるが、
-	// Python版と同様に現時点では読み飛ばすのみで使用しない。
+	// 現時点では読み飛ばすのみで使用しない。
 	compressedSize, ok := readUint64(f)
 	if !ok {
 		return
@@ -261,8 +261,7 @@ func readUint64(f io.Reader) (uint64, bool) {
 //
 // why not: XP3インデックス内のオフセット・サイズは信頼できないアーカイブ
 // バイナリ由来の値であり、math.MaxInt64を超える値をint64へ単純キャストすると
-// 符号が反転し負値になる（seekの意図しない巻き戻り等につながる）。
-// Python版はunbounded intのためこの問題が起きないが、Go移植では
+// 符号が反転し負値になる（seekの意図しない巻き戻り等につながる）。そのため
 // 変換前に範囲チェックし、超過時はパース失敗として扱う。
 func safeInt64(v uint64) (int64, bool) {
 	if v > math.MaxInt64 {
@@ -289,7 +288,7 @@ func (a *XP3Archive) readFileTable(f io.Reader, tableSize int64) {
 
 	tableData, err := decompressZlib(compressed)
 	if err != nil {
-		// 圧縮されていない場合はそのまま使用する（Python版の挙動を踏襲）。
+		// 圧縮されていない場合はそのまま使用する。
 		tableData = compressed
 	}
 
@@ -361,8 +360,7 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) {
 //
 // nameが取得できなかった場合（infoチャンクを欠くなど）、またはセグメントを
 // 1つも持てなかった場合（segmチャンクを欠く、あるいは28バイト未満で
-// 有効なセグメントを構成できない場合）はokにfalseを返す。Python版の
-// `if name and segments:` と同じ判定条件。
+// 有効なセグメントを構成できない場合）はokにfalseを返す。
 func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 	stream := bytes.NewReader(entryData)
 
@@ -389,7 +387,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 			if len(infoData) >= 22 {
 				flags := binary.LittleEndian.Uint32(infoData[0:4])
 				// original_size, sizeはsegmチャンク側の各セグメントが持つため、
-				// ここでは読み飛ばす（Python版delta 3a17127と同じ判断）。
+				// ここでは読み飛ばす。
 				nameLen := int(binary.LittleEndian.Uint16(infoData[20:22]))
 
 				if len(infoData) >= 22+nameLen*2 {
@@ -423,12 +421,11 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 //
 // why not: 宣言されたsubChunkSizeではなく、実際に読み取れたsegmData
 // （readChunkでstream残量にクランプ済み）の長さを28で割った件数だけを対象にする。
-// これによりPython版の`len(segm_data) // segment_size`と同じく、末尾の
-// 28バイト未満の断片は自然に無視され、宣言セグメント数がどれほど巨大でも
-// 実データ長を超えて処理することはない。ただしこれは「セグメントレコードの
-// パース時」に確保する[]XP3Segmentのメモリ量に関する主張に過ぎず、展開時に
-// 同一オフセットを指す大量のセグメントを積み重ねる攻撃までは防げない
-// （そちらの対策はextractEntryのbudgetに関するwhy not参照）。
+// これにより末尾の28バイト未満の断片は自然に無視され、宣言セグメント数が
+// どれほど巨大でも実データ長を超えて処理することはない。ただしこれは
+// 「セグメントレコードのパース時」に確保する[]XP3Segmentのメモリ量に関する
+// 主張に過ぎず、展開時に同一オフセットを指す大量のセグメントを積み重ねる
+// 攻撃までは防げない（そちらの対策はextractEntryのbudgetに関するwhy not参照）。
 func parseSegments(segmData []byte) []XP3Segment {
 	const segmentRecordSize = 28
 
@@ -444,8 +441,8 @@ func parseSegments(segmData []byte) []XP3Segment {
 		// why not: OffsetがsafeInt64で範囲外と判定された場合、Size/OriginalSize
 		// と同じくゼロ値へフォールバックすると「オフセット0（=アーカイブヘッダー
 		// 付近）からSize/OriginalSizeで示されるバイト数を読む」動作になり、
-		// 本来無関係なアーカイブヘッダーのバイト列を展開結果に混入させてしまう
-		// （reviewer実測）。Size/OriginalSizeのゼロ値フォールバックは最悪でも
+		// 本来無関係なアーカイブヘッダーのバイト列を展開結果に混入させてしまう。
+		// Size/OriginalSizeのゼロ値フォールバックは最悪でも
 		// 「空読みになるだけ」で実害がないが、Offsetは読み取り位置そのものを
 		// 決めるため同列には扱えない。そのためOffsetが範囲外のセグメントは
 		// 丸ごと破棄する（このエントリの他のセグメントには影響しない。全セグ
@@ -478,12 +475,11 @@ func parseSegments(segmData []byte) []XP3Segment {
 
 // readChunk はstreamからsizeバイトを読み取る。
 //
-// why not: sizeはXP3インデックス内の宣言値であり信頼できない。Pythonの
-// BytesIO.read(n)はnがどれほど大きくても実際にバッファ内に残っているバイト数
-// までしか読まず安全だが、Go版でmake([]byte, size)を素朴に呼ぶと巨大な
-// sizeでOOM（回復不能なfatal error）を起こしうる（実際に数十バイトの
-// 細工ファイルで再現する）。そのためstream.Len()（残りバイト数）でsizeを
-// クランプしてから確保し、Python版と同じ「残っている分だけ読む」挙動にする。
+// why not: sizeはXP3インデックス内の宣言値であり信頼できない。
+// make([]byte, size)を素朴に呼ぶと巨大なsizeでOOM（回復不能なfatal error）を
+// 起こしうる（実際に数十バイトの細工ファイルで再現する）。そのため
+// stream.Len()（残りバイト数）でsizeをクランプしてから確保し、「残っている
+// 分だけ読む」挙動にする。
 func readChunk(stream *bytes.Reader, size uint64) []byte {
 	remaining := stream.Len()
 	if remaining < 0 {
@@ -504,15 +500,12 @@ func readChunk(stream *bytes.Reader, size uint64) []byte {
 
 // skipChunk はstreamの現在位置からsizeバイト分を前方へスキップする。
 //
-// why not: Pythonの BytesIO.seek(size, 1) はsizeがどれほど大きくても
-// バッファ終端を越えて（エラーにならず）位置を進めるだけであり、次の
-// stream.read(4) が空を返してループが自然終了するだけで済む。一方
-// bytes.Reader.Seek はint64変換後の絶対位置が負になる場合にエラーを返す
-// ため、sizeをuint64のまま素朴にint64変換すると（math.MaxInt64超で符号が
+// why not: bytes.Reader.Seek はint64変換後の絶対位置が負になる場合にエラーを
+// 返すため、sizeをuint64のまま素朴にint64変換すると（math.MaxInt64超で符号が
 // 反転し）Seekが失敗し、呼び出し元でエントリ全体を破棄してしまう
 // （情報チャンクを先に読んでいた場合、正常に得られたはずのデータまで
 // 失われる）。そのためsizeをstream.Len()でクランプし、Seekが常に成功する
-// ようにしてPython版の「バッファ終端で止まるだけ」という挙動に合わせる。
+// ようにして「バッファ終端で止まるだけ」という安全な挙動にする。
 func skipChunk(stream *bytes.Reader, size uint64) {
 	remaining := stream.Len()
 	if remaining < 0 {
@@ -527,9 +520,9 @@ func skipChunk(stream *bytes.Reader, size uint64) {
 
 // decodeUTF16LE はUTF-16LEバイト列をデコードする。
 //
-// Pythonのdecode("utf-16-le")は不正なサロゲート列で例外を送出し空文字列に
-// フォールバックする。utf16.Decodeは不正なサロゲートを置換文字に変換して
-// 継続するため完全に同一の挙動ではないが、正常なファイル名では結果が一致する。
+// utf16.Decodeは不正なサロゲートを置換文字に変換して継続するため、不正な
+// サロゲート列を含む入力でも処理を継続できるが、正常なファイル名では
+// 問題なく変換できる。
 func decodeUTF16LE(data []byte) string {
 	if len(data)%2 != 0 {
 		return ""
@@ -618,15 +611,15 @@ func (a *XP3Archive) findEntry(filename string) (XP3FileEntry, bool) {
 }
 
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
-// outputPathへ書き出す（Python版delta 3a17127の複数セグメント連結展開に相当）。
+// outputPathへ書き出す。
 //
 // why not: 個々のセグメントはreadSegment内でfileSizeによりオフセット以降の
 // 実際の残量へクランプされるが、それだけでは「同一オフセットを指す大量の
 // セグメント」を積み重ねる攻撃を防げない（各セグメントは独立にfileSize近くまで
 // 読めてしまうため、セグメント数×fileSizeでアロケーション総量が膨れ上がる。
-// reviewer実測: 52KBの細工アーカイブ・同一オフセットのセグメント20,000件で
-// 5.1GB RSS）。正当なアーカイブでは各バイトは高々1つのセグメントにしか
-// 属さないため、エントリ全体で読み取れる生バイト数の総量をbudgetとして
+// 52KBの細工アーカイブ・同一オフセットのセグメント20,000件で5.1GB RSSに
+// 達することを確認済み）。正当なアーカイブでは各バイトは高々1つのセグメントに
+// しか属さないため、エントリ全体で読み取れる生バイト数の総量をbudgetとして
 // fileSizeを上限に管理し、セグメントをまたいで消費させる。
 func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
@@ -720,17 +713,14 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([
 
 // safeJoin はbaseDir配下にentryNameを結合する。
 //
-// why not: Python版はPath結合をそのまま行いパストラバーサル対策をしていないが、
-// エントリ名はアーカイブ内データに由来し外部入力として信頼できないため、
-// Go移植では展開先がbaseDir外に脱出しないことを検証する（zip slip対策）。
+// why not: エントリ名はアーカイブ内データに由来し外部入力として信頼できない
+// ため、展開先がbaseDir外に脱出しないことを検証する（zip slip対策）。
 //
-// もう1点、Python版との既知の差分として、entryName中の"\"はここで"/"へ
-// 正規化してからOS区切り文字へ変換するためディレクトリ階層として扱われる。
-// Python版（PurePosixPath上でのパス結合）では"\"はパス区切りとして解釈
-// されず、"data\script.ks"のような名前のエントリはリテラルに"\"を含む
-// 単一ファイル名として書き出される。XP3アーカイブ内のエントリ名はWindows
-// 由来で"\"区切りのケースが実際にあり得るため、Go移植ではこちらを正規化する
-// 挙動を意図的に選んでいる。
+// もう1点、entryName中の"\"はここで"/"へ正規化してからOS区切り文字へ
+// 変換するためディレクトリ階層として扱われる。"\"をパス区切りとして扱わず
+// リテラルな単一ファイル名の一部として扱う実装も考えられるが、XP3アーカイブ
+// 内のエントリ名はWindows由来で"\"区切りのケースが実際にあり得るため、
+// ディレクトリ階層として正規化する挙動を意図的に選んでいる。
 func safeJoin(baseDir, entryName string) (string, error) {
 	cleanedName := filepath.FromSlash(strings.ReplaceAll(entryName, `\`, "/"))
 	joined := filepath.Join(baseDir, cleanedName)
@@ -771,8 +761,8 @@ func NewXP3EncryptionChecker(archivePath string) *XP3EncryptionChecker {
 // Check は暗号化状態をチェックして返す。
 //
 // アーカイブファイルが存在しない場合はErrXP3NotFoundを返す。
-// 不正なXP3ファイル形式でパースに失敗した場合は、Python版と同様に
-// 暗号化されていないとみなしたEncryptionInfoを返す（エラーにしない）。
+// 不正なXP3ファイル形式でパースに失敗した場合は、暗号化されていないとみなした
+// EncryptionInfoを返す（エラーにしない）。
 func (c *XP3EncryptionChecker) Check() (EncryptionInfo, error) {
 	if _, err := os.Stat(c.archivePath); err != nil {
 		return EncryptionInfo{}, fmt.Errorf("%w: %s", ErrXP3NotFound, c.archivePath)

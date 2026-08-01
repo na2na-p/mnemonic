@@ -14,12 +14,11 @@ var (
 	// ErrNoIconsAvailable はEXE内にRT_GROUP_ICON/RT_ICONリソースが
 	// 見つからない場合のセンチネルエラー。
 	//
-	// why not: Python版が依存するicoextractのNoIconsAvailableErrorに相当する。
-	// Python版のextract()はこの例外もEXE未検出・破損時の例外も一律Noneへ
-	// 握りつぶすため、テストからは「なぜNoneなのか」を区別できない。Go版は
-	// センチネルエラーとして呼び出し元に伝播させ、errors.Isで原因を判別
-	// できるようにする（呼び出し元のpipelineがアイコン無しを「警告して続行」、
-	// PE破損を「ビルド失敗」として扱い分けたい場合に必要になる）。
+	// why not: アイコン無しとPE破損を一律に握りつぶすと、呼び出し元は「なぜ
+	// アイコンが取得できなかったのか」を区別できない。センチネルエラーとして
+	// 呼び出し元に伝播させ、errors.Isで原因を判別できるようにする（呼び出し
+	// 元のpipelineがアイコン無しを「警告して続行」、PE破損を「ビルド失敗」
+	// として扱い分けたい場合に必要になる）。
 	ErrNoIconsAvailable = errors.New("EXEにアイコンが含まれていません")
 
 	// ErrIconInvalidPEFile はexePathがPE形式として解析できない場合、または
@@ -36,13 +35,11 @@ type IconExtractor interface {
 // ExeIconExtractor はWindows EXEのPEリソースからアイコンを抽出し、
 // PNG形式で保存するIconExtractor実装。
 //
-// why not(stdlib debug/pe + 手動リソース解析を選んだ理由): Python版は
-// icoextract(PEリソース走査・ICO再構成)とPillow(ICO→PNGデコード)という
-// 外部ライブラリへ委譲していたが、Go版のLibrary SSOT(CLAUDE.md)には
-// 同等のPEリソースパーサーが無い。新規依存を増やす前に実装難度を検証する
-// 方針(T-210チケット)に従い、RT_GROUP_ICON/RT_ICONの読み取りとICOの
-// BITMAPINFOHEADER系DIBデコードをstdlib debug/pe + 本パッケージのみで
-// 実装した(icon_resource.go/icon_ico.go/icon_dib.go)。
+// why not(stdlib debug/pe + 手動リソース解析を選んだ理由): Go版のLibrary
+// SSOT(CLAUDE.md)にはPEリソースを走査しICOを再構成するライブラリが無い。
+// 新規依存を増やす前に実装難度を検証する方針に従い、RT_GROUP_ICON/RT_ICONの
+// 読み取りとICOのBITMAPINFOHEADER系DIBデコードをstdlib debug/pe + 本パッケージ
+// のみで実装した(icon_resource.go/icon_ico.go/icon_dib.go)。
 type ExeIconExtractor struct{}
 
 // NewExeIconExtractor はExeIconExtractorを初期化する。

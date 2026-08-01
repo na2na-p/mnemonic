@@ -404,7 +404,7 @@ func TestBuildLogger_FileOutput(t *testing.T) {
 		require.NoError(t, l.Close())
 
 		assert.True(t, l.Closed())
-		// Close後の再Closeはエラーにならない（Python版の__exit__の再入も安全だったことに倣う）
+		// Close後の再Closeはエラーにならない（べき等な設計）
 		assert.NoError(t, l.Close())
 	})
 

@@ -133,16 +133,14 @@ func (b *BuildPipeline) executeConvert() error {
 
 	manager := converter.NewConversionManager(converters, nil, 0, nil)
 
-	// why not(PR4申し送り): converter.ConvertDirectoryはsourceDir（ここでは
-	// extractDir）が存在しない場合にerrorを返す。Python版のConversionManager.
-	// convert_directoryは同じ状況で空のConversionSummaryを返して成功扱いに
-	// する既知の齟齬がある（PR4レビュー参照）。extractDirは直前のEXTRACTフェーズが
+	// why not: converter.ConvertDirectoryはsourceDir（ここではextractDir）が
+	// 存在しない場合にerrorを返す。extractDirは直前のEXTRACTフェーズが
 	// os.MkdirTempで必ず作成しているため、通常の実行経路でこのエラー分岐に
 	// 到達することはない。到達するとすればextractDirが実行中に消失した異常系
-	// であり、そのケースをPython版のように空サマリーで握りつぶさず、CONVERT
-	// フェーズの失敗として明示的に報告する（「エラーはerrorとして呼び出し元へ
-	// 伝播する」という他フェーズと同じ契約を踏襲する方が、黙って空の変換結果を
-	// 返すより安全なため、Python版の挙動をあえて踏襲しない）。
+	// であり、そのケースを空サマリーで握りつぶさず、CONVERTフェーズの失敗
+	// として明示的に報告する（「エラーはerrorとして呼び出し元へ伝播する」
+	// という他フェーズと同じ契約に沿うほうが、黙って空の変換結果を返すより
+	// 安全なため）。
 	summary, err := manager.ConvertDirectory(b.extractDir, b.convertDir, true)
 	if err != nil {
 		return fmt.Errorf("アセット変換に失敗しました: %w", err)
@@ -170,12 +168,12 @@ func (b *BuildPipeline) executeConvert() error {
 //   - convertMidiFilesUsingの呼び出しをadjustScriptsより後ろへ動かしては
 //     ならない。ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換えるため、
 //     MIDI変換が先に失敗してCONVERTフェーズを中断できないと、実体の無い.oggを
-//     指すスクリプトのままAPKが完成し、BGMが無音になる（T-220で実機確認済み）。
+//     指すスクリプトのままAPKが完成し、BGMが無音になる（実機で確認済み）。
 //
 // これらの順序不変条件はphases_internal_test.goのテストで固定している。
-// 順序自体はPython版（MIDI変換→プラグインdllディレクトリ削除→polyfillコピー
-// →スクリプト調整→ファイル名正規化）と同じ（動画の残留ファイル削除はGo版で
-// 追加した独自のステップ）。
+// 順序は MIDI変換→プラグインdllディレクトリ削除→polyfillコピー→
+// スクリプト調整→ファイル名正規化 とする（動画の残留ファイル削除は
+// この一連の処理に独自に追加したステップ）。
 func (b *BuildPipeline) finalizeConvertedTree(
 	directory string,
 	summary converter.ConversionSummary,
@@ -250,10 +248,8 @@ func (b *BuildPipeline) executeBuild() error {
 	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
 	plugins := b.fetchPlugins()
 
-	// why not: Python版のBuildPipelineもTemplatePreparer(self._project_dir)を
-	// sdl2_cache未指定（None）で呼び出しており、パイプライン経由のビルドでは
-	// SDL2 Javaソースのキャッシュを使わない（都度ダウンロードする）。この
-	// デフォルト挙動を踏襲する。
+	// why not: パイプライン経由のビルドではSDL2 Javaソースのキャッシュを
+	// 使わず、都度ダウンロードする。これが既定の挙動である。
 	preparer := builder.NewTemplatePreparer(projectDir, nil)
 	if err := preparer.Prepare(packageName, appName, b.convertDir, b.findGameIcon(), plugins); err != nil {
 		return err

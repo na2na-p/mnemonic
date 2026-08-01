@@ -4,13 +4,11 @@ import "errors"
 
 // センチネルエラー群。
 //
-// Python版はZipalignError/ApkSignerError/PasswordErrorという3種の例外クラスに
-// メッセージ文字列で複数の失敗理由を詰め込んでいたが、Go版はerrors.Is比較を
-// 前提にfmt.Errorf("...: %w", err)でラップする設計（lang-go.md Criterion G3）
-// のため、失敗理由ごとにセンチネルを分ける。
+// errors.Is比較を前提にfmt.Errorf("...: %w", err)でラップする設計
+// （lang-go.md Criterion G3）のため、失敗理由ごとにセンチネルを分ける。
 // ファイル未検出はalign/isAligned・sign/verifyそれぞれで対象パスが異なるだけで
-// 失敗理由は同一（「操作対象のファイルが存在しない」）のため、Python版のように
-// メソッドごとにメッセージを分けず一つのセンチネルに統合する。
+// 失敗理由は同一（「操作対象のファイルが存在しない」）のため、メソッドごとに
+// メッセージを分けず一つのセンチネルに統合する。
 var (
 	// ErrZipalignFileNotFound はzipalignの操作対象ファイル
 	// （align時は入力APK、isAligned時は確認対象APK）が存在しない場合のエラー。
@@ -32,7 +30,7 @@ var (
 	ErrApkSignFailed = errors.New("apksignerの署名に失敗しました")
 	// ErrApkVerifyFailed はapksigner verifyコマンドの実行自体に失敗した場合のエラー。
 	// 署名検証結果が無効(non-zero終了)であることそれ自体はエラーではなく
-	// Verifyの戻り値boolで表現する（Python版のsubprocess.SubprocessErrorに相当）。
+	// Verifyの戻り値boolで表現する。
 	ErrApkVerifyFailed = errors.New("apksignerの検証実行に失敗しました")
 
 	// ErrPasswordEmpty は対話的入力で得たパスワードが空だった場合のエラー。
