@@ -27,6 +27,13 @@ var defaultIconColor = color.RGBA{R: 100, G: 80, B: 160, A: 255}
 
 // iconProvisioner はアプリアイコンを各解像度のmipmapディレクトリへ配置する。
 // 提供アイコンが無い場合は単色のデフォルトアイコンを生成する。
+//
+// why not（UpdateIcon/CreateDefaultを別の型に分けない理由）: 両者は
+// 「起動activityが読み込むic_launcher.pngを各密度のmipmapディレクトリに
+// 揃える」という同一目的の二者択一（提供アイコンがあれば配置、無ければ
+// 生成）であり、対象ディレクトリ・密度一覧という同じ不変条件を共有する。
+// 目的が分かれていない（アイコンを用意したい、という1つの目的の実現手段が
+// 2通りあるだけ）ため、1つの型にまとめる。
 type iconProvisioner struct {
 	projectDir string
 }
