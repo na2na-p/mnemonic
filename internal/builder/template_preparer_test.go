@@ -703,11 +703,11 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 	t.Run("正常系: packageNameがpw.uyjulian.krkrsdl2自身でも生成ファイルが残る", func(t *testing.T) {
 		t.Parallel()
 
-		// レビュー指摘の再現シナリオ: 新Java書き込み後にoldJavaDir
-		// (pw/uyjulian/krkrsdl2)を無条件削除する実装だと、packageNameが
-		// "pw.uyjulian.krkrsdl2"自身の場合はjavaDir==oldJavaDirとなり、
-		// 書いたばかりの生成ファイルがエラーなしで削除されてしまう
-		// （Prepareはnilを返すのにファイルが存在しない状態になる）。
+		// 新Java書き込み後にoldJavaDir(pw/uyjulian/krkrsdl2)を無条件削除する
+		// 実装だと、packageNameが"pw.uyjulian.krkrsdl2"自身の場合は
+		// javaDir==oldJavaDirとなり、書いたばかりの生成ファイルがエラーなしで
+		// 削除されてしまう（Prepareはnilを返すのにファイルが存在しない状態に
+		// なる）。
 		projectDir := newFullyPreparableProject(t)
 
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))

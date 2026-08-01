@@ -320,12 +320,9 @@ func (c *MidiConverter) detectTrailingSilenceTrimPoint(wavPath string) (float64,
 // パース処理へstderrの警告が混入しないようにするための既存契約であり、
 // このMIDI変換専用の目的だけのために変更しない）。そこで
 // ffprobe + lavfi(amovie+silencedetect) を使い、イベントを標準出力上の
-// JSON(frame_tags)として取得する。
-//
-// 末尾の無音区間だけを安全に検出するため、直近のタグが"silence_start"のまま
-// 終わっている（＝その後"silence_end"で終了していない）場合だけを「末尾まで
-// 無音が続いている」とみなす。曲中に短い休符が複数回あっても、最後に観測される
-// タグが"silence_end"であれば末尾は無音でないと判定してトリムしない。
+// JSON(frame_tags)として取得する。「末尾が無音で終わっているか」の判定
+// そのものはIOを伴わないtrailingSilenceStartFromFramesへ委譲し、この関数は
+// ffprobeの実行とJSONパースのみを担う。
 func (c *MidiConverter) detectTrailingSilenceStart(ctx context.Context, wavPath string) (float64, bool) {
 	filterInput := fmt.Sprintf(
 		"amovie=%s,silencedetect=noise=%ddB:d=%s",
@@ -350,9 +347,22 @@ func (c *MidiConverter) detectTrailingSilenceStart(ctx context.Context, wavPath 
 		return 0, false
 	}
 
+	return trailingSilenceStartFromFrames(probe.Frames)
+}
+
+// trailingSilenceStartFromFrames はffprobeから得たframe_tags列(silenceProbeOutput.
+// Frames)から、末尾の無音開始秒を判定する純粋関数。IOを行わないため
+// ffprobeを起動せずに判定ロジック単体をテストできる。
+//
+// 末尾の無音区間だけを安全に検出するため、直近のタグが"silence_start"のまま
+// 終わっている（＝その後"silence_end"で終了していない）場合だけを「末尾まで
+// 無音が続いている」とみなす。曲中に短い休符が複数回あっても、最後に観測される
+// タグが"silence_end"であれば末尾は無音でないと判定してトリムしない。
+func trailingSilenceStartFromFrames(frames []silenceProbeFrame) (float64, bool) {
 	var lastStart float64
 	trailing := false
-	for _, frame := range probe.Frames {
+
+	for _, frame := range frames {
 		if v, ok := frame.Tags["lavfi.silence_start"]; ok {
 			if f, err := strconv.ParseFloat(v, 64); err == nil {
 				lastStart = f
