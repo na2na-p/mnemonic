@@ -333,7 +333,7 @@ func (c *MidiConverter) detectTrailingSilenceTrimPoint(wavPath string) (float64,
 // タグが"silence_end"であれば末尾は無音でないと判定してトリムしない。
 func (c *MidiConverter) detectTrailingSilenceStart(ctx context.Context, wavPath string) (float64, bool) {
 	filterInput := fmt.Sprintf(
-		"amovie='%s',silencedetect=noise=%ddB:d=%s",
+		"amovie=%s,silencedetect=noise=%ddB:d=%s",
 		escapeLavfiPathForAmovie(wavPath),
 		trailingSilenceThresholdDB,
 		strconv.FormatFloat(trailingSilenceMinDuration, 'f', -1, 64),
@@ -380,12 +380,23 @@ func (c *MidiConverter) detectTrailingSilenceStart(ctx context.Context, wavPath 
 
 // escapeLavfiPathForAmovie はamovieフィルタの引数として渡すパスをエスケープする。
 //
-// why not: amovie=<path>はavfilterのオプション文字列内に埋め込まれるため、
-// パスにシングルクォートが含まれると引数解析が壊れる。パス自体は
-// os.CreateTemp("", "*.wav")が生成する制御下の一時ファイルであり通常は
-// 問題にならないが、TMPDIR次第では想定外の文字列が混入し得るため防御的に
-// エスケープする（シェルのシングルクォートエスケープと同じ手法で、
-// シングルクォート1文字をクォート閉じ+バックスラッシュ+クォート+クォート開きに置換する）。
+// why not: amovie=<path>はavfilterのフィルタグラフ記述内に埋め込まれるため、
+// シェルのクォート規則(閉じクォート+バックスラッシュ+クォート+開きクォート方式)は
+// 通用しない。実機のffprobe(exec直接呼び出し、シェル非経由)で検証した結果、
+// amovieのフィルタグラフ記述は「フィルタオプション値自体のエスケープ」と
+// 「フィルタグラフ記述全体のエスケープ」の2段階が重なったエスケープを要求し、
+// バックスラッシュ1文字は4文字(`\\\\`)、シングルクォート1文字はバックスラッシュ
+// 3つ+クォート(`\\\'`)、コロン1文字はバックスラッシュ2つ+コロン(`\\:`)に
+// それぞれ変換しないとamovieがパスを正しく解釈できない（文字ごとに必要な
+// バックスラッシュ本数が異なる。パスにこれらの文字が含まれるのは主にWindows版の
+// 一時ディレクトリ(例: C:\Users\...\AppData\Local\Temp)のケース）。バックスラッシュ
+// の変換を最初に行うのは、後続のクォート・コロン置換で挿入するバックスラッシュ
+// 自体が再度多重エスケープされるのを防ぐため。
 func escapeLavfiPathForAmovie(path string) string {
-	return strings.ReplaceAll(path, "'", `'\''`)
+	s := path
+	s = strings.ReplaceAll(s, `\`, `\\\\`)
+	s = strings.ReplaceAll(s, `'`, `\\\'`)
+	s = strings.ReplaceAll(s, `:`, `\\:`)
+
+	return s
 }
