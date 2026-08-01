@@ -47,8 +47,9 @@ func addMinimalBuildGradle(t *testing.T, projectDir string) {
 
 // realForkKirikiriSDL2ActivityJava はfork krkrsdl2リポジトリ
 // (android-project/app/src/main/java/pw/uyjulian/krkrsdl2/KirikiriSDL2Activity.java)
-// の実際の内容そのもの。テンプレートzipがprojectDir配下に展開した状態を
-// 模したフィクスチャとして使う（updateJavaSourceの入力契約の結合確認）。
+// の実際の内容そのもの（onCreateオーバーライドによるWindowInsetsリスナー
+// 登録を含む）。テンプレートzipがprojectDir配下に展開した状態を模した
+// フィクスチャとして使う（updateJavaSourceの入力契約の結合確認）。
 const realForkKirikiriSDL2ActivityJava = `package pw.uyjulian.krkrsdl2;
 
 import android.app.Activity;
@@ -56,6 +57,11 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.DisplayCutout;
+import android.view.View;
+import android.view.WindowInsets;
 
 import org.libsdl.app.SDLActivity;
 
@@ -93,6 +99,51 @@ public class KirikiriSDL2Activity extends SDLActivity {
             ex.printStackTrace();
         }
         super.setOrientationBis(w, h, resizable, hint);
+    }
+
+    // Safe-area insets (cutout + system bars)
+
+    private static volatile int[] cachedSafeAreaInsets = new int[]{0, 0, 0, 0};
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().getDecorView().setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+                @Override
+                public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                    updateCachedSafeAreaInsets(insets);
+                    return insets;
+                }
+            });
+        }
+    }
+
+    private static void updateCachedSafeAreaInsets(WindowInsets insets) {
+        int left = insets.getSystemWindowInsetLeft();
+        int top = insets.getSystemWindowInsetTop();
+        int right = insets.getSystemWindowInsetRight();
+        int bottom = insets.getSystemWindowInsetBottom();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            DisplayCutout cutout = insets.getDisplayCutout();
+            if (cutout != null) {
+                left = Math.max(left, cutout.getSafeInsetLeft());
+                top = Math.max(top, cutout.getSafeInsetTop());
+                right = Math.max(right, cutout.getSafeInsetRight());
+                bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+            }
+        }
+
+        cachedSafeAreaInsets = new int[]{left, top, right, bottom};
+    }
+
+    /**
+     * This method is called by SDL using JNI.
+     * @return {left, top, right, bottom} safe-area insets in px
+     */
+    public static int[] getSafeAreaInsets() {
+        return cachedSafeAreaInsets;
     }
 
     // Select-list dialog
@@ -484,6 +535,13 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 				content, err := os.ReadFile(javaFile)
 				require.NoError(t, err)
 				assert.Contains(t, string(content), "package "+tc.packageName+";")
+
+				gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", packagePath, "KirikiriSDL2GameActivity.java")
+				assert.FileExists(t, gameActivityFile)
+
+				gameActivityContent, err := os.ReadFile(gameActivityFile)
+				require.NoError(t, err)
+				assert.Contains(t, string(gameActivityContent), "package "+tc.packageName+";")
 			})
 		}
 	})
@@ -505,7 +563,7 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		assert.NoDirExists(t, oldJavaDir)
 	})
 
-	t.Run("正常系: getArgumentsにholdalpha=yesが含まれる", func(t *testing.T) {
+	t.Run("正常系: KirikiriSDL2GameActivityのgetArgumentsにholdalpha=yesが含まれる", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := newFullyPreparableProject(t)
@@ -513,14 +571,14 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
-		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2GameActivity.java")
 		content, err := os.ReadFile(javaFile)
 		require.NoError(t, err)
 
 		assert.Contains(t, string(content), `"-holdalpha=yes"`)
 	})
 
-	t.Run("正常系: getArgumentsにSIMD無効化フラグが含まれる（C実装を使用）", func(t *testing.T) {
+	t.Run("正常系: KirikiriSDL2GameActivityのgetArgumentsにSIMD無効化フラグが含まれる（C実装を使用）", func(t *testing.T) {
 		t.Parallel()
 
 		// ARMデバイスではSIMDeエミュレーションに問題があるため、純粋なC実装の
@@ -530,7 +588,7 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
 		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
 
-		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2GameActivity.java")
 		content, err := os.ReadFile(javaFile)
 		require.NoError(t, err)
 
@@ -570,6 +628,8 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 			"public void setOrientationBis(int w, int h, boolean resizable, String hint)",
 			"ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED",
 			"PackageManager.NameNotFoundException",
+			// getSafeAreaInsets: krkrsdl2ネイティブがJNI経由で呼び出すセーフエリア取得
+			"public static int[] getSafeAreaInsets()",
 			// showSelectList: krkrsdl2ネイティブがJNI経由で呼び出すダイアログ実装
 			"public static int showSelectList(",
 			"setCancelable(true)",
@@ -588,6 +648,36 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		for _, fragment := range requiredFragments {
 			assert.Contains(t, text, fragment, "fork側の断片が生成テンプレートから欠落しています: %s", fragment)
 		}
+	})
+
+	t.Run("正常系: fork版がonCreateを持っていても生成一式がjavac的に衝突しない（onCreate定義が各ファイルに1つずつ）", func(t *testing.T) {
+		t.Parallel()
+
+		// realForkKirikiriSDL2ActivityJavaはfork krkrsdl2で追加された
+		// onCreateオーバーライド（WindowInsetsリスナー登録）を含む。
+		// KirikiriSDL2Activity.java（fork版、素通し出力）と
+		// KirikiriSDL2GameActivity.java（mnemonic独自、サブクラス）の
+		// それぞれにonCreateが1つずつ定義され、同一ファイル内でメソッドが
+		// 重複しないことを確認する（回帰: 過去にonCreate二重定義でjavac
+		// エラーが発生した）。
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		forkJavaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2Activity.java")
+		forkContent, err := os.ReadFile(forkJavaFile)
+		require.NoError(t, err)
+
+		gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2GameActivity.java")
+		gameActivityContent, err := os.ReadFile(gameActivityFile)
+		require.NoError(t, err)
+
+		forkText := string(forkContent)
+		gameActivityText := string(gameActivityContent)
+
+		assert.Equal(t, 1, countOccurrences(forkText, "protected void onCreate("), "fork版ファイルのonCreateが重複または欠落している")
+		assert.Equal(t, 1, countOccurrences(gameActivityText, "protected void onCreate("), "サブクラスファイルのonCreateが重複または欠落している")
 	})
 
 	t.Run("異常系: fork版KirikiriSDL2Activity.javaがテンプレートに存在しない場合", func(t *testing.T) {
@@ -631,7 +721,41 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 		text := string(content)
 		assert.Contains(t, text, "package pw.uyjulian.krkrsdl2;")
 		assert.Contains(t, text, "public static int showSelectList(")
+
+		gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2", "KirikiriSDL2GameActivity.java")
+		require.FileExists(t, gameActivityFile)
+
+		gameActivityContent, err := os.ReadFile(gameActivityFile)
+		require.NoError(t, err)
+		gameActivityText := string(gameActivityContent)
+		assert.Contains(t, gameActivityText, "package pw.uyjulian.krkrsdl2;")
+		assert.Contains(t, gameActivityText, "protected void onCreate(Bundle savedInstanceState)")
+	})
+}
+
+// TestTemplatePreparer_GameActivity はKirikiriSDL2GameActivity.java
+// （mnemonic独自機能のサブクラス）の生成内容を検証する。
+func TestTemplatePreparer_GameActivity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: KirikiriSDL2ActivityをextendsするサブクラスとしてonCreate/getArguments/copyAssets系メソッドが生成される", func(t *testing.T) {
+		t.Parallel()
+
+		projectDir := newFullyPreparableProject(t)
+
+		p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+		require.NoError(t, p.Prepare("com.example.game", "My Game", "", "", nil))
+
+		javaFile := filepath.Join(projectDir, "app", "src", "main", "java", "com", "example", "game", "KirikiriSDL2GameActivity.java")
+		content, err := os.ReadFile(javaFile)
+		require.NoError(t, err)
+
+		text := string(content)
+		assert.Contains(t, text, "public class KirikiriSDL2GameActivity extends KirikiriSDL2Activity {")
 		assert.Contains(t, text, "protected void onCreate(Bundle savedInstanceState)")
+		assert.Contains(t, text, "protected String[] getArguments()")
+		assert.Contains(t, text, "private void copyAssetsToInternal()")
+		assert.Contains(t, text, "super.onCreate(savedInstanceState);")
 	})
 }
 
@@ -804,6 +928,71 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 		content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
 		require.NoError(t, err)
 		assert.NotContains(t, string(content), `package="`)
+	})
+
+	t.Run("正常系: 起動activityのandroid:nameがKirikiriSDL2GameActivityへ書き換えられる", func(t *testing.T) {
+		t.Parallel()
+
+		testCases := []struct {
+			name         string
+			packageName  string
+			activityName string
+			wantName     string
+		}{
+			// 先頭ドット省略形（テスト全体で使われている表記）。相対解決形は
+			// build.gradleのnamespace（packageName）を通じて解決されるため、
+			// プレフィックスをそのまま保持してよい。
+			{name: "正常系: 先頭ドット省略形", packageName: "com.example.game", activityName: ".KirikiriSDL2Activity", wantName: ".KirikiriSDL2GameActivity"},
+			// パッケージ省略形（fork krkrsdl2実テンプレートの実際の表記）
+			{name: "正常系: パッケージ省略形", packageName: "com.example.game", activityName: "KirikiriSDL2Activity", wantName: "KirikiriSDL2GameActivity"},
+			// 完全修飾かつpackageNameがfork版パッケージと異なる場合。
+			// updateJavaSourceは生成クラスを常にpackageName配下へ配置するため、
+			// 書き換え後もpackageNameを指す必要がある（元のfork版パッケージ
+			// 接頭辞pw.uyjulian.krkrsdl2.を保持すると実在しないクラスを
+			// 指してしまう。rewriteActivityNameのwhy-not参照）。
+			{name: "正常系: 完全修飾（packageNameが異なる）", packageName: "com.example.game", activityName: "pw.uyjulian.krkrsdl2.KirikiriSDL2Activity", wantName: "com.example.game.KirikiriSDL2GameActivity"},
+			// 完全修飾かつpackageNameがfork版パッケージ自身と一致する場合
+			{name: "正常系: 完全修飾（packageNameがfork版と一致）", packageName: "pw.uyjulian.krkrsdl2", activityName: "pw.uyjulian.krkrsdl2.KirikiriSDL2Activity", wantName: "pw.uyjulian.krkrsdl2.KirikiriSDL2GameActivity"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				projectDir := newManifestProject(t, `<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="`+tc.activityName+`">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+`)
+
+				p := builder.NewTemplatePreparer(projectDir, testSDL2Cache(t))
+				require.NoError(t, p.Prepare(tc.packageName, "My Game", "", "", nil))
+
+				content, err := os.ReadFile(filepath.Join(projectDir, "app", "src", "main", "AndroidManifest.xml"))
+				require.NoError(t, err)
+				text := string(content)
+				assert.Contains(t, text, `android:name="`+tc.wantName+`"`)
+				if tc.activityName != tc.wantName {
+					assert.NotContains(t, text, `android:name="`+tc.activityName+`"`)
+				}
+				// android.intent.action.MAINのandroid:name属性まで誤って
+				// 書き換えられていないことを確認する
+				assert.Contains(t, text, `android:name="android.intent.action.MAIN"`)
+
+				// 書き換え後のandroid:nameが実際に生成されたクラスファイルを
+				// 指していることを確認する（ActivityNotFoundException回帰防止）。
+				packagePath := filepath.Join(strings.Split(tc.packageName, ".")...)
+				gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", packagePath, "KirikiriSDL2GameActivity.java")
+				assert.FileExists(t, gameActivityFile)
+			})
+		}
 	})
 
 	t.Run("正常系: android:exported=trueがactivityに追加される", func(t *testing.T) {

@@ -238,22 +238,29 @@ func TestTemplatePreparer_CopyPluginsToJNILibs(t *testing.T) {
 }
 
 // miniForkJavaFixture はfork版KirikiriSDL2Activity.javaの構造を模した最小限の
-// フィクスチャ。generateActivityJavaの変換ロジック（fork由来メソッドの保持、
-// パッケージ書き換え、独自メンバの注入）を単体で検証するために使う。
+// フィクスチャ。onCreateオーバーライドを含み、生成一式が独自にonCreateを
+// 追加してもjavac的に衝突しないこと（サブクラス分離）を検証するために使う。
 const miniForkJavaFixture = `package pw.uyjulian.krkrsdl2;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.os.Bundle;
 import org.libsdl.app.SDLActivity;
 
 public class KirikiriSDL2Activity extends SDLActivity {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+    }
+
     public static int showSelectList(final String title, final String[] items) {
         return -1;
     }
 }
 `
 
-// TestGenerateActivityJava はgenerateActivityJavaの変換ロジックを検証する。
+// TestGenerateActivityJava はgenerateActivityJava（fork版ソースの
+// パッケージ書き換えのみの素通し出力）を検証する。
 func TestGenerateActivityJava(t *testing.T) {
 	t.Parallel()
 
@@ -267,7 +274,7 @@ func TestGenerateActivityJava(t *testing.T) {
 		assert.NotContains(t, got, "package pw.uyjulian.krkrsdl2;")
 	})
 
-	t.Run("正常系: fork由来のメソッドが保持される", func(t *testing.T) {
+	t.Run("正常系: fork由来のメソッド・onCreateがそのまま保持される", func(t *testing.T) {
 		t.Parallel()
 
 		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
@@ -275,29 +282,18 @@ func TestGenerateActivityJava(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, got, "public static int showSelectList(final String title, final String[] items)")
 		assert.Contains(t, got, "import android.app.AlertDialog;")
+		assert.Equal(t, 1, strings.Count(got, "protected void onCreate(Bundle savedInstanceState)"), "fork版のonCreateが重複または欠落している")
 	})
 
-	t.Run("正常系: mnemonic独自メンバが注入される", func(t *testing.T) {
+	t.Run("正常系: mnemonic独自メンバは注入されない（サブクラスへ分離するため）", func(t *testing.T) {
 		t.Parallel()
 
 		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
 
 		require.NoError(t, err)
-		assert.Contains(t, got, "protected void onCreate(Bundle savedInstanceState)")
-		assert.Contains(t, got, "protected String[] getArguments()")
-		assert.Contains(t, got, "private void copyAssetsToInternal()")
-		assert.Contains(t, got, `"-holdalpha=yes"`)
-	})
-
-	t.Run("正常系: mnemonic独自importが重複なく追加される", func(t *testing.T) {
-		t.Parallel()
-
-		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
-
-		require.NoError(t, err)
-		for _, imp := range mnemonicJavaImports {
-			assert.Equal(t, 1, strings.Count(got, imp), "import %sが重複または欠落している", imp)
-		}
+		assert.NotContains(t, got, "getArguments")
+		assert.NotContains(t, got, "copyAssetsToInternal")
+		assert.NotContains(t, got, `"-holdalpha=yes"`)
 	})
 
 	t.Run("正常系: 括弧の対応が保たれ構文的に妥当", func(t *testing.T) {
@@ -309,20 +305,120 @@ func TestGenerateActivityJava(t *testing.T) {
 		assert.Equal(t, strings.Count(got, "{"), strings.Count(got, "}"), "括弧の数が一致しません")
 	})
 
-	t.Run("正常系: クラスレベルのdocコメントが注入される", func(t *testing.T) {
+	t.Run("異常系: package宣言が無いソースはエラーになる", func(t *testing.T) {
 		t.Parallel()
 
-		got, err := generateActivityJava(miniForkJavaFixture, "com.example.game")
+		_, err := generateActivityJava("public class Foo {}\n", "com.example.game")
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrTemplatePreparer)
+	})
+}
+
+// TestGenerateGameActivityJava はgenerateGameActivityJava
+// （KirikiriSDL2GameActivity.javaの生成）を検証する。
+func TestGenerateGameActivityJava(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: package宣言が対象パッケージになる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "package com.example.game;")
+	})
+
+	t.Run("正常系: forkActivityClassNameをextendsするクラス宣言になる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "public class KirikiriSDL2GameActivity extends KirikiriSDL2Activity {")
+	})
+
+	t.Run("正常系: mnemonic独自メンバが含まれる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "protected void onCreate(Bundle savedInstanceState)")
+		assert.Contains(t, got, "protected String[] getArguments()")
+		assert.Contains(t, got, "private void copyAssetsToInternal()")
+		assert.Contains(t, got, `"-holdalpha=yes"`)
+	})
+
+	t.Run("正常系: onCreateがsuper.onCreateを呼び出す（fork側のonCreateへ連鎖させるため）", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		assert.Contains(t, got, "super.onCreate(savedInstanceState);")
+	})
+
+	t.Run("正常系: onCreateの内部処理がsNativeLibDir設定→copyAssetsToInternal→super.onCreateの順序で実行される", func(t *testing.T) {
+		t.Parallel()
+
+		// SDLActivity.onCreate()はgetArguments()を呼び、getArgumentsは
+		// sNativeLibDir != nullでプラグイン検索パスの有無を分岐する。
+		// この順序が崩れる（例: super.onCreate()を先に呼ぶ）と、
+		// sNativeLibDirがまだ設定されていない状態でgetArgumentsが呼ばれ、
+		// プラグイン検索パスが無言で欠落する。assert.Containsの部分一致では
+		// この順序崩れを検知できないため、出現位置(strings.Index)で
+		// 順序そのものを検証する。
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+
+		idxSetNativeLibDir := strings.Index(got, "sNativeLibDir = getApplicationInfo()")
+		idxCopyAssets := strings.Index(got, "copyAssetsToInternal();")
+		idxSuperOnCreate := strings.Index(got, "super.onCreate(")
+
+		require.NotEqual(t, -1, idxSetNativeLibDir, "sNativeLibDirの設定処理が見つからない")
+		require.NotEqual(t, -1, idxCopyAssets, "copyAssetsToInternal()の呼び出しが見つからない")
+		require.NotEqual(t, -1, idxSuperOnCreate, "super.onCreate()の呼び出しが見つからない")
+
+		assert.Less(t, idxSetNativeLibDir, idxSuperOnCreate, "sNativeLibDirの設定はsuper.onCreate()より前である必要がある")
+		assert.Less(t, idxCopyAssets, idxSuperOnCreate, "copyAssetsToInternal()はsuper.onCreate()より前である必要がある")
+	})
+
+	t.Run("正常系: 必要なimportが重複なく含まれる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		for _, imp := range mnemonicJavaImports {
+			assert.Equal(t, 1, strings.Count(got, imp), "import %sが重複または欠落している", imp)
+		}
+	})
+
+	t.Run("正常系: 括弧の対応が保たれ構文的に妥当", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		assert.Equal(t, strings.Count(got, "{"), strings.Count(got, "}"), "括弧の数が一致しません")
+	})
+
+	t.Run("正常系: クラスレベルのdocコメントが含まれる", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
 
 		require.NoError(t, err)
 		assert.Contains(t, got, "KirikiriSDL2用のメインアクティビティ")
 		assert.Equal(t, 1, strings.Count(got, "KirikiriSDL2用のメインアクティビティ"), "docコメントが重複している")
 	})
 
-	t.Run("異常系: package宣言が無いソースはエラーになる", func(t *testing.T) {
+	t.Run("異常系: パッケージ名が不正な場合はエラーになる", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := generateActivityJava("public class Foo {}\n", "com.example.game")
+		_, err := generateGameActivityJava("")
 
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrTemplatePreparer)

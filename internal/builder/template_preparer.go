@@ -50,9 +50,12 @@ var supportedABIs = map[string]struct{}{
 //  1. krkrsdl2_universal.apkから.soファイルを抽出してjniLibsに配置
 //  2. SDL2 Javaソースをダウンロードして配置
 //  3. krkrsdl2プラグイン(.so)をjniLibsに配置
-//  4. KirikiriSDL2Activity.javaをassetsコピー機能付きに置き換え
+//  4. fork版KirikiriSDL2Activity.javaをパッケージ名書き換えのみで素通し配置し、
+//     mnemonic独自機能（assetsコピー等）を実装するKirikiriSDL2GameActivity
+//     サブクラスを新規生成
 //  5. app/build.gradleを更新（targetSdkVersion=34、namespace追加）
-//  6. AndroidManifest.xmlを更新（android:exported="true"追加）
+//  6. AndroidManifest.xmlを更新（android:exported="true"追加、起動activityの
+//     android:nameをKirikiriSDL2GameActivityへ書き換え）
 //  7. res/values/strings.xmlを作成（app_name設定）
 type TemplatePreparer struct {
 	projectDir string
@@ -96,7 +99,7 @@ func (p *TemplatePreparer) Prepare(packageName, appName, assetsDir, iconPath str
 		return err
 	}
 
-	if err := p.updateManifest(); err != nil {
+	if err := p.updateManifest(packageName); err != nil {
 		return err
 	}
 
@@ -253,14 +256,23 @@ func extractZipFileEntry(f *zip.File, destPath string) error {
 // テンプレート展開後・updateJavaSource呼び出し前の時点で存在している前提。
 var forkJavaSourceRelPath = filepath.Join("app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2", "KirikiriSDL2Activity.java")
 
-// updateJavaSource はfork版KirikiriSDL2Activity.javaを起点に、パッケージ名の
-// 書き換えとmnemonic独自メンバの注入を行い、対象パッケージのディレクトリへ
-// 出力する。
+// updateJavaSource はfork版KirikiriSDL2Activity.javaを起点にパッケージ名の
+// 書き換えのみを行った素通しファイルと、mnemonic独自機能
+// （アセットコピー等）を実装するKirikiriSDL2GameActivityサブクラスの
+// 2ファイルを、対象パッケージのディレクトリへ出力する。
 //
-// why not: Go定数への全文手動移植は、fork側でメソッドが追加/変更されても
-// 追従できず、JNI経由で呼ばれるメソッド（showSelectList等）がsilentに
-// 欠落する構造的リスクを常に抱える。fork版ファイルそのものを読み込んで
-// 変換する方式にすることで、fork側の変更が自動的に反映されるようにする。
+// why not（fork版ファイルへの独自メンバ直接注入をやめた理由）: fork側が
+// 独自にonCreateをオーバーライドするようになった場合（krkrsdl2 fork側で
+// WindowInsetsリスナー登録のため実際に追加された）、生成後のクラスに
+// onCreateが2つ定義されjavacのメソッド二重定義エラーになる。
+// KirikiriSDL2Activityをextendsする別クラスへmnemonic独自メンバを分離する
+// ことで、両ファイルのメソッド一覧が重複しない構造にする。
+//
+// why not（fork版ファイルそのものを読み込んで変換する理由）: Go定数への
+// 全文手動移植は、fork側でメソッドが追加/変更されても追従できず、JNI経由で
+// 呼ばれるメソッド（showSelectList等）がsilentに欠落する構造的リスクを
+// 常に抱える。fork版ファイルそのものを読み込んで変換する方式にすることで、
+// fork側の変更が自動的に反映されるようにする。
 //
 // why not（削除と書き込みの順序）: 生成物の書き込みを終えてから
 // oldJavaDir（fork版ファイルの元ディレクトリ）を削除すると、packageNameが
@@ -281,7 +293,12 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 		return fmt.Errorf("%w: fork版KirikiriSDL2Activity.javaが見つかりません: %s: %w", ErrTemplatePreparer, forkJavaFile, err)
 	}
 
-	javaContent, err := generateActivityJava(string(forkSource), packageName)
+	forkContent, err := generateActivityJava(string(forkSource), packageName)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	gameActivityContent, err := generateGameActivityJava(packageName)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
@@ -298,16 +315,32 @@ func (p *TemplatePreparer) updateJavaSource(packageName string) error {
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
-	javaFile := filepath.Join(javaDir, "KirikiriSDL2Activity.java")
-	if err := os.WriteFile(javaFile, []byte(javaContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+	javaFile := filepath.Join(javaDir, forkActivityClassName+".java")
+	if err := os.WriteFile(javaFile, []byte(forkContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
+		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
+	}
+
+	gameActivityFile := filepath.Join(javaDir, gameActivityClassName+".java")
+	if err := os.WriteFile(gameActivityFile, []byte(gameActivityContent), 0o600); err != nil { //nolint:gosec // projectDir配下の固定相対パスへ書き込む用途のため妥当
 		return fmt.Errorf("%w: %w", ErrTemplatePreparer, err)
 	}
 
 	return nil
 }
 
-// mnemonicJavaImports はfork版ソースには存在しない、mnemonic独自機能
-// （アセットコピー等）が要求するimport群。
+// forkActivityClassName はfork版KirikiriSDL2Activity.javaのクラス名
+// （出力ファイル名にも使う）。fork krkrsdl2リポジトリ側のファイル名と
+// 結びついているため、fork側で変わらない前提を他の箇所（ファイル名決め打ち等）
+// でも既に置いている。
+const forkActivityClassName = "KirikiriSDL2Activity"
+
+// gameActivityClassName はforkActivityClassNameをextendsする、mnemonic独自の
+// アセットコピー・起動引数設定を実装するサブクラスのクラス名
+// （出力ファイル名にも使う）。ゲーム固有の名前やmnemonic固有の名前を含めない
+// 汎用名にすることで、生成元プロジェクトに依存しない安定した命名にする。
+const gameActivityClassName = "KirikiriSDL2GameActivity"
+
+// mnemonicJavaImports はKirikiriSDL2GameActivity.javaが要求するimport群。
 var mnemonicJavaImports = []string{
 	"import android.os.Bundle;",
 	"import android.content.pm.ApplicationInfo;",
@@ -320,9 +353,10 @@ var mnemonicJavaImports = []string{
 	"import java.io.OutputStream;",
 }
 
-// mnemonicActivityMembers はmnemonic独自のクラスメンバ（フィールド/メソッド）。
-// fork版KirikiriSDL2Activity.javaのクラス閉じ括弧の直前に注入される。
-const mnemonicActivityMembers = `
+// gameActivityMembers はKirikiriSDL2GameActivityのクラス本体
+// （フィールド/メソッド）。gameActivityClassJavadoc直後のクラス宣言に続けて
+// そのまま出力される。
+const gameActivityMembers = `
     private static final String TAG = "KirikiriSDL2";
     private static final String ASSETS_DATA_DIR = "data";
     private static String sNativeLibDir = null;
@@ -453,20 +487,45 @@ const mnemonicActivityMembers = `
 // javaPackageDeclPattern はJavaソース先頭のpackage宣言にマッチする。
 var javaPackageDeclPattern = regexp.MustCompile(`^package\s+[A-Za-z_][\w.]*;`)
 
-// javaImportLinePattern はJavaのimport文1行にマッチする。
-var javaImportLinePattern = regexp.MustCompile(`(?m)^import\s+[\w.]+;\s*$`)
+// javaPackageNamePattern はJavaパッケージ名として妥当な文字列にマッチする。
+var javaPackageNamePattern = regexp.MustCompile(`^[A-Za-z_][\w.]*$`)
 
-// activityClassDeclPattern はKirikiriSDL2Activityのクラス宣言行にマッチする。
-// クラス名はファイル名（KirikiriSDL2Activity.java）およびmnemonicActivityMembers
-// が注入する独自メンバのシグネチャと結びついているため、このクラス名自体は
-// fork側で変わらない前提を既に他の箇所（ファイル名決め打ち等）でも置いている。
-// そのため、この文字列をJavadoc挿入位置のアンカーに使うことは既存の前提の
-// 範囲内であり、追加のリスクにはならない。
-var activityClassDeclPattern = regexp.MustCompile(`(?m)^public class KirikiriSDL2Activity extends SDLActivity \{`)
+// generateActivityJava はfork版KirikiriSDL2Activity.javaのソース(forkSource)を
+// パッケージ名の書き換えのみで素通しする。
+//
+// why not: mnemonic独自メンバ（アセットコピー等）をここに注入する方式は、
+// fork側が独自にonCreateをオーバーライドした場合（krkrsdl2 fork側で
+// WindowInsetsリスナー登録のため実際に追加された）にjavacのメソッド
+// 二重定義エラーを起こす。mnemonic独自機能はgenerateGameActivityJavaが
+// 生成する別クラス（forkActivityClassNameをextendsするサブクラス）へ分離し、
+// このファイルはfork側の変更をそのまま反映する素通し出力に徹する。
+func generateActivityJava(forkSource, packageName string) (string, error) {
+	if !javaPackageDeclPattern.MatchString(forkSource) {
+		return "", fmt.Errorf("%w: fork版Javaソースにpackage宣言が見つかりません", ErrTemplatePreparer)
+	}
 
-// activityClassJavadoc はKirikiriSDL2Activityクラスのクラスレベルdocコメント。
-// mnemonic独自機能（起動時のアセットコピー）を説明する、mnemonic独自の記述。
-const activityClassJavadoc = `/**
+	return javaPackageDeclPattern.ReplaceAllString(forkSource, fmt.Sprintf("package %s;", packageName)), nil
+}
+
+// gameActivityClassJavadoc はKirikiriSDL2GameActivityクラスのクラスレベル
+// docコメント。
+//
+// why not（サブクラス化）: mnemonic独自のonCreate等をfork版
+// KirikiriSDL2Activity.java（パッケージ名書き換えのみで素通し出力される。
+// generateActivityJava参照）へ直接注入すると、fork側が独自にonCreateを
+// オーバーライドした場合にjavacのメソッド二重定義エラーになる。onCreateは
+// アセットコピー後にsuper.onCreate()を呼ぶ構成にすることで、fork側の
+// onCreate（存在する場合）へ連鎖させる。
+//
+// why not（JNI互換性）: krkrsdl2ネイティブはSDL_AndroidGetActivity()で
+// 得たjobjectをGetObjectClassに渡して実行時クラス（このサブクラス）を
+// 解決し、そのクラスに対しGetStaticMethodID("showSelectList", ...)等を
+// 呼ぶ。showSelectList/setOrientationBis等はスーパークラスである
+// KirikiriSDL2Activity（fork版）にのみ定義されているが、JNI仕様上
+// GetMethodID/GetStaticMethodIDは指定したクラスだけでなくスーパークラスの
+// 継承済みメンバも解決対象に含むため、サブクラス化してもJNI経由の呼び出しは
+// 壊れない。
+const gameActivityClassJavadoc = `/**
  * KirikiriSDL2用のメインアクティビティ
  *
  * アプリ起動時にassets/data/配下のゲームファイルを
@@ -474,72 +533,24 @@ const activityClassJavadoc = `/**
  */
 `
 
-// generateActivityJava はfork版KirikiriSDL2Activity.javaのソース(forkSource)を
-// 起点に、パッケージ名の書き換えとmnemonic独自メンバの注入を行う。
-//
-// why not: 注入アンカーとして「クラス宣言の直後」や「特定メソッドの直前」の
-// ような相対位置を使うと、fork側のフィールド追加やコメント整形の変化で
-// 注入位置がずれる恐れがある。本ファイルは単一のトップレベルpublicクラスの
-// みを含むJavaファイルであるため、ファイル内で最後に現れる閉じ括弧は
-// 必ずそのクラス自身の閉じ括弧になる。この位置をアンカーにすることで、
-// fork側の内部的な変更（フィールド追加、コメント変更等）に対して頑健になる。
-func generateActivityJava(forkSource, packageName string) (string, error) {
-	if !javaPackageDeclPattern.MatchString(forkSource) {
-		return "", fmt.Errorf("%w: fork版Javaソースにpackage宣言が見つかりません", ErrTemplatePreparer)
+// generateGameActivityJava はKirikiriSDL2GameActivity.javaの完全なソースを
+// 生成する。フィールド/メソッドはmnemonic独自の固定内容であるため、
+// fork版ソースを読み込む必要はない。
+func generateGameActivityJava(packageName string) (string, error) {
+	if !javaPackageNamePattern.MatchString(packageName) {
+		return "", fmt.Errorf("%w: パッケージ名が不正です: %s", ErrTemplatePreparer, packageName)
 	}
 
-	content := javaPackageDeclPattern.ReplaceAllString(forkSource, fmt.Sprintf("package %s;", packageName))
-	content = injectMissingJavaImports(content, mnemonicJavaImports)
-	content = injectActivityClassJavadoc(content)
+	var b strings.Builder
+	fmt.Fprintf(&b, "package %s;\n\n", packageName)
+	b.WriteString(strings.Join(mnemonicJavaImports, "\n"))
+	b.WriteString("\n\n")
+	b.WriteString(gameActivityClassJavadoc)
+	fmt.Fprintf(&b, "public class %s extends %s {\n", gameActivityClassName, forkActivityClassName)
+	b.WriteString(gameActivityMembers)
+	b.WriteString("}\n")
 
-	lastBrace := strings.LastIndex(content, "}")
-	if lastBrace < 0 {
-		return "", fmt.Errorf("%w: fork版Javaソースにクラスの閉じ括弧が見つかりません", ErrTemplatePreparer)
-	}
-
-	return content[:lastBrace] + mnemonicActivityMembers + content[lastBrace:], nil
-}
-
-// injectActivityClassJavadoc はKirikiriSDL2Activityのクラス宣言直前へ
-// activityClassJavadocを挿入する（冪等: 既に挿入済み、またはアンカーとなる
-// クラス宣言が見つからない場合は何もしない）。
-func injectActivityClassJavadoc(content string) string {
-	if strings.Contains(content, activityClassJavadoc) {
-		return content
-	}
-
-	idx := activityClassDeclPattern.FindStringIndex(content)
-	if idx == nil {
-		return content
-	}
-
-	return content[:idx[0]] + activityClassJavadoc + content[idx[0]:]
-}
-
-// injectMissingJavaImports はcontent内にまだ存在しないimport文を、最後の
-// import文の直後（import文が無い場合はpackage宣言の直後）へ追加する。
-// 既に存在するimportは追加しない（冪等）。
-func injectMissingJavaImports(content string, imports []string) string {
-	var missing []string
-	for _, imp := range imports {
-		if !strings.Contains(content, imp) {
-			missing = append(missing, imp)
-		}
-	}
-	if len(missing) == 0 {
-		return content
-	}
-
-	insertAt := len(content)
-	if matches := javaImportLinePattern.FindAllStringIndex(content, -1); len(matches) > 0 {
-		insertAt = matches[len(matches)-1][1]
-	} else if idx := javaPackageDeclPattern.FindStringIndex(content); idx != nil {
-		insertAt = idx[1]
-	}
-
-	insertion := "\n" + strings.Join(missing, "\n")
-
-	return content[:insertAt] + insertion + content[insertAt:]
+	return b.String(), nil
 }
 
 var (
@@ -602,6 +613,50 @@ var (
 	screenOrientationPattern   = regexp.MustCompile(`android:screenOrientation="[^"]*"`)
 )
 
+// activityNameForkClassPattern はAndroidManifest.xmlのandroid:name属性値が
+// forkActivityClassName（fork版クラス、パッケージ名書き換えのみで素通し
+// 出力される）を指す箇所にマッチする。実テンプレートで確認されているのは
+// パッケージ省略形のみだが、以下の3形態すべてを許容する。
+//   - パッケージ省略形: android:name="KirikiriSDL2Activity"（実テンプレートの表記）
+//   - 先頭ドット省略形: android:name=".KirikiriSDL2Activity"（本パッケージの
+//     テストで使っている表記。実テンプレートでは未確認）
+//   - 完全修飾: android:name="pw.uyjulian.krkrsdl2.KirikiriSDL2Activity"
+//     （実テンプレートでは未確認。書き換え方針はrewriteActivityName参照）
+//
+// キャプチャグループ:
+//  1. 先頭ドット（相対解決の省略形。無ければ空文字列）
+//  2. fork版パッケージの完全修飾プレフィックス（無ければ空文字列）
+var activityNameForkClassPattern = regexp.MustCompile(
+	`android:name="(\.?)((?:pw\.uyjulian\.krkrsdl2\.)?)` + forkActivityClassName + `"`,
+)
+
+// rewriteActivityName はactivityNameForkClassPatternのマッチ全体(match)を、
+// gameActivityClassNameを指すandroid:name属性へ書き換える。
+//
+// why not（完全修飾形でプレフィックスを保持しない理由）: updateJavaSourceは
+// 生成する2クラス（forkActivityClassName・gameActivityClassName）を常に
+// packageName配下へ配置する。完全修飾形で元のfork版パッケージ接頭辞
+// （pw.uyjulian.krkrsdl2.）をそのまま保持すると、packageNameが
+// "pw.uyjulian.krkrsdl2"以外の場合に実在しないクラス
+// （pw.uyjulian.krkrsdl2.KirikiriSDL2GameActivity）を指すことになり
+// ActivityNotFoundExceptionになる。updateJavaSourceの実際の配置先
+// （packageName）とManifestの参照先を一致させるため、完全修飾形の
+// プレフィックスは保持せずpackageNameへ置き換える。相対解決形
+// （先頭ドット省略形・パッケージ省略形）はAndroidのコンポーネント名解決
+// 規則上すでにnamespace（build.gradleのnamespace = packageName。
+// updateBuildGradle参照）を通じてpackageNameに解決されるため、
+// プレフィックスをそのまま保持してよい。
+func rewriteActivityName(match string, packageName string) string {
+	sub := activityNameForkClassPattern.FindStringSubmatch(match)
+	dotPrefix, fqcnPrefix := sub[1], sub[2]
+
+	if fqcnPrefix != "" {
+		return fmt.Sprintf(`android:name="%s.%s"`, packageName, gameActivityClassName)
+	}
+
+	return `android:name="` + dotPrefix + gameActivityClassName + `"`
+}
+
 var applicationTagPattern = regexp.MustCompile(`<application[^>]*>`)
 
 // ScreenOrientationSensorLandscape は起動activityに固定する画面向きの値。
@@ -615,8 +670,9 @@ const ScreenOrientationSensorLandscape = "sensorLandscape"
 // updateManifest はAndroidManifest.xmlを更新する
 // （package属性の削除、android:exported="true"の付与、
 // android:extractNativeLibs="true"の付与、activityへの
-// android:screenOrientation="sensorLandscape"の付与）。
-func (p *TemplatePreparer) updateManifest() error {
+// android:screenOrientation="sensorLandscape"の付与、起動activityの
+// android:nameのgameActivityClassNameへの書き換え）。
+func (p *TemplatePreparer) updateManifest(packageName string) error {
 	manifestPath := filepath.Join(p.projectDir, "app", "src", "main", "AndroidManifest.xml")
 
 	content, err := os.ReadFile(manifestPath) //nolint:gosec // projectDir配下の固定相対パスを読む用途のため妥当
@@ -626,6 +682,14 @@ func (p *TemplatePreparer) updateManifest() error {
 
 	text := string(content)
 	text = manifestPackageAttrPattern.ReplaceAllString(text, "")
+
+	// 起動activityはforkActivityClassName（パッケージ名書き換えのみで
+	// 素通し出力されるfork版クラス）ではなく、mnemonic独自機能
+	// （アセットコピー等）を実装するgameActivityClassNameを起動させる
+	// 必要がある。activityNameForkClassPattern・rewriteActivityName参照。
+	text = activityNameForkClassPattern.ReplaceAllStringFunc(text, func(match string) string {
+		return rewriteActivityName(match, packageName)
+	})
 
 	// applicationタグにextractNativeLibs="true"を追加する。これにより
 	// ネイティブライブラリがAPKから展開され、dlopen（krkrsdl2プラグインの
