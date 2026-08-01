@@ -1305,3 +1305,103 @@ func TestScriptAdjuster_Convert_YesNoDialogReplacement(t *testing.T) {
 		assert.Equal(t, converter.StatusSkipped, result.Status)
 	})
 }
+
+// mainWindowFinalizeFixture はKAG3標準のMainWindow.tjs finalize()の実際の
+// テキストをそのまま抜き出したもの（インデント・スペーシングを含め一致させる。
+// 特に"i< fore"のように<の直後にスペースが無い点は正規表現パターンの
+// マッチ条件そのものであるため、崩さず維持すること）。
+const mainWindowFinalizeFixture = "\tfunction finalize()\n" +
+	"\t{\n" +
+	"\t\t// finalize メソッド\n" +
+	"\n" +
+	"\t\t// プラグインの無効化\n" +
+	"\t\tfor(var i = 0; i < kagPlugins.count; i++) invalidate kagPlugins[i];\n" +
+	"\n" +
+	"\t\t// 前景、メッセージレイヤを無効化\n" +
+	"\t\tfor(var i = 0; i< fore.layers.count; i++) invalidate fore.layers[i];\n" +
+	"\t\tfor(var i = 0; i< back.layers.count; i++) invalidate back.layers[i];\n" +
+	"\t\tfor(var i = 0; i< fore.messages.count; i++) invalidate fore.messages[i];\n" +
+	"\t\tfor(var i = 0; i< back.messages.count; i++) invalidate back.messages[i];\n" +
+	"\n" +
+	"\t\t// snapshotLayer を無効化\n" +
+	"\t\tinvalidate snapshotLayer if snapshotLayer !== void;\n" +
+	"\n" +
+	"\t\t// tempLayer を無効化\n" +
+	"\t\tinvalidate tempLayer if tempLayer !== void;\n" +
+	"\n" +
+	"\t\t// スーパークラスの finalize を呼ぶ\n" +
+	"\t\tsuper.finalize(...);\n" +
+	"\t}\n"
+
+func TestScriptAdjuster_ApplyMainWindowCompat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("finalize内の4つの走査全てにtypeofガードが追加される", func(t *testing.T) {
+		t.Parallel()
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		got, count := adjuster.ApplyMainWindowCompat(mainWindowFinalizeFixture)
+
+		assert.Equal(t, 4, count)
+		assert.Contains(t, got, `if(typeof fore.layers != "undefined") for(var i = 0; i< fore.layers.count; i++) invalidate fore.layers[i];`)
+		assert.Contains(t, got, `if(typeof back.layers != "undefined") for(var i = 0; i< back.layers.count; i++) invalidate back.layers[i];`)
+		assert.Contains(t, got, `if(typeof fore.messages != "undefined") for(var i = 0; i< fore.messages.count; i++) invalidate fore.messages[i];`)
+		assert.Contains(t, got, `if(typeof back.messages != "undefined") for(var i = 0; i< back.messages.count; i++) invalidate back.messages[i];`)
+		// kagPlugins走査はコンストラクタのクラスフィールド初期化で
+		// 常に安全（[]で初期化済み）なため対象外のまま変更しない。
+		assert.Contains(t, got, "for(var i = 0; i < kagPlugins.count; i++) invalidate kagPlugins[i];")
+	})
+
+	t.Run("reorderLayers等finalize以外のfore.layers走査は変更しない", func(t *testing.T) {
+		t.Parallel()
+
+		content := "\t\tfor(var i = 0; i<fore.layers.count; i++)\n\t\t{\n\t\t\tfore.layers[i].absolute = index;\n\t\t}\n"
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		got, count := adjuster.ApplyMainWindowCompat(content)
+
+		assert.Equal(t, 0, count)
+		assert.Equal(t, content, got)
+	})
+}
+
+func TestScriptAdjuster_Convert_MainWindowCompat(t *testing.T) {
+	t.Parallel()
+
+	t.Run("mainwindow.tjsにはfinalizeガードが適用される", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "MainWindow.tjs")
+		content := "\uFEFF" + mainWindowFinalizeFixture
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+
+		got := string(readFile(t, source))
+		assert.Contains(t, got, `if(typeof fore.layers != "undefined")`)
+		assert.Contains(t, got, `if(typeof back.layers != "undefined")`)
+		assert.Contains(t, got, `if(typeof fore.messages != "undefined")`)
+		assert.Contains(t, got, `if(typeof back.messages != "undefined")`)
+	})
+
+	t.Run("mainwindow.tjs以外にはfinalizeガードを適用しない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "other.tjs")
+		content := "\uFEFF" + mainWindowFinalizeFixture
+		writeFile(t, source, []byte(content))
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, source)
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+
+		got := string(readFile(t, source))
+		assert.Contains(t, got, "for(var i = 0; i< fore.layers.count; i++) invalidate fore.layers[i];")
+	})
+}

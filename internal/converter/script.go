@@ -306,6 +306,12 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		count++
 	}
 
+	if strings.EqualFold(filepath.Base(source), "mainwindow.tjs") {
+		compatAdjusted, compatCount := a.ApplyMainWindowCompat(adjusted)
+		adjusted = compatAdjusted
+		count += compatCount
+	}
+
 	if count == 0 {
 		return ConversionResult{
 			SourcePath:  source,
@@ -408,6 +414,46 @@ var messageLayerCompatRules = []AdjustmentRule{
 	},
 }
 
+// mainWindowCompatRules はKAG3標準のMainWindow.tjsに適用するkrkrsdl2互換
+// ルール。finalize()内でfore/backのlayers・messagesを走査する4箇所に、
+// フィールドが未初期化のまま走査されないようtypeofガードを追加する。
+//
+// why not(KAGWindowコンストラクタやfinalize自体を書き換えない理由):
+// Androidのkrkrsdl2は同時に1つのネイティブウィンドウしか作れないため、
+// KAGWindowコンストラクタがsuper.Window()でサブウィンドウ生成を試みると
+// （例: 「このソフトについて」）例外を投げる。この時点でfore/backは
+// クラスフィールド初期化により空の辞書配列(%[])になっているが、
+// fore.layers・fore.messages等はsuper.Window()より後のコンストラクタ
+// 本体で代入されるため未設定のままで残る。呼び出し元のfireClick()は
+// try/catchで保護されていても、後にGCがこの中途半端なオブジェクトの
+// finalize()を呼ぶ経路はtry/catchの外側でありポリフィルでは捕捉できず、
+// 未初期化フィールドへの.countアクセスが二次例外を送出してネイティブ
+// クラッシュ(SIGABRT)に至る。KAGWindow自体はKAG3標準クラスであり
+// ゲーム固有の内容を含まないため、MessageLayer.tjs/YesNoDialog.tjsと
+// 同様にファイル名で特定して直接調整する。
+var mainWindowCompatRules = []AdjustmentRule{
+	{
+		Pattern:     `for\(var i = 0; i< fore\.layers\.count; i\+\+\) invalidate fore\.layers\[i\];`,
+		Replacement: `if(typeof fore.layers != "undefined") for(var i = 0; i< fore.layers.count; i++) invalidate fore.layers[i];`,
+		Description: "finalizeでのfore.layers未初期化アクセスをガード（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `for\(var i = 0; i< back\.layers\.count; i\+\+\) invalidate back\.layers\[i\];`,
+		Replacement: `if(typeof back.layers != "undefined") for(var i = 0; i< back.layers.count; i++) invalidate back.layers[i];`,
+		Description: "finalizeでのback.layers未初期化アクセスをガード（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `for\(var i = 0; i< fore\.messages\.count; i\+\+\) invalidate fore\.messages\[i\];`,
+		Replacement: `if(typeof fore.messages != "undefined") for(var i = 0; i< fore.messages.count; i++) invalidate fore.messages[i];`,
+		Description: "finalizeでのfore.messages未初期化アクセスをガード（krkrsdl2対応）",
+	},
+	{
+		Pattern:     `for\(var i = 0; i< back\.messages\.count; i\+\+\) invalidate back\.messages\[i\];`,
+		Replacement: `if(typeof back.messages != "undefined") for(var i = 0; i< back.messages.count; i++) invalidate back.messages[i];`,
+		Description: "finalizeでのback.messages未初期化アクセスをガード（krkrsdl2対応）",
+	},
+}
+
 // yesNoDialogReplacement はKAG3標準のYesNoDialog.tjsを置き換える
 // 単一ウィンドウ実装。
 //
@@ -434,6 +480,12 @@ function askYesNo(message, caption = "確認")
 // contentへ適用し、(調整後の内容, 調整回数)を返す。
 func (a *ScriptAdjuster) ApplyMessageLayerCompat(content string) (string, int) {
 	return applyRules(content, messageLayerCompatRules)
+}
+
+// ApplyMainWindowCompat はMainWindow.tjs向けのkrkrsdl2互換調整を
+// contentへ適用し、(調整後の内容, 調整回数)を返す。
+func (a *ScriptAdjuster) ApplyMainWindowCompat(content string) (string, int) {
+	return applyRules(content, mainWindowCompatRules)
 }
 
 // AddStartupDirective はstartup.tjs向けのポリフィル初期化ディレクティブを
