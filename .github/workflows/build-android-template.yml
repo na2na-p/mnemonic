@@ -192,7 +192,7 @@ jobs:
         with:
           name: android-template
           path: android-template.zip
-          retention-days: 30
+          retention-days: 3
 
       - name: Determine release version (CalVer)
         id: version
