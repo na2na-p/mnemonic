@@ -56,7 +56,7 @@ jobs:
         with:
           name: mnemonic-${{ steps.version.outputs.value }}
           path: dist/mnemonic
-          retention-days: 30
+          retention-days: 3
 
   summary:
     name: Summary

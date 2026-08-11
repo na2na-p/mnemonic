@@ -84,7 +84,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.zip
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: error
 
   release:
