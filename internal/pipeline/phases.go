@@ -124,7 +124,7 @@ func (b *BuildPipeline) executeConvert() error {
 
 	converters := []converter.Converter{
 		converter.NewEncodingConverter("", ""),
-		converter.NewImageConverter(0, true),
+		converter.NewImageConverter(),
 	}
 	if !b.config.SkipVideo {
 		timeout := time.Duration(b.config.FFmpegTimeoutSeconds) * time.Second

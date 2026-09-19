@@ -1,7 +1,6 @@
 package converter_test
 
 import (
-	"bytes"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -18,9 +17,7 @@ import (
 	"github.com/na2na-p/mnemonic/internal/converter"
 )
 
-// テストで用いる画像サイズ。wazeroベースのWebPエンコーダの初回呼び出しコストは
-// 主にWASMモジュールのインスタンス化に起因し画素数への依存は小さいが、
-// CI時間短縮のため小さいサイズに揃える。
+// テストで用いる画像サイズ。CI時間短縮のため小さいサイズに揃える。
 const testImageSize = 8
 
 var (
@@ -68,53 +65,6 @@ func writePNGFixture(t *testing.T, path string, c color.RGBA) {
 	defer func() { _ = f.Close() }()
 
 	require.NoError(t, png.Encode(f, newSolidRGBA(c)))
-}
-
-// forceAlphaImage はOpaque()を常にfalseとして偽装するimage.Imageラッパー。
-//
-// why: stdlib image/pngのエンコーダは実際に全ピクセルが不透明な画像を
-// 渡すとOpaque()==trueを検出しアルファチャンネル無しのカラータイプで
-// 書き出してしまう（image/png/writer.goのopaque(m)判定）。そのため
-// 「フォーマット上アルファチャンネルを持つが全ピクセルは不透明なPNG」
-// （何らかの画像処理ツールがRGBAモードで保存した場合に生じうる状態）を
-// stdlibのpng.Encodeだけで再現できない。Opaque()を偽装してこの
-// 最適化を回避し、テスト用フィクスチャとして意図的な状態を作る。
-type forceAlphaImage struct {
-	image.Image
-}
-
-func (forceAlphaImage) Opaque() bool { return false }
-
-// writeOpaqueAlphaPNGFixture はフォーマット上アルファチャンネルを持つが
-// 全ピクセルが不透明なPNGファイルを書き出す
-// （image/png.Decode時に*image.NRGBAとしてデコードされ、hasAlpha判定の
-// テスト対象になる）。
-func writeOpaqueAlphaPNGFixture(t *testing.T, path string, c color.RGBA) {
-	t.Helper()
-
-	c.A = 255
-	nc := color.NRGBAModel.Convert(c).(color.NRGBA) //nolint:forcetypeassert // color.NRGBAModel.Convertは常にcolor.NRGBAを返す
-	img := image.NewNRGBA(image.Rect(0, 0, testImageSize, testImageSize))
-	for y := range testImageSize {
-		for x := range testImageSize {
-			img.SetNRGBA(x, y, nc)
-		}
-	}
-
-	f, err := os.Create(path) //nolint:gosec // テスト用の一時ファイル
-	require.NoError(t, err)
-	defer func() { _ = f.Close() }()
-
-	require.NoError(t, png.Encode(f, forceAlphaImage{img}))
-}
-
-// isLosslessWebP はWebPファイルがロスレス(VP8Lチャンク)でエンコードされて
-// いるかを判定するテストヘルパー。WebPのRIFFコンテナはロスレスなら"VP8L"、
-// ロッシーなら"VP8 "のFourCCチャンクを含む。
-func isLosslessWebP(t *testing.T, path string) bool {
-	t.Helper()
-
-	return bytes.Contains(readFile(t, path), []byte("VP8L"))
 }
 
 // tlg5FixtureHeight / tlg5FixtureBlockHeight / tlg5FixtureR / tlg5FixtureG /
@@ -496,20 +446,6 @@ func TestTLGImageDecoder_DecodeToFile(t *testing.T) {
 		assert.FileExists(t, dest)
 	})
 
-	t.Run("正常系: WebPファイルに保存できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.tlg")
-		writeFile(t, source, buildTLG5Fixture(2, 32))
-		dest := filepath.Join(dir, "output.webp")
-
-		decoder := converter.NewTLGImageDecoder()
-		require.NoError(t, decoder.DecodeToFile(source, dest))
-
-		assert.FileExists(t, dest)
-	})
-
 	t.Run("異常系: 存在しないソースファイルはErrSourceNotFoundを返す", func(t *testing.T) {
 		t.Parallel()
 
@@ -544,69 +480,22 @@ func TestTLGVersion_Values(t *testing.T) {
 	assert.Equal(t, converter.TLGVersionUnknown, converter.TLGVersion("UNKNOWN"))
 }
 
-func TestQualityPreset_Values(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]struct {
-		preset   converter.QualityPreset
-		expected int
-	}{
-		"正常系: HIGHプリセットは95":   {converter.QualityHigh, 95},
-		"正常系: MEDIUMプリセットは85": {converter.QualityMedium, 85},
-		"正常系: LOWプリセットは70":    {converter.QualityLow, 70},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.expected, int(tc.preset))
-		})
-	}
-}
-
-func TestOutputFormat_Values(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, converter.OutputFormatWebP, converter.OutputFormat("webp"))
-	assert.Equal(t, converter.OutputFormatPNG, converter.OutputFormat("png"))
-}
-
-func TestImageConverter_OutputFormat(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: デフォルトの出力形式はPNG", func(t *testing.T) {
-		t.Parallel()
-
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
-		assert.Equal(t, converter.OutputFormatPNG, c.OutputFormat())
-	})
-
-	t.Run("正常系: WebP出力形式を指定できる", func(t *testing.T) {
-		t.Parallel()
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		assert.Equal(t, converter.OutputFormatWebP, c.OutputFormat())
-	})
-}
-
 func TestImageConverter_GetOutputExtension(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
-		outputFormat converter.OutputFormat
-		expectedExt  string
+		filename    string
+		expectedExt string
 	}{
-		"正常系: PNG出力形式は.pngを返す":   {converter.OutputFormatPNG, ".png"},
-		"正常系: WebP出力形式は.webpを返す": {converter.OutputFormatWebP, ".webp"},
+		"正常系: 出力拡張子は.pngを返す": {"test.tlg", ".png"},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			c := converter.NewImageConverterWithFormat(tc.outputFormat, int(converter.QualityHigh), true)
-			assert.Equal(t, tc.expectedExt, c.GetOutputExtension("test.tlg"))
+			c := converter.NewImageConverter()
+			assert.Equal(t, tc.expectedExt, c.GetOutputExtension(tc.filename))
 		})
 	}
 }
@@ -622,7 +511,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 
 		require.NoError(t, err)
@@ -636,22 +525,6 @@ func TestImageConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("正常系: BMPファイルをWebPに変換できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.bmp")
-		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
 	t.Run("正常系: JPGファイルをPNGに変換できる", func(t *testing.T) {
 		t.Parallel()
 
@@ -660,39 +533,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeJPEGFixture(t, source, color.RGBA{G: 255, A: 255})
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
-	t.Run("正常系: JPGファイルをWebPに変換できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.jpg")
-		writeJPEGFixture(t, source, color.RGBA{G: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
-	t.Run("正常系: PNGファイルをWebPに変換できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.png")
-		writePNGFixture(t, source, color.RGBA{B: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 
 		require.NoError(t, err)
@@ -708,7 +549,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeFile(t, source, buildTLG5Fixture(2, 32))
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 
 		require.NoError(t, err)
@@ -724,78 +565,6 @@ func TestImageConverter_Convert(t *testing.T) {
 		assert.Equal(t, color.NRGBA{R: tlg5FixtureR, G: tlg5FixtureG, B: tlg5FixtureB, A: tlg5FixtureA}, c2)
 	})
 
-	t.Run("正常系: TLG(TLG5)ファイルをWebPに変換できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.tlg")
-		writeFile(t, source, buildTLG5Fixture(2, 32))
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
-	t.Run("正常系: 品質プリセットが適用される（WebP出力時）", func(t *testing.T) {
-		t.Parallel()
-
-		cases := map[string]struct {
-			preset  converter.QualityPreset
-			quality int
-		}{
-			"正常系: HIGHプリセットで品質95":   {converter.QualityHigh, 95},
-			"正常系: MEDIUMプリセットで品質85": {converter.QualityMedium, 85},
-			"正常系: LOWプリセットで品質70":    {converter.QualityLow, 70},
-		}
-
-		for name, tc := range cases {
-			t.Run(name, func(t *testing.T) {
-				t.Parallel()
-
-				dir := t.TempDir()
-				source := filepath.Join(dir, "test.bmp")
-				writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
-				dest := filepath.Join(dir, "output.webp")
-
-				c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(tc.preset), true)
-				assert.Equal(t, tc.quality, c.Quality())
-
-				result, err := c.Convert(source, dest)
-				require.NoError(t, err)
-				assert.Equal(t, converter.StatusSuccess, result.Status)
-			})
-		}
-	})
-
-	t.Run("正常系: カスタム品質値が適用される（WebP出力時）", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.bmp")
-		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, 50, true)
-		assert.Equal(t, 50, c.Quality())
-
-		result, err := c.Convert(source, dest)
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-	})
-
-	t.Run("正常系: quality=0はQualityHighにフォールバックする", func(t *testing.T) {
-		t.Parallel()
-
-		// why: NewImageConverterへゼロ値を渡した場合もHIGH(95)相当にフォールバック
-		// することをピン留めする。
-		c := converter.NewImageConverter(0, true)
-		assert.Equal(t, int(converter.QualityHigh), c.Quality())
-	})
-
 	t.Run("正常系: PNG出力でアルファチャンネルが保持される", func(t *testing.T) {
 		t.Parallel()
 
@@ -804,7 +573,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writePNGFixture(t, source, color.RGBA{R: 255, A: 128})
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
@@ -818,99 +587,6 @@ func TestImageConverter_Convert(t *testing.T) {
 		assert.True(t, ok, "アルファ付きPNG入力はimage.NRGBAとしてデコードされることを期待")
 	})
 
-	t.Run("正常系: アルファチャンネルが保持される(lossless_alpha=true, WebP出力時)", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test_alpha.png")
-		writePNGFixture(t, source, color.RGBA{R: 255, A: 128})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		assert.True(t, c.LosslessAlpha())
-
-		result, err := c.Convert(source, dest)
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
-	t.Run("正常系: lossless_alpha=falseで非ロスレスアルファが適用される(WebP出力時)", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test_alpha.png")
-		writePNGFixture(t, source, color.RGBA{R: 255, A: 128})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), false)
-		assert.False(t, c.LosslessAlpha())
-
-		result, err := c.Convert(source, dest)
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
-
-	t.Run("正常系: 全ピクセル不透明でもフォーマット上アルファを持つPNGはロスレスになる(WebP出力時)", func(t *testing.T) {
-		t.Parallel()
-
-		// why: フォーマット上アルファを持つPNG(*image.NRGBA)は、全ピクセルが
-		// 不透明であってもロスレスパスへ通すことをピン留めする
-		// （Opaque()のみで判定するとロッシーパスに落ちてしまう回帰を防ぐ）。
-		dir := t.TempDir()
-		source := filepath.Join(dir, "opaque_alpha.png")
-		writeOpaqueAlphaPNGFixture(t, source, color.RGBA{R: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.True(t, isLosslessWebP(t, dest))
-	})
-
-	t.Run("正常系: 24bppのBMPはロッシーパスになる(WebP出力時)", func(t *testing.T) {
-		t.Parallel()
-
-		// why: レビュー指摘の回帰防止。golang.org/x/image/bmpの24bpp BMPデコード
-		// 結果はalpha=0xff固定の*image.RGBAであり、アルファチャンネルを持たない
-		// フォーマットである。Opaque()フォールバックにより非ロスレスのRGB
-		// パスになることをピン留めする。
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.bmp")
-		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.False(t, isLosslessWebP(t, dest))
-	})
-
-	t.Run("正常系: RGB(3チャンネル)のTLG5画像はWebP出力時にロッシーパスになる", func(t *testing.T) {
-		t.Parallel()
-
-		// why: TLG5Decoder.Decodeはcolors==3(RGB)の場合image.RGBAを返しA=255
-		// 固定になる。imageHasAlphaがNRGBAModelのみをアルファ有り扱いする
-		// ため、RGB由来の画像はhasAlpha=falseとなりロッシーパスになることを
-		// ピン留めする。
-		dir := t.TempDir()
-		source := filepath.Join(dir, "test.tlg")
-		writeFile(t, source, buildTLG5Fixture(2, 24))
-		dest := filepath.Join(dir, "output.webp")
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.Convert(source, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.False(t, isLosslessWebP(t, dest))
-	})
-
 	t.Run("正常系: 変換結果に成功状態が正しく記録される", func(t *testing.T) {
 		t.Parallel()
 
@@ -919,7 +595,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 
 		require.NoError(t, err)
@@ -940,7 +616,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		sourceInfo, err := os.Stat(source)
 		require.NoError(t, err)
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, convErr := c.Convert(source, dest)
 
 		require.NoError(t, convErr)
@@ -960,7 +636,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
 		dest := filepath.Join(dir, "subdir", "nested", "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.Convert(source, dest)
 
 		require.NoError(t, err)
@@ -976,7 +652,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		writeFile(t, source, buildTLG6HeaderFixture(32, 0, 8, 4, 1, 1))
 		dest := filepath.Join(dir, "output.png")
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		_, err := c.Convert(source, dest)
 
 		require.Error(t, err)
@@ -987,7 +663,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		_, err := c.Convert(filepath.Join(dir, "nonexistent.bmp"), filepath.Join(dir, "output.png"))
 
 		require.Error(t, err)
@@ -998,7 +674,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		_, err := c.Convert(dir, filepath.Join(dir, "output.png"))
 
 		require.Error(t, err)
@@ -1009,7 +685,7 @@ func TestImageConverter_Convert(t *testing.T) {
 func TestImageConverter_ConvertFromImage(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: PNGとして保存できる（デフォルト）", func(t *testing.T) {
+	t.Run("正常系: PNGとして保存できる", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -1017,7 +693,7 @@ func TestImageConverter_ConvertFromImage(t *testing.T) {
 
 		img := newSolidRGBA(color.RGBA{R: 255, G: 128, A: 255})
 
-		c := converter.NewImageConverter(int(converter.QualityHigh), true)
+		c := converter.NewImageConverter()
 		result, err := c.ConvertFromImage(img, dest)
 
 		require.NoError(t, err)
@@ -1025,21 +701,6 @@ func TestImageConverter_ConvertFromImage(t *testing.T) {
 		assert.FileExists(t, dest)
 	})
 
-	t.Run("正常系: WebPとして保存できる", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		dest := filepath.Join(dir, "from_image.webp")
-
-		img := newSolidRGBA(color.RGBA{R: 255, G: 128, A: 255})
-
-		c := converter.NewImageConverterWithFormat(converter.OutputFormatWebP, int(converter.QualityHigh), true)
-		result, err := c.ConvertFromImage(img, dest)
-
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusSuccess, result.Status)
-		assert.FileExists(t, dest)
-	})
 }
 
 func TestImageConverter_SupportedExtensions(t *testing.T) {
@@ -1047,7 +708,7 @@ func TestImageConverter_SupportedExtensions(t *testing.T) {
 
 	// TLGのみ変換対象（JPEG/PNG/BMPはkrkrsdl2でネイティブサポートのため
 	// 変換不要。feat/exe-icon-extraction 680b27fより）。
-	c := converter.NewImageConverter(int(converter.QualityHigh), true)
+	c := converter.NewImageConverter()
 	assert.Equal(t, []string{".tlg"}, c.SupportedExtensions())
 }
 
@@ -1065,11 +726,10 @@ func TestImageConverter_CanConvert(t *testing.T) {
 		"正常系: JPEGファイルは変換不可":  {"test.jpeg", false},
 		"正常系: PNGファイルは変換不可":   {"test.png", false},
 		"異常系: GIFファイルは変換不可":   {"test.gif", false},
-		"異常系: WebPファイルは変換不可":  {"test.webp", false},
 		"異常系: TXTファイルは変換不可":   {"test.txt", false},
 	}
 
-	c := converter.NewImageConverter(int(converter.QualityHigh), true)
+	c := converter.NewImageConverter()
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

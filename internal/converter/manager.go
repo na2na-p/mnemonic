@@ -47,14 +47,6 @@ func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{MaxAttempts: 3, BackoffBase: 1.0, BackoffMultiplier: 2.0}
 }
 
-// ConversionTask は単一ファイルの変換タスクを表す。
-type ConversionTask struct {
-	Source     string
-	Dest       string
-	Converter  Converter
-	RetryCount int
-}
-
 // FileTask は変換元・変換先パスの組。ConvertFilesへの入力単位。
 type FileTask struct {
 	Source string

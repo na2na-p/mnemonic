@@ -86,22 +86,6 @@ func TestDefaultRetryConfig(t *testing.T) {
 	assert.InDelta(t, 2.0, rc.BackoffMultiplier, 1e-9)
 }
 
-func TestConversionTask_Fields(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source.txt")
-	dest := filepath.Join(dir, "dest.txt")
-	conv := newMockConverter(".txt")
-
-	task := converter.ConversionTask{Source: source, Dest: dest, Converter: conv, RetryCount: 2}
-
-	assert.Equal(t, source, task.Source)
-	assert.Equal(t, dest, task.Dest)
-	assert.Same(t, conv, task.Converter)
-	assert.Equal(t, 2, task.RetryCount)
-}
-
 func TestNewConversionManager(t *testing.T) {
 	t.Parallel()
 
