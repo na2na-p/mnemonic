@@ -9,8 +9,7 @@ import (
 // KeystoreConfig はAPK署名に必要なキーストアの設定情報を表す不変値。
 //
 // Goの構造体は値渡しされるため、フィールドを変更するメソッドを提供しない
-// ことで「フィールド代入禁止」という契約を保つ（internal/apperr.Resultと
-// 同じ設計方針）。
+// ことで生成後の値を変更しない契約を保つ。
 //
 // KeyPasswordがnilの場合、KeystorePasswordを使用する。空文字列と未指定(nil)
 // を区別するため*stringを使う。
@@ -40,30 +39,6 @@ func (c KeystoreConfig) String() string {
 	)
 }
 
-// ApkSignerRunner はapksignerコマンドを実行するためのインターフェース。
-//
-// APKファイルの署名と検証を行うapksignerコマンドの実行機能を抽象化する。
-type ApkSignerRunner interface {
-	// Sign はapkPathのAPKファイルにkeystoreConfigを使って署名を適用する。
-	// 成功時はapkPathを返す。
-	// APKファイルが存在しない場合はErrApkNotFound、
-	// キーストアファイルが存在しない場合はErrKeystoreNotFound、
-	// apksignerコマンドが見つからない場合はErrApkSignerNotFound、
-	// 署名処理に失敗した場合はErrApkSignFailedを返す。
-	Sign(apkPath string, keystoreConfig KeystoreConfig) (string, error)
-
-	// Verify はapkPathのAPKファイルの署名が有効かどうかを検証する。
-	// APKファイルが存在しない場合はErrApkNotFound、
-	// apksignerコマンドが見つからない場合はErrApkSignerNotFound、
-	// コマンドの実行自体に失敗した場合はErrApkVerifyFailedを返す。
-	Verify(apkPath string) (bool, error)
-
-	// FindApkSigner はapksignerコマンドのパスを検索する。
-	// ANDROID_HOME環境変数やシステムPATHを参照する。
-	// 見つからない場合は空文字列とfalseを返す。
-	FindApkSigner() (string, bool)
-}
-
 // DefaultApkSignerRunner はapksignerコマンドを実行する既定実装。
 type DefaultApkSignerRunner struct {
 	runner CommandRunner
@@ -80,6 +55,11 @@ func NewDefaultApkSignerRunner(runner CommandRunner) *DefaultApkSignerRunner {
 }
 
 // Sign はapksigner signを実行してAPKファイルに署名する。
+// 成功時はapkPathを返す。
+// APKファイルが存在しない場合はErrApkNotFound、
+// キーストアファイルが存在しない場合はErrKeystoreNotFound、
+// apksignerコマンドが見つからない場合はErrApkSignerNotFound、
+// 署名処理に失敗した場合はErrApkSignFailedを返す。
 //
 // why not: 失敗時のエラーメッセージにはapksigner自身のstderrのみを含め、
 // 実行に使ったコマンドライン引数（--ks-pass/--key-passに平文パスワードを含む）は
@@ -125,28 +105,9 @@ func (r *DefaultApkSignerRunner) Sign(apkPath string, keystoreConfig KeystoreCon
 	return apkPath, nil
 }
 
-// Verify はapksigner verifyを実行してAPKファイルの署名を検証する。
-// 終了コードが0の場合にtrueを返す（非ゼロはコマンド失敗ではなく署名無効を表す）。
-func (r *DefaultApkSignerRunner) Verify(apkPath string) (bool, error) {
-	if _, err := os.Stat(apkPath); err != nil {
-		return false, fmt.Errorf("%w: %s", ErrApkNotFound, apkPath)
-	}
-
-	apksignerPath, ok := r.FindApkSigner()
-	if !ok {
-		return false, ErrApkSignerNotFound
-	}
-
-	result, err := r.runner.Run(context.Background(), []string{apksignerPath, "verify", apkPath})
-	if err != nil {
-		return false, fmt.Errorf("%w: %w", ErrApkVerifyFailed, err)
-	}
-
-	return result.ExitCode == 0, nil
-}
-
 // FindApkSigner はANDROID_HOME配下のbuild-toolsから最新バージョンのapksignerを検索し、
 // 見つからない場合はシステムPATHから検索する。
+// 見つからない場合は空文字列とfalseを返す。
 func (r *DefaultApkSignerRunner) FindApkSigner() (string, bool) {
 	return findAndroidBuildTool("apksigner")
 }
