@@ -19,7 +19,7 @@ import (
 func TestNewGradleBuilder(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: デフォルトタイムアウトで初期化してビルドできる", func(t *testing.T) {
+	t.Run("正常系: タイムアウト未指定でも初期化でき、wrapperの無いプロジェクトのBuildはErrGradleWrapperNotFoundを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
