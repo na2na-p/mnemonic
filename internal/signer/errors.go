@@ -28,10 +28,6 @@ var (
 	// ErrApkSignFailed はapksigner signが非ゼロ終了コードで終了、
 	// またはコマンド実行自体に失敗した場合のエラー。
 	ErrApkSignFailed = errors.New("apksignerの署名に失敗しました")
-	// ErrApkVerifyFailed はapksigner verifyコマンドの実行自体に失敗した場合のエラー。
-	// 署名検証結果が無効(non-zero終了)であることそれ自体はエラーではなく
-	// Verifyの戻り値boolで表現する。
-	ErrApkVerifyFailed = errors.New("apksignerの検証実行に失敗しました")
 
 	// ErrPasswordEmpty は対話的入力で得たパスワードが空だった場合のエラー。
 	ErrPasswordEmpty = errors.New("パスワードが空です")
