@@ -109,31 +109,49 @@ func TestTemplateDownloader_GetLatestVersion(t *testing.T) {
 	})
 }
 
-func TestTemplateDownloader_GetDownloadURL(t *testing.T) {
+func TestTemplateDownloader_Download(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: ダウンロードURLが正しく構築される", func(t *testing.T) {
+	t.Run("正常系: 正しいバージョン形式でダウンロードが成功する", func(t *testing.T) {
 		t.Parallel()
 
-		d := builder.NewTemplateDownloader("", nil)
+		testCases := []struct {
+			name    string
+			version string
+		}{
+			{name: "正常系: サフィックスなしのバージョン", version: "template-2026.01.31"},
+			{name: "正常系: 連番サフィックス付きバージョン", version: "template-2026.07.28-12"},
+		}
 
-		url, err := d.GetDownloadURL("template-2026.01.31")
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
 
-		require.NoError(t, err)
-		assert.Contains(t, url, "template-2026.01.31")
-		assert.Contains(t, url, "mnemonic")
-		assert.Contains(t, url, "github.com")
-	})
+				content := []byte("test content")
+				d := newTestDownloader(t, t.TempDir(), func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/releases/tags/" + tc.version:
+						downloadURL := "http://" + r.Host + "/download/android-template.zip"
+						writeJSON(t, w, map[string]any{
+							"tag_name": tc.version,
+							"assets": []map[string]any{
+								{"name": "android-template.zip", "browser_download_url": downloadURL, "size": len(content)},
+							},
+						})
+					case "/download/android-template.zip":
+						_, _ = w.Write(content)
+					default:
+						t.Fatalf("unexpected path: %s", r.URL.Path)
+					}
+				})
+				version := tc.version
 
-	t.Run("正常系: 連番サフィックス付きバージョンでもダウンロードURLが構築される", func(t *testing.T) {
-		t.Parallel()
+				_, err := d.Download(&version)
 
-		d := builder.NewTemplateDownloader("", nil)
-
-		url, err := d.GetDownloadURL("template-2026.07.28-12")
-
-		require.NoError(t, err)
-		assert.Contains(t, url, "template-2026.07.28-12")
+				require.NotErrorIs(t, err, builder.ErrInvalidVersion)
+				require.NoError(t, err)
+			})
+		}
 	})
 
 	t.Run("異常系: 不正なバージョン形式でErrInvalidVersion", func(t *testing.T) {
@@ -155,18 +173,23 @@ func TestTemplateDownloader_GetDownloadURL(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				d := builder.NewTemplateDownloader("", nil)
+				requestCount := 0
+				server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+					requestCount++
+				}))
+				t.Cleanup(server.Close)
 
-				_, err := d.GetDownloadURL(tc.version)
+				d := builder.NewTemplateDownloader(t.TempDir(), nil)
+				d.APIBaseURL = server.URL
+				version := tc.version
 
-				assert.ErrorIs(t, err, builder.ErrInvalidVersion)
+				_, err := d.Download(&version)
+
+				require.ErrorIs(t, err, builder.ErrInvalidVersion)
+				assert.Zero(t, requestCount)
 			})
 		}
 	})
-}
-
-func TestTemplateDownloader_Download(t *testing.T) {
-	t.Parallel()
 
 	t.Run("正常系: 指定バージョンのダウンロードが成功する", func(t *testing.T) {
 		t.Parallel()

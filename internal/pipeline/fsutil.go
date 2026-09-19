@@ -105,8 +105,7 @@ func extractTemplateZip(templatePath, destDir string) error {
 //
 // why not: エントリ名はテンプレートZIP内データに由来し外部入力として
 // 信頼できないため、展開先がdestDir外に脱出しないことを検証する
-// （zip slip対策。internal/parser/xp3.goのsafeJoin、internal/builder/
-// project_generator.goのsafeJoinPathと同じ理由）。
+// （zip slip対策。internal/parser/xp3.goのsafeJoinと同じ理由）。
 func extractZipEntry(f *zip.File, destDir string) error {
 	destPath, err := safeJoin(destDir, f.Name)
 	if err != nil {

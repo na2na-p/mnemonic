@@ -153,21 +153,6 @@ func (f *PluginFetcher) GetPlugins() (PluginsInfo, error) {
 	return f.DownloadAllPlugins()
 }
 
-// GetPlugin は最初に設定されたプラグイン（既定ではextrans）を取得する。
-func (f *PluginFetcher) GetPlugin() (PluginInfo, error) {
-	configs := f.pluginConfigs()
-	if len(configs) == 0 {
-		return PluginInfo{}, fmt.Errorf("%w: プラグイン設定が空です", ErrPluginDownload)
-	}
-
-	plugins, err := f.GetPlugins()
-	if err != nil {
-		return PluginInfo{}, err
-	}
-
-	return plugins.Plugins[configs[0].Name], nil
-}
-
 // DownloadAllPlugins は全プラグインをダウンロードする。
 // GitHubから各プラグインの各ABI用.soをダウンロードしてキャッシュに保存する。
 func (f *PluginFetcher) DownloadAllPlugins() (PluginsInfo, error) {
@@ -191,21 +176,6 @@ func (f *PluginFetcher) DownloadAllPlugins() (PluginsInfo, error) {
 	}
 
 	return PluginsInfo{Plugins: plugins}, nil
-}
-
-// DownloadPlugin は最初に設定されたプラグイン（既定ではextrans）をダウンロードする。
-func (f *PluginFetcher) DownloadPlugin() (PluginInfo, error) {
-	configs := f.pluginConfigs()
-	if len(configs) == 0 {
-		return PluginInfo{}, fmt.Errorf("%w: プラグイン設定が空です", ErrPluginDownload)
-	}
-
-	plugins, err := f.DownloadAllPlugins()
-	if err != nil {
-		return PluginInfo{}, err
-	}
-
-	return plugins.Plugins[configs[0].Name], nil
 }
 
 func (f *PluginFetcher) downloadSinglePlugin(cacheDir string, config PluginConfig) (PluginInfo, error) {
@@ -314,28 +284,6 @@ func (f *PluginFetcher) IsAllCacheValid() bool {
 	return true
 }
 
-// IsCacheValid は最初に設定されたプラグインのキャッシュが有効かどうかを確認する。
-func (f *PluginFetcher) IsCacheValid() bool {
-	configs := f.pluginConfigs()
-	if len(configs) == 0 {
-		return false
-	}
-
-	dir, err := f.cacheDir()
-	if err != nil {
-		return false
-	}
-
-	config := configs[0]
-	for _, abi := range SupportedABIs {
-		if _, err := os.Stat(filepath.Join(dir, abi, config.OutputFilename)); err != nil {
-			return false
-		}
-	}
-
-	return true
-}
-
 // GetAllCachedPlugins は全キャッシュされたプラグインを取得する。
 // キャッシュが無い場合はok=falseを返す。
 func (f *PluginFetcher) GetAllCachedPlugins() (PluginsInfo, bool) {
@@ -359,30 +307,4 @@ func (f *PluginFetcher) GetAllCachedPlugins() (PluginsInfo, bool) {
 	}
 
 	return PluginsInfo{Plugins: plugins}, true
-}
-
-// GetCachedPluginPaths は最初に設定されたプラグインのキャッシュパスを取得する。
-// キャッシュが無い場合はok=falseを返す。
-func (f *PluginFetcher) GetCachedPluginPaths() (map[string]string, bool) {
-	if !f.IsCacheValid() {
-		return nil, false
-	}
-
-	configs := f.pluginConfigs()
-	if len(configs) == 0 {
-		return nil, false
-	}
-
-	dir, err := f.cacheDir()
-	if err != nil {
-		return nil, false
-	}
-
-	config := configs[0]
-	paths := make(map[string]string, len(SupportedABIs))
-	for _, abi := range SupportedABIs {
-		paths[abi] = filepath.Join(dir, abi, config.OutputFilename)
-	}
-
-	return paths, true
 }

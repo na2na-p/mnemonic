@@ -19,15 +19,16 @@ import (
 func TestNewGradleBuilder(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: デフォルトタイムアウトで初期化", func(t *testing.T) {
+	t.Run("正常系: デフォルトタイムアウトで初期化してビルドできる", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 
 		b, err := builder.NewGradleBuilder(dir, 0, nil)
-
 		require.NoError(t, err)
-		assert.False(t, b.CheckGradleWrapper())
+
+		_, err = b.Build("release")
+		assert.ErrorIs(t, err, builder.ErrGradleWrapperNotFound)
 	})
 
 	t.Run("正常系: gradle.propertiesが存在しない場合は新規作成される", func(t *testing.T) {
@@ -71,37 +72,6 @@ func countOccurrences(s, substr string) int {
 	}
 
 	return count
-}
-
-func TestGradleBuilder_CheckGradleWrapper(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: gradlewが存在する場合にtrueを返す", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		gradlewName := "gradlew"
-		if runtime.GOOS == "windows" {
-			gradlewName = "gradlew.bat"
-		}
-		require.NoError(t, os.WriteFile(filepath.Join(dir, gradlewName), []byte(""), 0o600))
-
-		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
-		require.NoError(t, err)
-
-		assert.True(t, b.CheckGradleWrapper())
-	})
-
-	t.Run("正常系: gradlewが存在しない場合にfalseを返す", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-
-		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
-		require.NoError(t, err)
-
-		assert.False(t, b.CheckGradleWrapper())
-	})
 }
 
 func TestGradleBuilder_Build(t *testing.T) {
@@ -225,65 +195,6 @@ func TestGradleBuilder_Build(t *testing.T) {
 				require.NoError(t, err)
 			})
 		}
-	})
-}
-
-func TestGradleBuilder_Clean(t *testing.T) {
-	t.Parallel()
-
-	t.Run("異常系: gradlewが存在しない場合にErrGradleWrapperNotFound", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-
-		b, err := builder.NewGradleBuilder(dir, time.Minute, nil)
-		require.NoError(t, err)
-
-		err = b.Clean()
-
-		assert.ErrorIs(t, err, builder.ErrGradleWrapperNotFound)
-	})
-
-	t.Run("正常系: cleanがcleanタスクで呼び出される", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		writeFakeGradlew(t, dir)
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-		runner.EXPECT().
-			Run(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, _ string, _ []string, args []string) (builder.RunResult, error) {
-				assert.Contains(t, args, "clean")
-
-				return builder.RunResult{ExitCode: 0}, nil
-			})
-
-		b, err := builder.NewGradleBuilder(dir, time.Minute, runner)
-		require.NoError(t, err)
-
-		require.NoError(t, b.Clean())
-	})
-
-	t.Run("異常系: クリーン失敗時にErrGradleBuildFailed", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		writeFakeGradlew(t, dir)
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-		runner.EXPECT().
-			Run(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-			Return(builder.RunResult{ExitCode: 1, Stderr: "CLEAN FAILED"}, nil)
-
-		b, err := builder.NewGradleBuilder(dir, time.Minute, runner)
-		require.NoError(t, err)
-
-		err = b.Clean()
-
-		assert.ErrorIs(t, err, builder.ErrGradleBuildFailed)
 	})
 }
 

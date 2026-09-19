@@ -306,29 +306,6 @@ func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 	}, nil
 }
 
-// Clean はGradleのcleanタスクを実行してビルドキャッシュを削除する。
-func (b *GradleBuilder) Clean() error {
-	result, err := b.runGradle("clean")
-	if err != nil {
-		return err
-	}
-
-	if result.ExitCode != 0 {
-		outputLog := result.Stdout + result.Stderr
-
-		return fmt.Errorf("%w: exit code %d: %s", ErrGradleBuildFailed, result.ExitCode, outputLog)
-	}
-
-	return nil
-}
-
-// CheckGradleWrapper はプロジェクトディレクトリにGradle Wrapperが存在するかを確認する。
-func (b *GradleBuilder) CheckGradleWrapper() bool {
-	_, err := os.Stat(b.gradlewPath())
-
-	return err == nil
-}
-
 // GetAPKPath は生成されたAPKファイルのパスを取得する。
 // buildTypeが空文字列の場合は"release"を使用する。
 // 出力ディレクトリが存在しない、またはAPKファイルが1つも無い場合はnilを返す。

@@ -229,15 +229,6 @@ func (d *TemplateDownloader) GetLatestVersion() (string, error) {
 	return release.TagName, nil
 }
 
-// GetDownloadURL は指定バージョンのダウンロードURLを構築する。
-func (d *TemplateDownloader) GetDownloadURL(version string) (string, error) {
-	if err := d.validateVersion(version); err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("https://github.com/na2na-p/mnemonic/releases/download/%s/android-template.zip", version), nil
-}
-
 func (d *TemplateDownloader) validateVersion(version string) error {
 	if version == "" || !versionPattern.MatchString(version) {
 		return fmt.Errorf("%w: '%s'", ErrInvalidVersion, version)

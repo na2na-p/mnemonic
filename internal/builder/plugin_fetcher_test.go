@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,6 @@ func buildTestPluginZip(t *testing.T, filename string, content []byte) []byte {
 	return buf.Bytes()
 }
 
-// singleExtransConfig はテスト用の単一プラグイン設定（テストサーバーURLを埋め込む）。
 func singleExtransConfig(serverURL string) []builder.PluginConfig {
 	return []builder.PluginConfig{
 		{
@@ -101,15 +101,15 @@ func TestPluginsInfo_GetAllPathsForABI(t *testing.T) {
 	})
 }
 
-func TestPluginFetcher_GetPlugin(t *testing.T) {
+func TestPluginFetcher_GetPlugins(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
 		name            string
 		cachedExists    bool
-		expectCallCount int
+		expectCallCount int32
 	}{
-		{name: "正常系: キャッシュが無い場合はダウンロードする", cachedExists: false, expectCallCount: 4},
+		{name: "正常系: キャッシュが無い場合は全プラグインをダウンロードする", cachedExists: false, expectCallCount: int32(len(builder.SupportedABIs))},
 		{name: "正常系: キャッシュが有効な場合はダウンロードしない", cachedExists: true, expectCallCount: 0},
 	}
 
@@ -123,9 +123,9 @@ func TestPluginFetcher_GetPlugin(t *testing.T) {
 			}
 
 			zipContent := buildTestPluginZip(t, "extrans.so", []byte("fake so content"))
-			callCount := 0
+			var callCount atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				callCount++
+				callCount.Add(1)
 				_, _ = w.Write(zipContent)
 			}))
 			t.Cleanup(server.Close)
@@ -133,30 +133,28 @@ func TestPluginFetcher_GetPlugin(t *testing.T) {
 			f := builder.NewPluginFetcher(cacheDir, server.Client())
 			f.PluginConfigs = singleExtransConfig(server.URL)
 
-			result, err := f.GetPlugin()
+			result, err := f.GetPlugins()
 
 			require.NoError(t, err)
-			assert.Equal(t, "extrans", result.Name)
-			assert.Len(t, result.Paths, 4)
-
-			for abi, path := range result.Paths {
+			extrans, ok := result.Plugins["extrans"]
+			require.True(t, ok)
+			assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
+			for abi, path := range extrans.Paths {
 				assert.FileExists(t, path, "%sのプラグインが存在するはず", abi)
 			}
-
-			assert.Equal(t, tc.expectCallCount, callCount)
+			assert.Equal(t, tc.expectCallCount, callCount.Load())
 		})
 	}
 }
 
-func TestPluginFetcher_DownloadPlugin(t *testing.T) {
+func TestPluginFetcher_DownloadAllPlugins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: プラグインのダウンロードが成功する", func(t *testing.T) {
+	t.Run("正常系: 単一プラグインのダウンロードが成功する", func(t *testing.T) {
 		t.Parallel()
 
 		cacheDir := t.TempDir()
 		zipContent := buildTestPluginZip(t, "extrans.so", []byte("fake so content"))
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write(zipContent)
 		}))
@@ -165,12 +163,13 @@ func TestPluginFetcher_DownloadPlugin(t *testing.T) {
 		f := builder.NewPluginFetcher(cacheDir, server.Client())
 		f.PluginConfigs = singleExtransConfig(server.URL)
 
-		result, err := f.DownloadPlugin()
+		result, err := f.DownloadAllPlugins()
 
 		require.NoError(t, err)
-		assert.Equal(t, "extrans", result.Name)
-		assert.Len(t, result.Paths, 4)
-		for _, path := range result.Paths {
+		extrans, ok := result.Plugins["extrans"]
+		require.True(t, ok)
+		assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
+		for _, path := range extrans.Paths {
 			assert.Equal(t, ".so", filepath.Ext(path))
 			assert.FileExists(t, path)
 		}
@@ -179,140 +178,141 @@ func TestPluginFetcher_DownloadPlugin(t *testing.T) {
 	t.Run("異常系: ネットワークエラー時にErrPluginDownload", func(t *testing.T) {
 		t.Parallel()
 
-		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		client := server.Client()
+		serverURL := server.URL
 		server.Close()
 
 		f := builder.NewPluginFetcher(t.TempDir(), client)
-		f.PluginConfigs = singleExtransConfig(server.URL)
+		f.PluginConfigs = singleExtransConfig(serverURL)
 
-		_, err := f.DownloadPlugin()
+		_, err := f.DownloadAllPlugins()
 
 		require.ErrorIs(t, err, builder.ErrPluginDownload)
 	})
 
-	t.Run("異常系: HTTPエラー時にErrPluginDownload", func(t *testing.T) {
+	testCases := []struct {
+		name         string
+		statusCode   int
+		zipFilename  string
+		responseBody []byte
+		wantError    string
+	}{
+		{name: "異常系: HTTPエラー時にErrPluginDownload", statusCode: http.StatusNotFound, wantError: "404"},
+		{name: "異常系: ZIP内に対象ファイルが見つからない場合にErrPluginDownload", statusCode: http.StatusOK, zipFilename: "unrelated.so", wantError: "見つかりません"},
+		{name: "異常系: 不正なZIPファイルの場合にErrPluginDownload", statusCode: http.StatusOK, responseBody: []byte("not a zip file"), wantError: "無効なZIP"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			responseBody := tc.responseBody
+			if tc.zipFilename != "" {
+				responseBody = buildTestPluginZip(t, tc.zipFilename, []byte("fake so content"))
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write(responseBody)
+			}))
+			t.Cleanup(server.Close)
+
+			f := builder.NewPluginFetcher(t.TempDir(), server.Client())
+			f.PluginConfigs = singleExtransConfig(server.URL)
+
+			_, err := f.DownloadAllPlugins()
+
+			require.ErrorIs(t, err, builder.ErrPluginDownload)
+			assert.ErrorContains(t, err, tc.wantError)
+		})
+	}
+
+	t.Run("正常系: HTTPクライアント未設定のゼロ値でもダウンロードできる", func(t *testing.T) {
 		t.Parallel()
 
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNotFound)
-		}))
-		t.Cleanup(server.Close)
-
-		f := builder.NewPluginFetcher(t.TempDir(), server.Client())
-		f.PluginConfigs = singleExtransConfig(server.URL)
-
-		_, err := f.DownloadPlugin()
-
-		require.ErrorIs(t, err, builder.ErrPluginDownload)
-		assert.ErrorContains(t, err, "404")
-	})
-
-	t.Run("異常系: ZIP内に対象ファイルが見つからない場合にErrPluginDownload", func(t *testing.T) {
-		t.Parallel()
-
-		zipContent := buildTestPluginZip(t, "unrelated.so", []byte("fake so content"))
+		zipContent := buildTestPluginZip(t, "extrans.so", []byte("fake so content"))
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write(zipContent)
 		}))
 		t.Cleanup(server.Close)
 
-		f := builder.NewPluginFetcher(t.TempDir(), server.Client())
-		f.PluginConfigs = singleExtransConfig(server.URL)
+		f := &builder.PluginFetcher{CacheDir: t.TempDir(), PluginConfigs: singleExtransConfig(server.URL)}
 
-		_, err := f.DownloadPlugin()
-
-		require.ErrorIs(t, err, builder.ErrPluginDownload)
-		assert.ErrorContains(t, err, "見つかりません")
-	})
-
-	t.Run("異常系: 不正なZIPファイルの場合にErrPluginDownload", func(t *testing.T) {
-		t.Parallel()
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("not a zip file"))
-		}))
-		t.Cleanup(server.Close)
-
-		f := builder.NewPluginFetcher(t.TempDir(), server.Client())
-		f.PluginConfigs = singleExtransConfig(server.URL)
-
-		_, err := f.DownloadPlugin()
-
-		require.ErrorIs(t, err, builder.ErrPluginDownload)
-		assert.ErrorContains(t, err, "無効なZIP")
+		assert.NotPanics(t, func() {
+			_, err := f.DownloadAllPlugins()
+			require.NoError(t, err)
+		})
 	})
 }
 
-func TestPluginFetcher_IsCacheValid(t *testing.T) {
+func TestPluginFetcher_IsAllCacheValid(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: 全ABIのプラグインファイルが存在する場合はtrueを返す", func(t *testing.T) {
-		t.Parallel()
+	testCases := []struct {
+		name string
+		abis []string
+		want bool
+	}{
+		{name: "正常系: 全ABIのプラグインファイルが存在する場合はtrueを返す", abis: builder.SupportedABIs, want: true},
+		{name: "正常系: 一部ABIのプラグインファイルが欠けている場合はfalseを返す", abis: []string{"arm64-v8a", "armeabi-v7a"}, want: false},
+		{name: "正常系: プラグインファイルが存在しない場合はfalseを返す", want: false},
+	}
 
-		cacheDir := t.TempDir()
-		writeCachedPluginFiles(t, cacheDir, builder.SupportedABIs)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		f := builder.NewPluginFetcher(cacheDir, nil)
-		f.PluginConfigs = singleExtransConfig("http://example.invalid")
+			cacheDir := t.TempDir()
+			writeCachedPluginFiles(t, cacheDir, tc.abis)
 
-		assert.True(t, f.IsCacheValid())
-	})
+			f := builder.NewPluginFetcher(cacheDir, nil)
+			f.PluginConfigs = singleExtransConfig("http://example.invalid")
 
-	t.Run("正常系: 一部ABIのプラグインファイルが欠けている場合はfalseを返す", func(t *testing.T) {
-		t.Parallel()
-
-		cacheDir := t.TempDir()
-		writeCachedPluginFiles(t, cacheDir, []string{"arm64-v8a", "armeabi-v7a"})
-
-		f := builder.NewPluginFetcher(cacheDir, nil)
-		f.PluginConfigs = singleExtransConfig("http://example.invalid")
-
-		assert.False(t, f.IsCacheValid())
-	})
-
-	t.Run("正常系: プラグインファイルが存在しない場合はfalseを返す", func(t *testing.T) {
-		t.Parallel()
-
-		f := builder.NewPluginFetcher(t.TempDir(), nil)
-		f.PluginConfigs = singleExtransConfig("http://example.invalid")
-
-		assert.False(t, f.IsCacheValid())
-	})
+			assert.Equal(t, tc.want, f.IsAllCacheValid())
+		})
+	}
 }
 
-func TestPluginFetcher_GetCachedPluginPaths(t *testing.T) {
+func TestPluginFetcher_GetAllCachedPlugins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: キャッシュされたプラグインのパスを返す", func(t *testing.T) {
-		t.Parallel()
+	testCases := []struct {
+		name         string
+		cachedExists bool
+	}{
+		{name: "正常系: キャッシュされた全プラグインのパスを返す", cachedExists: true},
+		{name: "正常系: キャッシュが無い場合はokがfalse", cachedExists: false},
+	}
 
-		cacheDir := t.TempDir()
-		writeCachedPluginFiles(t, cacheDir, builder.SupportedABIs)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		f := builder.NewPluginFetcher(cacheDir, nil)
-		f.PluginConfigs = singleExtransConfig("http://example.invalid")
+			cacheDir := t.TempDir()
+			if tc.cachedExists {
+				writeCachedPluginFiles(t, cacheDir, builder.SupportedABIs)
+			}
 
-		result, ok := f.GetCachedPluginPaths()
+			f := builder.NewPluginFetcher(cacheDir, nil)
+			f.PluginConfigs = singleExtransConfig("http://example.invalid")
 
-		require.True(t, ok)
-		assert.Len(t, result, 4)
-		for _, path := range result {
-			assert.FileExists(t, path)
-		}
-	})
+			result, ok := f.GetAllCachedPlugins()
 
-	t.Run("正常系: キャッシュが無い場合はokがfalse", func(t *testing.T) {
-		t.Parallel()
+			assert.Equal(t, tc.cachedExists, ok)
+			if !tc.cachedExists {
+				assert.Nil(t, result.Plugins)
 
-		f := builder.NewPluginFetcher(t.TempDir(), nil)
-		f.PluginConfigs = singleExtransConfig("http://example.invalid")
+				return
+			}
 
-		result, ok := f.GetCachedPluginPaths()
-
-		assert.False(t, ok)
-		assert.Nil(t, result)
-	})
+			extrans, exists := result.Plugins["extrans"]
+			require.True(t, exists)
+			assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
+			for _, path := range extrans.Paths {
+				assert.FileExists(t, path)
+			}
+		})
+	}
 }
 
 // TestPluginFetcher_MultiPlugin はfde5205/8afffdfで追加されたマルチプラグイン対応
@@ -370,26 +370,5 @@ func TestPluginFetcher_MultiPlugin(t *testing.T) {
 		cached, ok := f.GetAllCachedPlugins()
 		require.True(t, ok)
 		assert.Len(t, cached.Plugins, 2)
-	})
-}
-
-// TestPluginFetcher_ZeroValue_DoesNotPanic はレビュー指摘の回帰テスト:
-// NewPluginFetcherを介さずbuilder.PluginFetcher{}のゼロ値を直接構築した場合でも、
-// HTTPClientフィールドがnilのままnilポインタ参照でpanicしないことを確認する
-// （TemplateDownloaderと同じ方針）。
-func TestPluginFetcher_ZeroValue_DoesNotPanic(t *testing.T) {
-	t.Parallel()
-
-	zipContent := buildTestPluginZip(t, "extrans.so", []byte("fake so content"))
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(zipContent)
-	}))
-	t.Cleanup(server.Close)
-
-	f := &builder.PluginFetcher{CacheDir: t.TempDir(), PluginConfigs: singleExtransConfig(server.URL)}
-
-	assert.NotPanics(t, func() {
-		_, err := f.DownloadPlugin()
-		require.NoError(t, err)
 	})
 }
