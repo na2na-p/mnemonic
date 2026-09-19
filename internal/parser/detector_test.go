@@ -226,60 +226,6 @@ func TestGameDetector_Detect(t *testing.T) {
 	})
 }
 
-func TestGameDetector_GetSummary(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: サマリーが文字列として取得できる", func(t *testing.T) {
-		t.Parallel()
-
-		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
-		require.NoError(t, err)
-
-		summary, err := detector.GetSummary()
-
-		require.NoError(t, err)
-		assert.NotEmpty(t, summary)
-	})
-
-	t.Run("正常系: サマリーにエンジン情報が含まれる", func(t *testing.T) {
-		t.Parallel()
-
-		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
-		require.NoError(t, err)
-
-		summary, err := detector.GetSummary()
-
-		require.NoError(t, err)
-		assert.Contains(t, strings.ToLower(summary), "kirikiri")
-	})
-
-	t.Run("正常系: サマリーにファイル数（数字）が含まれる", func(t *testing.T) {
-		t.Parallel()
-
-		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
-		require.NoError(t, err)
-
-		summary, err := detector.GetSummary()
-
-		require.NoError(t, err)
-		assert.Regexp(t, `[0-9]`, summary)
-	})
-
-	t.Run("正常系: 各リソース種別の情報が含まれる", func(t *testing.T) {
-		t.Parallel()
-
-		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
-		require.NoError(t, err)
-
-		summary, err := detector.GetSummary()
-
-		require.NoError(t, err)
-		assert.Contains(t, summary, "Scripts")
-		assert.Contains(t, summary, "Images")
-		assert.Contains(t, summary, "Audio")
-	})
-}
-
 func TestGameDetector_TitleDetection(t *testing.T) {
 	t.Parallel()
 
@@ -332,7 +278,7 @@ func TestGameDetector_TitleDetection(t *testing.T) {
 func TestGameDetector_Integration(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: 検出からサマリー取得までの一連のワークフロー", func(t *testing.T) {
+	t.Run("正常系: Detectでゲーム構成を取得できる", func(t *testing.T) {
 		t.Parallel()
 
 		detector, err := parser.NewGameDetector(filepath.Join(fixturesDir(t), "kirikiri2_game"))
@@ -351,9 +297,6 @@ func TestGameDetector_Integration(t *testing.T) {
 		assert.NotEmpty(t, structure.Images)
 		assert.NotEmpty(t, structure.Audio)
 
-		summary, err := detector.GetSummary()
-		require.NoError(t, err)
-		assert.NotEmpty(t, summary)
 	})
 }
 
@@ -363,7 +306,7 @@ func TestGameDetector_Integration(t *testing.T) {
 //
 // github.com/saintfish/chardet は純ASCII入力に対して専用の判定器を持たず
 // "ISO-8859-1"（低信頼度）等を返すことがあり、"ascii"という一貫した結果に
-// ならない問題がある（GetSummary出力や再エンコード判定に影響するユーザー
+// ならない問題がある（再エンコード判定に影響するユーザー
 // 可視の差分）ため、detectCharsetのASCII優先判定を固定する。
 func TestGameDetector_ScriptEncodingDetection(t *testing.T) {
 	t.Parallel()

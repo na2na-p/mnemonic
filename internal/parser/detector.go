@@ -73,8 +73,7 @@ var titleRegexp = regexp.MustCompile(`;System\.title\s*=\s*"([^"]+)"`)
 // 指定されたゲームディレクトリを解析し、
 // 使用されているエンジンの種類やリソースファイルを検出する。
 type GameDetector struct {
-	gameDir   string
-	structure *GameStructure
+	gameDir string
 }
 
 // NewGameDetector はgameDirを対象に初期化する。
@@ -128,45 +127,7 @@ func (d *GameDetector) Detect() (GameStructure, error) {
 		Video:          video,
 		Plugins:        plugins,
 	}
-	d.structure = &structure
-
 	return structure, nil
-}
-
-// GetSummary は検出結果のサマリー文字列を返す。
-//
-// CLI表示用に検出結果を人間が読みやすい形式で整形する。
-// まだDetectが呼ばれていない場合は内部でDetectを実行する。
-func (d *GameDetector) GetSummary() (string, error) {
-	if d.structure == nil {
-		if _, err := d.Detect(); err != nil {
-			return "", err
-		}
-	}
-
-	s := d.structure
-
-	encodingInfo := ""
-	if s.ScriptEncoding != "" {
-		encodingInfo = fmt.Sprintf(" (detected: %s)", s.ScriptEncoding)
-	}
-
-	videoCount := len(s.Video)
-	videoSuffix := "s"
-	if videoCount == 1 {
-		videoSuffix = ""
-	}
-
-	lines := []string{
-		fmt.Sprintf("Engine: %s", engineDisplayName(s.Engine)),
-		fmt.Sprintf("Scripts: %d files%s", len(s.Scripts), encodingInfo),
-		fmt.Sprintf("Images: %d files", len(s.Images)),
-		fmt.Sprintf("Audio: %d files", len(s.Audio)),
-		fmt.Sprintf("Video: %d file%s", videoCount, videoSuffix),
-		fmt.Sprintf("Plugins: %d files", len(s.Plugins)),
-	}
-
-	return strings.Join(lines, "\n"), nil
 }
 
 // collectFiles はゲームディレクトリ内の全ファイルを相対パス（"/"区切り）で収集する。
@@ -264,7 +225,7 @@ func (d *GameDetector) detectScriptEncoding(scripts []string) string {
 // why not: github.com/saintfish/chardet には専用のASCII判定器がなく、
 // 純ASCIIバイト列に対しても単バイト系のフォールバック候補
 // （例: "ISO-8859-1"、低信頼度）を返す。ゲーム構成検出結果に含まれる
-// 文字コード名はGetSummaryの表示や再エンコード判定に使われるため、この
+// 文字コード名は再エンコード判定に使われるため、この
 // 判定差はユーザー可視の挙動差になる。そのため、まずGo側で純ASCIIかを
 // 判定し、"ascii"を返してchardetの推定より優先する。
 func detectCharset(detector *chardet.Detector, rawData []byte) (string, bool) {
@@ -342,17 +303,4 @@ func extractTitle(raw []byte) (string, bool) {
 	}
 
 	return "", false
-}
-
-func engineDisplayName(engine EngineType) string {
-	switch engine {
-	case EngineKirikiri2:
-		return "Kirikiri 2"
-	case EngineKirikiri2KAG3:
-		return "Kirikiri 2 (KAG3)"
-	case EngineUnknown:
-		return "Unknown"
-	default:
-		return "Unknown"
-	}
 }

@@ -193,30 +193,106 @@ func TestXP3Archive_ExtractAll(t *testing.T) {
 	})
 }
 
-func TestXP3Archive_ExtractFile(t *testing.T) {
+func TestXP3Archive_ExtractAll_ZipSlipGuard(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{
-		"data/script.ks",
-		"image/bg/title.png",
-		"sound/bgm/main.ogg",
+	cases := []struct {
+		name            string
+		entryName       string
+		rejected        bool
+		neutralizedPath string
+	}{
+		{name: "親ディレクトリ参照を拒否する", entryName: "../evil.txt", rejected: true},
+		{name: "Windows形式の親ディレクトリ参照を拒否する", entryName: `..\evil.txt`, rejected: true},
+		{name: "多段の親ディレクトリ参照を拒否する", entryName: "a/../../evil.txt", rejected: true},
+		{name: "絶対パスを出力ディレクトリ内へ無害化する", entryName: "/etc/evil.txt", neutralizedPath: filepath.Join("etc", "evil.txt")},
 	}
 
-	for _, filename := range cases {
-		t.Run("異常系: 存在しないファイル "+filename, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			tmpDir := t.TempDir()
-			path := filepath.Join(tmpDir, "test.xp3")
-			writeFile(t, path, minimalXP3Bytes())
-			outputPath := filepath.Join(tmpDir, "output", filepath.Base(filename))
+			archivePath := filepath.Join(tmpDir, "test.xp3")
+			writeFile(t, archivePath, buildXP3Archive(t, []xp3EntrySpec{
+				{name: tc.entryName, data: []byte("evil")},
+			}))
 
-			archive, err := parser.NewXP3Archive(path)
+			archive, err := parser.NewXP3Archive(archivePath)
 			require.NoError(t, err)
 
-			err = archive.ExtractFile(filename, outputPath)
+			outputDir := filepath.Join(tmpDir, "output")
+			err = archive.ExtractAll(outputDir)
+			outsidePath := filepath.Join(filepath.Dir(outputDir), "evil.txt")
+			assert.NoFileExists(t, outsidePath)
 
-			require.ErrorIs(t, err, parser.ErrFileNotInArchive)
+			if tc.rejected {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				return
+			}
+
+			require.NoError(t, err)
+			neutralizedPath := filepath.Join(outputDir, tc.neutralizedPath)
+			assert.FileExists(t, neutralizedPath)
+			content, err := os.ReadFile(neutralizedPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, []byte("evil"), content)
+		})
+	}
+}
+
+func TestXP3Archive_ExtractAll_BackslashSeparatedNames(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		entryName    string
+		expectedPath string
+		expectedData []byte
+	}{
+		{
+			name:         "バックスラッシュ区切りのファイルをディレクトリ階層へ展開する",
+			entryName:    `dir\file.txt`,
+			expectedPath: filepath.Join("dir", "file.txt"),
+			expectedData: []byte("first file"),
+		},
+		{
+			name:         "区切り文字が混在する深いパスをディレクトリ階層へ展開する",
+			entryName:    `a\b/c.txt`,
+			expectedPath: filepath.Join("a", "b", "c.txt"),
+			expectedData: []byte("second file"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			archivePath := filepath.Join(tmpDir, "test.xp3")
+			writeFile(t, archivePath, buildXP3Archive(t, []xp3EntrySpec{
+				{name: tc.entryName, data: tc.expectedData},
+			}))
+
+			archive, err := parser.NewXP3Archive(archivePath)
+			require.NoError(t, err)
+
+			outputDir := filepath.Join(tmpDir, "output")
+			require.NoError(t, archive.ExtractAll(outputDir))
+
+			extractedPath := filepath.Join(outputDir, tc.expectedPath)
+			assert.FileExists(t, extractedPath)
+			extractedData, err := os.ReadFile(extractedPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedData, extractedData)
+
+			err = filepath.Walk(outputDir, func(_ string, info os.FileInfo, walkErr error) error {
+				require.NoError(t, walkErr)
+				assert.NotContains(t, info.Name(), "\\")
+
+				return nil
+			})
+			require.NoError(t, err)
 		})
 	}
 }
@@ -513,10 +589,10 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		require.Equal(t, []string{"data/script.ks"}, files)
 		assert.False(t, archive.IsEncrypted())
 
-		outputPath := filepath.Join(tmpDir, "out", "script.ks")
-		require.NoError(t, archive.ExtractFile("data/script.ks", outputPath))
+		outputDir := filepath.Join(tmpDir, "out")
+		require.NoError(t, archive.ExtractAll(outputDir))
 
-		extracted, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+		extracted, err := os.ReadFile(filepath.Join(outputDir, "data", "script.ks")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
 		assert.Equal(t, content, extracted)
 	})
@@ -766,44 +842,6 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 
 // --- 複数セグメント対応のテスト ---
 
-func TestXP3FileEntry_TotalSize(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]struct {
-		segments []parser.XP3Segment
-		expected int64
-	}{
-		"正常系: セグメントなしなら合計は0": {
-			segments: nil,
-			expected: 0,
-		},
-		"正常系: 単一セグメントの元サイズがそのまま合計になる": {
-			segments: []parser.XP3Segment{
-				{Offset: 1000, Size: 500, OriginalSize: 800, IsCompressed: true},
-			},
-			expected: 800,
-		},
-		"正常系: 複数セグメントの元サイズが合算される": {
-			segments: []parser.XP3Segment{
-				{Offset: 100, Size: 50, OriginalSize: 101, IsCompressed: true},
-				{Offset: 200, Size: 100, OriginalSize: 192, IsCompressed: true},
-				{Offset: 300, Size: 5000, OriginalSize: 11905, IsCompressed: true},
-			},
-			expected: 101 + 192 + 11905,
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			entry := parser.XP3FileEntry{Name: "test.bin", Segments: tc.segments}
-
-			assert.Equal(t, tc.expected, entry.TotalSize())
-		})
-	}
-}
-
 func TestXP3Archive_MultipleSegments(t *testing.T) {
 	t.Parallel()
 
@@ -857,10 +895,10 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		archive, err := parser.NewXP3Archive(path)
 		require.NoError(t, err)
 
-		outputPath := filepath.Join(tmpDir, "output", "test.bin")
-		require.NoError(t, archive.ExtractFile("test.bin", outputPath))
+		outputDir := filepath.Join(tmpDir, "output")
+		require.NoError(t, archive.ExtractAll(outputDir))
 
-		actual, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
 		assert.Equal(t, expected, actual)
 	})
@@ -892,10 +930,10 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		archive, err := parser.NewXP3Archive(path)
 		require.NoError(t, err)
 
-		outputPath := filepath.Join(tmpDir, "output", "test.bin")
-		require.NoError(t, archive.ExtractFile("test.bin", outputPath))
+		outputDir := filepath.Join(tmpDir, "output")
+		require.NoError(t, archive.ExtractAll(outputDir))
 
-		actual, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
 		require.Len(t, actual, 600)
 		assert.Equal(t, expected, actual)
@@ -928,10 +966,10 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		archive, err := parser.NewXP3Archive(path)
 		require.NoError(t, err)
 
-		outputPath := filepath.Join(tmpDir, "output", "test.bin")
-		require.NoError(t, archive.ExtractFile("test.bin", outputPath))
+		outputDir := filepath.Join(tmpDir, "output")
+		require.NoError(t, archive.ExtractAll(outputDir))
 
-		actual, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
 		assert.Equal(t, expected, actual)
 	})
