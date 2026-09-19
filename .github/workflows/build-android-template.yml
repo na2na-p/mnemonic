@@ -50,6 +50,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The v3 default is 'tools platform-tools', but Google removed the
+          # 'tools' package from the SDK repository, so sdkmanager now exits 1
+          # on it. Everything this build needs is installed explicitly below.
+          packages: 'platform-tools'
 
       - name: Cache Android SDK components
         uses: actions/cache@v4
