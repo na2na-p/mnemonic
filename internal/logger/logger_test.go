@@ -2,8 +2,11 @@ package logger_test
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
+	"errors"
+	"regexp"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,17 +14,6 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/logger"
 )
-
-func TestDefaultLogConfig(t *testing.T) {
-	t.Parallel()
-
-	cfg := logger.DefaultLogConfig()
-
-	assert.Equal(t, logger.Normal, cfg.VerboseLevel)
-	assert.Empty(t, cfg.LogFile)
-	assert.True(t, cfg.UseColor)
-	assert.True(t, cfg.UseEmoji)
-}
 
 func TestVerboseLevel_Ordering(t *testing.T) {
 	t.Parallel()
@@ -31,48 +23,50 @@ func TestVerboseLevel_Ordering(t *testing.T) {
 	assert.Less(t, int(logger.Verbose), int(logger.Debug))
 }
 
-// newLogger はos.Stdout/os.Stderrを介さないテスト用BuildLoggerを生成する。
-// テスト間でt.Parallel()を安全に使うため、実プロセスの標準出力をcapsys相当で
-// 捕捉するのではなく、io.Writerを直接注入する設計とした。
-func newLogger(t *testing.T, cfg logger.LogConfig) (*logger.BuildLogger, *bytes.Buffer, *bytes.Buffer) {
+func newLogger(t *testing.T, level logger.VerboseLevel) (*logger.BuildLogger, *bytes.Buffer, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
-	l, err := logger.NewWithWriters(cfg, stdout, stderr)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = l.Close()
-	})
+	file := &bytes.Buffer{}
 
-	return l, stdout, stderr
+	return logger.New(level, stdout, stderr, file), stdout, stderr, file
 }
 
 func TestBuildLogger_Info(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		level       logger.VerboseLevel
-		wantOutput  bool
-		wantMessage string
+		name  string
+		level logger.VerboseLevel
+		want  bool
 	}{
-		{name: "正常系: NORMALレベルでinfoメッセージが出力される", level: logger.Normal, wantOutput: true},
-		{name: "異常系: QUIETレベルでinfoメッセージが出力されない", level: logger.Quiet, wantOutput: false},
-		{name: "正常系: VERBOSEレベルでinfoメッセージが出力される", level: logger.Verbose, wantOutput: true},
+		{
+			name:  "正常系: NORMALレベルでinfoメッセージが出力される",
+			level: logger.Normal,
+			want:  true,
+		},
+		{
+			name:  "異常系: QUIETレベルでinfoメッセージが出力されない",
+			level: logger.Quiet,
+			want:  false,
+		},
+		{
+			name:  "正常系: VERBOSEレベルでinfoメッセージが出力される",
+			level: logger.Verbose,
+			want:  true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := logger.DefaultLogConfig()
-			cfg.VerboseLevel = tt.level
-			l, stdout, _ := newLogger(t, cfg)
+			l, stdout, _, _ := newLogger(t, tt.level)
 
 			l.Info("テストメッセージ")
 
-			if tt.wantOutput {
+			if tt.want {
 				assert.Contains(t, stdout.String(), "テストメッセージ")
 			} else {
 				assert.Empty(t, stdout.String())
@@ -85,26 +79,36 @@ func TestBuildLogger_Verbose(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		level      logger.VerboseLevel
-		wantOutput bool
+		name  string
+		level logger.VerboseLevel
+		want  bool
 	}{
-		{name: "正常系: VERBOSEレベルでverboseメッセージが出力される", level: logger.Verbose, wantOutput: true},
-		{name: "異常系: NORMALレベルでverboseメッセージが出力されない", level: logger.Normal, wantOutput: false},
-		{name: "正常系: DEBUGレベルでverboseメッセージが出力される", level: logger.Debug, wantOutput: true},
+		{
+			name:  "正常系: VERBOSEレベルでverboseメッセージが出力される",
+			level: logger.Verbose,
+			want:  true,
+		},
+		{
+			name:  "異常系: NORMALレベルでverboseメッセージが出力されない",
+			level: logger.Normal,
+			want:  false,
+		},
+		{
+			name:  "正常系: DEBUGレベルでverboseメッセージが出力される",
+			level: logger.Debug,
+			want:  true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := logger.DefaultLogConfig()
-			cfg.VerboseLevel = tt.level
-			l, stdout, _ := newLogger(t, cfg)
+			l, stdout, _, _ := newLogger(t, tt.level)
 
 			l.Verbose("詳細メッセージ")
 
-			if tt.wantOutput {
+			if tt.want {
 				assert.Contains(t, stdout.String(), "詳細メッセージ")
 			} else {
 				assert.Empty(t, stdout.String())
@@ -117,26 +121,36 @@ func TestBuildLogger_Debug(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		level      logger.VerboseLevel
-		wantOutput bool
+		name  string
+		level logger.VerboseLevel
+		want  bool
 	}{
-		{name: "正常系: DEBUGレベルでdebugメッセージが出力される", level: logger.Debug, wantOutput: true},
-		{name: "異常系: VERBOSEレベルでdebugメッセージが出力されない", level: logger.Verbose, wantOutput: false},
-		{name: "異常系: NORMALレベルでdebugメッセージが出力されない", level: logger.Normal, wantOutput: false},
+		{
+			name:  "正常系: DEBUGレベルでdebugメッセージが出力される",
+			level: logger.Debug,
+			want:  true,
+		},
+		{
+			name:  "異常系: VERBOSEレベルでdebugメッセージが出力されない",
+			level: logger.Verbose,
+			want:  false,
+		},
+		{
+			name:  "異常系: NORMALレベルでdebugメッセージが出力されない",
+			level: logger.Normal,
+			want:  false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := logger.DefaultLogConfig()
-			cfg.VerboseLevel = tt.level
-			l, stdout, _ := newLogger(t, cfg)
+			l, stdout, _, _ := newLogger(t, tt.level)
 
 			l.Debug("デバッグメッセージ")
 
-			if tt.wantOutput {
+			if tt.want {
 				assert.Contains(t, stdout.String(), "デバッグメッセージ")
 			} else {
 				assert.Empty(t, stdout.String())
@@ -148,290 +162,390 @@ func TestBuildLogger_Debug(t *testing.T) {
 func TestBuildLogger_Error(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: エラーメッセージは常に出力される", func(t *testing.T) {
-		t.Parallel()
+	tests := []struct {
+		name  string
+		level logger.VerboseLevel
+	}{
+		{
+			name:  "正常系: QUIETでも出力される",
+			level: logger.Quiet,
+		},
+		{
+			name:  "正常系: NORMALでも標準エラーへ出力される",
+			level: logger.Normal,
+		},
+	}
 
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Quiet
-		l, _, stderr := newLogger(t, cfg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		l.Error("エラーメッセージ")
+			l, stdout, stderr, _ := newLogger(t, tt.level)
 
-		assert.Contains(t, stderr.String(), "エラー")
-		assert.Contains(t, stderr.String(), "エラーメッセージ")
-	})
+			l.Error("エラーメッセージ")
 
-	t.Run("正常系: エラーメッセージは標準エラー出力に出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		l, stdout, stderr := newLogger(t, cfg)
-
-		l.Error("エラーメッセージ")
-
-		assert.Empty(t, stdout.String())
-		assert.Contains(t, stderr.String(), "エラーメッセージ")
-	})
+			assert.Empty(t, stdout.String())
+			assert.Contains(t, stderr.String(), "エラー: エラーメッセージ")
+		})
+	}
 }
 
 func TestBuildLogger_Warning(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: NORMALレベルで警告メッセージが出力される", func(t *testing.T) {
-		t.Parallel()
+	tests := []struct {
+		name  string
+		level logger.VerboseLevel
+		want  bool
+	}{
+		{
+			name:  "正常系: NORMALレベルで警告メッセージが出力される",
+			level: logger.Normal,
+			want:  true,
+		},
+		{
+			name:  "異常系: QUIETレベルで警告メッセージが出力されない",
+			level: logger.Quiet,
+			want:  false,
+		},
+	}
 
-		cfg := logger.DefaultLogConfig()
-		l, stdout, _ := newLogger(t, cfg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-		l.Warning("警告メッセージ")
+			l, stdout, _, _ := newLogger(t, tt.level)
 
-		assert.Contains(t, stdout.String(), "警告")
-		assert.Contains(t, stdout.String(), "警告メッセージ")
-	})
+			l.Warning("警告メッセージ")
 
-	t.Run("異常系: QUIETレベルで警告メッセージが出力されない", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Quiet
-		l, stdout, _ := newLogger(t, cfg)
-
-		l.Warning("警告メッセージ")
-
-		assert.Empty(t, stdout.String())
-	})
-}
-
-func TestBuildLogger_LogCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: DEBUGレベルでコマンドログが出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Debug
-		l, stdout, _ := newLogger(t, cfg)
-
-		l.LogCommand([]string{"ffmpeg", "-i", "input.mp4"}, "output line 1\noutput line 2")
-
-		out := stdout.String()
-		assert.Contains(t, out, "ffmpeg -i input.mp4")
-		assert.Contains(t, out, "output line 1")
-		assert.Contains(t, out, "output line 2")
-	})
-
-	t.Run("異常系: NORMALレベルでコマンドログが出力されない", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		l, stdout, _ := newLogger(t, cfg)
-
-		l.LogCommand([]string{"ffmpeg", "-i", "input.mp4"}, "output")
-
-		assert.Empty(t, stdout.String())
-	})
-}
-
-func TestBuildLogger_LogConversion(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: VERBOSEレベルで変換ログが出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Verbose
-		l, stdout, _ := newLogger(t, cfg)
-
-		l.LogConversion("input.ogg", "output.mp3", "OK")
-
-		out := stdout.String()
-		assert.Contains(t, out, "input.ogg")
-		assert.Contains(t, out, "output.mp3")
-		assert.Contains(t, out, "OK")
-	})
-
-	t.Run("異常系: NORMALレベルで変換ログが出力されない", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		l, stdout, _ := newLogger(t, cfg)
-
-		l.LogConversion("input.ogg", "output.mp3", "OK")
-
-		assert.Empty(t, stdout.String())
-	})
-}
-
-func TestBuildLogger_LogSummary(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: emojiありでサマリが出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.UseEmoji = true
-		l, stdout, _ := newLogger(t, cfg)
-		outputPath := "game.apk"
-
-		l.LogSummary(logger.Statistics{OutputPath: &outputPath, OutputSize: 10485760})
-
-		out := stdout.String()
-		assert.Contains(t, out, "Build complete")
-		assert.Contains(t, out, "game.apk")
-		assert.Contains(t, out, "10.0 MB")
-	})
-
-	t.Run("正常系: emojiなしでサマリが出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.UseEmoji = false
-		l, stdout, _ := newLogger(t, cfg)
-		outputPath := "game.apk"
-
-		l.LogSummary(logger.Statistics{OutputPath: &outputPath, OutputSize: 10485760})
-
-		out := stdout.String()
-		assert.Contains(t, out, "[OK]")
-		assert.Contains(t, out, "Build complete")
-	})
-
-	t.Run("正常系: パッケージ名が出力される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		l, stdout, _ := newLogger(t, cfg)
-		packageName := "com.example.game"
-
-		l.LogSummary(logger.Statistics{PackageName: &packageName})
-
-		assert.Contains(t, stdout.String(), "com.example.game")
-	})
-
-	t.Run("異常系: QUIETレベルでサマリが出力されない", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Quiet
-		l, stdout, _ := newLogger(t, cfg)
-		outputPath := "game.apk"
-
-		l.LogSummary(logger.Statistics{OutputPath: &outputPath})
-
-		assert.Empty(t, stdout.String())
-	})
-}
-
-func TestBuildLogger_CreateProgress(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: 進捗表示インスタンスを返す", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		l, _, _ := newLogger(t, cfg)
-
-		progress := l.CreateProgress()
-
-		assert.NotNil(t, progress)
-	})
-
-	t.Run("正常系: 設定が進捗表示に反映される", func(t *testing.T) {
-		t.Parallel()
-
-		cfg := logger.DefaultLogConfig()
-		cfg.UseColor = false
-		cfg.UseEmoji = false
-		l, _, _ := newLogger(t, cfg)
-
-		progress, ok := l.CreateProgress().(*logger.ConsoleProgressDisplay)
-
-		require.True(t, ok)
-		assert.False(t, progress.UseColor())
-		assert.False(t, progress.UseEmoji())
-	})
+			if tt.want {
+				assert.Contains(t, stdout.String(), "警告: 警告メッセージ")
+			} else {
+				assert.Empty(t, stdout.String())
+			}
+		})
+	}
 }
 
 func TestBuildLogger_FileOutput(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: ファイルにログが出力される", func(t *testing.T) {
+	t.Run("正常系: INFOとANSI除去の行形式", func(t *testing.T) {
 		t.Parallel()
 
-		logFile := filepath.Join(t.TempDir(), "test.log")
-		cfg := logger.DefaultLogConfig()
-		cfg.LogFile = logFile
-		l, err := logger.New(cfg)
-		require.NoError(t, err)
+		l, _, _, file := newLogger(t, logger.Normal)
 
-		l.Info("テストメッセージ")
-		require.NoError(t, l.Close())
+		l.Info("\x1b[32mテストメッセージ\x1b[0m")
 
-		content, err := os.ReadFile(logFile) //nolint:gosec // テストコードで生成したパスを読むだけのため妥当
-		require.NoError(t, err)
-		assert.Contains(t, string(content), "INFO")
-		assert.Contains(t, string(content), "テストメッセージ")
+		assert.Regexp(t, `^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] INFO: テストメッセージ\n$`, file.String())
+		assert.NotContains(t, file.String(), "\x1b[")
 	})
 
-	t.Run("正常系: ファイル出力はANSIエスケープシーケンスを除去する", func(t *testing.T) {
+	t.Run("正常系: QUIETでも全レベルがファイルへ出力される", func(t *testing.T) {
 		t.Parallel()
 
-		logFile := filepath.Join(t.TempDir(), "test.log")
-		cfg := logger.DefaultLogConfig()
-		cfg.LogFile = logFile
-		l, err := logger.New(cfg)
-		require.NoError(t, err)
-
-		l.Info("\x1b[32mカラーメッセージ\x1b[0m")
-		require.NoError(t, l.Close())
-
-		content, err := os.ReadFile(logFile) //nolint:gosec // テストコードで生成したパスを読むだけのため妥当
-		require.NoError(t, err)
-		assert.NotContains(t, string(content), "\x1b[")
-		assert.Contains(t, string(content), "カラーメッセージ")
-	})
-
-	t.Run("正常系: Closeがファイルを閉じる", func(t *testing.T) {
-		t.Parallel()
-
-		logFile := filepath.Join(t.TempDir(), "test.log")
-		cfg := logger.DefaultLogConfig()
-		cfg.LogFile = logFile
-		l, err := logger.New(cfg)
-		require.NoError(t, err)
-
-		l.Info("テスト")
-		require.NoError(t, l.Close())
-
-		assert.True(t, l.Closed())
-		// Close後の再Closeはエラーにならない（べき等な設計）
-		assert.NoError(t, l.Close())
-	})
-
-	t.Run("正常系: 全てのログレベルがファイルに書き込まれる", func(t *testing.T) {
-		t.Parallel()
-
-		logFile := filepath.Join(t.TempDir(), "test.log")
-		cfg := logger.DefaultLogConfig()
-		cfg.VerboseLevel = logger.Quiet
-		cfg.LogFile = logFile
-		l, err := logger.New(cfg)
-		require.NoError(t, err)
+		l, _, _, file := newLogger(t, logger.Quiet)
 
 		l.Info("INFO message")
 		l.Verbose("VERBOSE message")
 		l.Debug("DEBUG message")
 		l.Warning("WARNING message")
 		l.Error("ERROR message")
-		require.NoError(t, l.Close())
 
-		content, err := os.ReadFile(logFile) //nolint:gosec // テストコードで生成したパスを読むだけのため妥当
-		require.NoError(t, err)
-		text := string(content)
-		assert.Contains(t, text, "INFO: INFO message")
-		assert.Contains(t, text, "VERBOSE: VERBOSE message")
-		assert.Contains(t, text, "DEBUG: DEBUG message")
-		assert.Contains(t, text, "WARNING: WARNING message")
-		assert.Contains(t, text, "ERROR: ERROR message")
+		for _, text := range []string{
+			"INFO: INFO message", "VERBOSE: VERBOSE message", "DEBUG: DEBUG message",
+			"WARNING: WARNING message", "ERROR: ERROR message",
+		} {
+			assert.Contains(t, file.String(), text)
+		}
 	})
+}
+
+func TestBuildLogger_LogConversion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		level logger.VerboseLevel
+		want  bool
+	}{
+		{
+			name:  "正常系: VERBOSEレベルで変換ログが出力される",
+			level: logger.Verbose,
+			want:  true,
+		},
+		{
+			name:  "異常系: NORMALレベルで変換ログが出力されない",
+			level: logger.Normal,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l, stdout, _, _ := newLogger(t, tt.level)
+
+			l.LogConversion("bg/a.png", "bg/a.png", "OK")
+			l.LogConversion("fg/a.png", "fg/a.png", "OK")
+
+			if tt.want {
+				assert.Contains(t, stdout.String(), "変換: bg/a.png -> bg/a.png [OK]")
+				assert.Contains(t, stdout.String(), "変換: fg/a.png -> fg/a.png [OK]")
+			} else {
+				assert.Empty(t, stdout.String())
+			}
+		})
+	}
+}
+
+func TestBuildLogger_LogCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		level      logger.VerboseLevel
+		wantOutput bool
+		succeeded  bool
+	}{
+		{
+			name:       "正常系: DEBUGレベルで成功コマンドログが出力される",
+			level:      logger.Debug,
+			wantOutput: true,
+			succeeded:  true,
+		},
+		{
+			name:       "正常系: DEBUGレベルで失敗コマンドログが出力される",
+			level:      logger.Debug,
+			wantOutput: true,
+			succeeded:  false,
+		},
+		{
+			name:       "異常系: NORMALレベルでコマンドログが出力されない",
+			level:      logger.Normal,
+			wantOutput: false,
+			succeeded:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			l, stdout, _, _ := newLogger(t, tt.level)
+
+			l.LogCommand([]string{"ffmpeg", "-i", "input.mp4"}, tt.succeeded)
+
+			if tt.wantOutput {
+				assert.Contains(t, stdout.String(), "ffmpeg -i input.mp4")
+				if tt.succeeded {
+					assert.Contains(t, stdout.String(), "[成功]")
+				} else {
+					assert.Contains(t, stdout.String(), "[失敗]")
+				}
+			} else {
+				assert.Empty(t, stdout.String())
+			}
+		})
+	}
+}
+
+func TestBuildLogger_Redaction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		argv    []string
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "正常系: apksignerの秘密引数を伏字化する",
+			argv: []string{
+				"apksigner",
+				"sign",
+				"--ks",
+				"/k.jks",
+				"--ks-key-alias",
+				"a",
+				"--ks-pass",
+				"pass:S3cret!",
+				"--key-pass",
+				"pass:K3y!",
+				"--out",
+				"o.apk",
+				"in.apk",
+			},
+			want: []string{
+				"--ks-pass ***",
+				"--key-pass ***",
+				"--ks /k.jks",
+				"--ks-key-alias a",
+			},
+			notWant: []string{"S3cret!", "K3y!"},
+		},
+		{
+			name: "正常系: keytoolの秘密引数を伏字化する",
+			argv: []string{
+				"keytool",
+				"-genkeypair",
+				"-keystore",
+				"/k.jks",
+				"-storepass",
+				"android",
+				"-keypass",
+				"android",
+				"-alias",
+				"a",
+			},
+			want: []string{
+				"-storepass ***",
+				"-keypass ***",
+				"-keystore /k.jks",
+			},
+			notWant: []string{"android"},
+		},
+		{
+			name:    "正常系: 等号形式の秘密引数を伏字化する",
+			argv:    []string{"--ks-pass=pass:S3cret!"},
+			want:    []string{"--ks-pass=***"},
+			notWant: []string{"S3cret!"},
+		},
+		{
+			name: "正常系: 末尾の秘密フラグをそのまま記録する",
+			argv: []string{"--ks-pass"},
+			want: []string{"--ks-pass"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			original := slices.Clone(tt.argv)
+			l, stdout, _, file := newLogger(t, logger.Debug)
+
+			l.LogCommand(tt.argv, true)
+
+			for _, text := range tt.want {
+				assert.Contains(t, stdout.String(), text)
+				assert.Contains(t, file.String(), text)
+			}
+			for _, text := range tt.notWant {
+				assert.NotContains(t, stdout.String(), text)
+				assert.NotContains(t, file.String(), text)
+			}
+			assert.Equal(t, original, tt.argv)
+		})
+	}
+}
+
+func TestBuildLogger_NilFile(t *testing.T) {
+	t.Parallel()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	l := logger.New(logger.Debug, stdout, stderr, nil)
+
+	l.Info("info")
+	l.Verbose("verbose")
+	l.Debug("debug")
+	l.Warning("warning")
+	l.Error("error")
+	l.LogConversion("a", "b", "OK")
+	l.LogCommand([]string{"cmd"}, true)
+
+	assert.NotEmpty(t, stdout.String())
+	assert.NotEmpty(t, stderr.String())
+	assert.NoError(t, l.Err())
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestBuildLogger_WriteErrors(t *testing.T) {
+	t.Parallel()
+
+	first := errors.New("first")
+	second := errors.New("second")
+
+	t.Run("異常系: ファイル失敗でもコンソールへ書き込む", func(t *testing.T) {
+		t.Parallel()
+
+		stdout := &bytes.Buffer{}
+		l := logger.New(logger.Normal, stdout, &bytes.Buffer{}, failingWriter{first})
+
+		l.Info("message")
+
+		require.Error(t, l.Err())
+		require.ErrorIs(t, l.Err(), first)
+		assert.Contains(t, stdout.String(), "message")
+	})
+	t.Run("異常系: 標準出力失敗でもファイルへ書き込む", func(t *testing.T) {
+		t.Parallel()
+
+		file := &bytes.Buffer{}
+		l := logger.New(logger.Normal, failingWriter{first}, &bytes.Buffer{}, file)
+
+		l.Info("message")
+
+		require.Error(t, l.Err())
+		require.ErrorIs(t, l.Err(), first)
+		assert.Contains(t, file.String(), "INFO: message")
+	})
+	t.Run("異常系: 最初のエラーを保持する", func(t *testing.T) {
+		t.Parallel()
+
+		l := logger.New(logger.Normal, failingWriter{first}, failingWriter{second}, nil)
+
+		l.Info("message")
+		l.Error("error")
+
+		require.ErrorIs(t, l.Err(), first)
+		require.NotErrorIs(t, l.Err(), second)
+	})
+	t.Run("正常系: 失敗がなければnil", func(t *testing.T) {
+		t.Parallel()
+
+		l, _, _, _ := newLogger(t, logger.Normal)
+
+		l.Info("message")
+
+		assert.NoError(t, l.Err())
+	})
+}
+
+func TestBuildLogger_ConcurrentWrites(t *testing.T) {
+	t.Parallel()
+
+	stdout := &bytes.Buffer{}
+	file := &bytes.Buffer{}
+	l := logger.New(logger.Normal, stdout, &bytes.Buffer{}, file)
+	var wg sync.WaitGroup
+
+	for range 16 {
+		wg.Go(func() {
+			for range 50 {
+				l.Info("並行メッセージ")
+			}
+		})
+	}
+	wg.Wait()
+
+	linePattern := regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] INFO: 並行メッセージ$`)
+	fileLines := strings.Split(strings.TrimSuffix(file.String(), "\n"), "\n")
+	stdoutLines := strings.Split(strings.TrimSuffix(stdout.String(), "\n"), "\n")
+
+	require.Len(t, fileLines, 800)
+	require.Len(t, stdoutLines, 800)
+	for _, line := range fileLines {
+		assert.Regexp(t, linePattern, line)
+	}
+	for _, line := range stdoutLines {
+		assert.Equal(t, "並行メッセージ", line)
+	}
 }
