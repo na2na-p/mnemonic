@@ -10,6 +10,26 @@ import (
 	"unicode/utf8"
 )
 
+// RuleCategory はスクリプト調整ルールの用途を表すカテゴリ。
+type RuleCategory string
+
+const (
+	// RuleCategoryPlugin はプラグインDLLを扱うルールのカテゴリ。
+	RuleCategoryPlugin RuleCategory = "plugin"
+	// RuleCategorySavePath はセーブデータのパスを扱うルールのカテゴリ。
+	RuleCategorySavePath RuleCategory = "save_path"
+	// RuleCategoryMidiAsset はMIDIアセットを扱うルールのカテゴリ。
+	RuleCategoryMidiAsset RuleCategory = "midi_asset"
+	// RuleCategoryVideoAsset は動画アセットを扱うルールのカテゴリ。
+	RuleCategoryVideoAsset RuleCategory = "video_asset"
+	// RuleCategoryLayerAlpha はレイヤー透過を扱うルールのカテゴリ。
+	RuleCategoryLayerAlpha RuleCategory = "layer_alpha"
+	// RuleCategoryFont はフォントを扱うルールのカテゴリ。
+	RuleCategoryFont RuleCategory = "font"
+	// RuleCategoryFinalizeGuard はfinalizeの未初期化アクセスを扱うルールのカテゴリ。
+	RuleCategoryFinalizeGuard RuleCategory = "finalize_guard"
+)
+
 // AdjustmentRule はスクリプト調整ルールを表す不変値。
 //
 // 正規表現パターンと置換文字列のペアを保持する。Patternは
@@ -26,6 +46,7 @@ type AdjustmentRule struct {
 	Pattern     string
 	Replacement string
 	Description string
+	Category    RuleCategory
 	Apply       func(content string) (string, int)
 }
 
@@ -39,36 +60,43 @@ var DefaultRules = []AdjustmentRule{
 		Pattern:     `^(\s*)(Plugins\.link\(["'].*?\.dll["']\);)`,
 		Replacement: `$1// $2 // Disabled for Android`,
 		Description: "プラグインDLL読み込みの無効化",
+		Category:    RuleCategoryPlugin,
 	},
 	{
 		Pattern:     `saveDataLocation\s*=\s*System\.exePath\s*\+\s*saveDataLocation`,
 		Replacement: `saveDataLocation = System.dataPath`,
 		Description: "セーブデータパスをdataPathに変更（Android対応）",
+		Category:    RuleCategorySavePath,
 	},
 	{
 		Pattern:     `MIDISoundBuffer`,
 		Replacement: `WaveSoundBuffer`,
 		Description: "MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+		Category:    RuleCategoryMidiAsset,
 	},
 	{
 		Pattern:     `^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)`,
 		Replacement: `$1; // $2 // Disabled: midiOut not available in WaveSoundBuffer`,
 		Description: "WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
+		Category:    RuleCategoryMidiAsset,
 	},
 	{
 		Pattern:     `(["'])([^"']*?)\.mid(["'])`,
 		Replacement: `$1$2.ogg$3`,
 		Description: "MIDI参照をOGGに変換（.mid → .ogg）",
+		Category:    RuleCategoryMidiAsset,
 	},
 	{
 		Pattern:     `(["'])([^"']*?)\.midi(["'])`,
 		Replacement: `$1$2.ogg$3`,
 		Description: "MIDI参照をOGGに変換（.midi → .ogg）",
+		Category:    RuleCategoryMidiAsset,
 	},
 	{
 		Pattern:     `storage \+ "\.mid\.ogg"`,
 		Replacement: `storage + ".ogg"`,
 		Description: "MIDI検索パターンを修正（.mid.ogg → .ogg）",
+		Category:    RuleCategoryMidiAsset,
 	},
 	// VideoConverterはmpeg1video+mp2への変換後、常に.mpg拡張子で出力する
 	// (video.goのGetOutputExtension参照)。.mpgは対象外のため
@@ -83,16 +111,19 @@ var DefaultRules = []AdjustmentRule{
 		Pattern:     `(["'])([^"']*?)\.(?i:wmv)(["'])`,
 		Replacement: `$1$2.mpg$3`,
 		Description: "動画参照をMPEGに変換（.wmv → .mpg）",
+		Category:    RuleCategoryVideoAsset,
 	},
 	{
 		Pattern:     `(["'])([^"']*?)\.(?i:avi)(["'])`,
 		Replacement: `$1$2.mpg$3`,
 		Description: "動画参照をMPEGに変換（.avi → .mpg）",
+		Category:    RuleCategoryVideoAsset,
 	},
 	{
 		Pattern:     `(["'])([^"']*?)\.(?i:mpeg)(["'])`,
 		Replacement: `$1$2.mpg$3`,
 		Description: "動画参照をMPEGに変換（.mpeg → .mpg）",
+		Category:    RuleCategoryVideoAsset,
 	},
 	// loadpluginタグのDLL参照をlibプレフィックス付き.soに変換（extrans.dll → libextrans.so）。
 	// krkrsdl2はTVPLocatePluginで.dll→.so変換のみ行い、libプレフィックスは付与しない。
@@ -101,18 +132,21 @@ var DefaultRules = []AdjustmentRule{
 		Pattern:     `\[loadplugin\s+module="extrans\.dll"\]`,
 		Replacement: `[loadplugin module="libextrans.so"]`,
 		Description: "extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
+		Category:    RuleCategoryPlugin,
 	},
 	// wuvorbis.dllをlibwuvorbis.soに変換（Ogg Vorbis再生に必要）。
 	{
 		Pattern:     `\[loadplugin\s+module="wuvorbis\.dll"\]`,
 		Replacement: `[loadplugin module="libwuvorbis.so"]`,
 		Description: "wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
+		Category:    RuleCategoryPlugin,
 	},
 	// krmovie.dllはkrkrsdl2で未実装のためコメントアウト。
 	{
 		Pattern:     `(\[loadplugin\s+module="krmovie\.dll"\])`,
 		Replacement: `;# $1 # Disabled: not supported on krkrsdl2`,
 		Description: "krmovie.dllをコメントアウト（krkrsdl2未対応）",
+		Category:    RuleCategoryPlugin,
 	},
 	// その他のDLLプラグインをコメントアウト（extrans以外）。
 	//
@@ -134,6 +168,7 @@ var DefaultRules = []AdjustmentRule{
 		Pattern:     `(\[loadplugin\s+module="[^"]*\.dll"\])`,
 		Replacement: `;# $1 # Disabled for Android`,
 		Description: "その他のDLLプラグインをコメントアウト",
+		Category:    RuleCategoryPlugin,
 	},
 	// レイヤー透過修正: [layopt layer=N] に type=alpha を自動追加。
 	// krkrsdl2のSIMDeエミュレーション問題により、明示的なtype指定が必要。
@@ -143,18 +178,9 @@ var DefaultRules = []AdjustmentRule{
 	// type=の有無を判定するapplyLayoptAlphaRuleへ委譲する。
 	{
 		Description: "レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
+		Category:    RuleCategoryLayerAlpha,
 		Apply:       applyLayoptAlphaRule,
 	},
-}
-
-// videoExtensionRuleDescriptions はDefaultRules中の動画拡張子書き換えルール
-// (.wmv/.avi/.mpeg → .mpg)を識別するDescriptionの集合。AdjustmentRuleに
-// カテゴリを表すフィールドが無いため、TestScriptAdjuster_DefaultRulesOrderと
-// 同様にDescriptionを識別子として扱う。
-var videoExtensionRuleDescriptions = map[string]bool{
-	"動画参照をMPEGに変換（.wmv → .mpg）":  true,
-	"動画参照をMPEGに変換（.avi → .mpg）":  true,
-	"動画参照をMPEGに変換（.mpeg → .mpg）": true,
 }
 
 // DefaultRulesWithoutVideoExtensions はDefaultRulesから動画拡張子書き換え
@@ -170,7 +196,7 @@ func DefaultRulesWithoutVideoExtensions() []AdjustmentRule {
 	filtered := make([]AdjustmentRule, 0, len(DefaultRules))
 
 	for _, rule := range DefaultRules {
-		if videoExtensionRuleDescriptions[rule.Description] {
+		if rule.Category == RuleCategoryVideoAsset {
 			continue
 		}
 
@@ -427,16 +453,19 @@ var messageLayerCompatRules = []AdjustmentRule{
 		Pattern:     `\bvar face;`,
 		Replacement: `var fontFace;`,
 		Description: "フォント用faceメンバ宣言をfontFaceにリネーム（krkrsdl2対応）",
+		Category:    RuleCategoryFont,
 	},
 	{
 		Pattern:     `font\.face = face =`,
 		Replacement: `font.face = fontFace =`,
 		Description: "font.faceへの連鎖代入をfontFaceにリネーム（krkrsdl2対応）",
+		Category:    RuleCategoryFont,
 	},
 	{
 		Pattern:     `'@' \+ \(face =`,
 		Replacement: `'@' + (fontFace =`,
 		Description: "アットマーク付きフォント名代入をfontFaceにリネーム（krkrsdl2対応）",
+		Category:    RuleCategoryFont,
 	},
 	{
 		// why not(\bのみにしない理由): \bはドット直後にも成立するため
@@ -445,6 +474,7 @@ var messageLayerCompatRules = []AdjustmentRule{
 		Pattern:     `(^|[^.\w])face = src\.face;`,
 		Replacement: `${1}fontFace = src.fontFace;`,
 		Description: "assignからのフォント名コピーをfontFaceにリネーム（krkrsdl2対応）",
+		Category:    RuleCategoryFont,
 	},
 }
 
@@ -470,21 +500,25 @@ var mainWindowCompatRules = []AdjustmentRule{
 		Pattern:     `for\(var i = 0; i< fore\.layers\.count; i\+\+\) invalidate fore\.layers\[i\];`,
 		Replacement: `if(typeof fore.layers != "undefined") for(var i = 0; i< fore.layers.count; i++) invalidate fore.layers[i];`,
 		Description: "finalizeでのfore.layers未初期化アクセスをガード（krkrsdl2対応）",
+		Category:    RuleCategoryFinalizeGuard,
 	},
 	{
 		Pattern:     `for\(var i = 0; i< back\.layers\.count; i\+\+\) invalidate back\.layers\[i\];`,
 		Replacement: `if(typeof back.layers != "undefined") for(var i = 0; i< back.layers.count; i++) invalidate back.layers[i];`,
 		Description: "finalizeでのback.layers未初期化アクセスをガード（krkrsdl2対応）",
+		Category:    RuleCategoryFinalizeGuard,
 	},
 	{
 		Pattern:     `for\(var i = 0; i< fore\.messages\.count; i\+\+\) invalidate fore\.messages\[i\];`,
 		Replacement: `if(typeof fore.messages != "undefined") for(var i = 0; i< fore.messages.count; i++) invalidate fore.messages[i];`,
 		Description: "finalizeでのfore.messages未初期化アクセスをガード（krkrsdl2対応）",
+		Category:    RuleCategoryFinalizeGuard,
 	},
 	{
 		Pattern:     `for\(var i = 0; i< back\.messages\.count; i\+\+\) invalidate back\.messages\[i\];`,
 		Replacement: `if(typeof back.messages != "undefined") for(var i = 0; i< back.messages.count; i++) invalidate back.messages[i];`,
 		Description: "finalizeでのback.messages未初期化アクセスをガード（krkrsdl2対応）",
+		Category:    RuleCategoryFinalizeGuard,
 	},
 }
 
