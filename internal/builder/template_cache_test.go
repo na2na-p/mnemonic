@@ -286,19 +286,3 @@ func TestTemplateCache_SaveTemplate(t *testing.T) {
 		assert.True(t, os.IsNotExist(err))
 	})
 }
-
-func TestTemplateCache_ClearCache(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: CacheManager.ClearCacheがtemplateOnly=trueで呼び出される", func(t *testing.T) {
-		t.Parallel()
-
-		ctrl := gomock.NewController(t)
-		mockManager := NewMockCacheManager(ctrl)
-		mockManager.EXPECT().ClearCache(true).Return(nil)
-
-		c := builder.NewTemplateCache(mockManager, 0)
-
-		require.NoError(t, c.ClearCache())
-	})
-}

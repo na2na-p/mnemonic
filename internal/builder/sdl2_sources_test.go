@@ -190,23 +190,6 @@ func TestSDL2SourceCache_GetCachedAt(t *testing.T) {
 	})
 }
 
-func TestSDL2SourceCache_GetCacheInfo(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: SDL2SourceCacheInfoを返す", func(t *testing.T) {
-		t.Parallel()
-
-		cache := builder.NewSDL2SourceCache(t.TempDir())
-		writeValidSDL2Cache(t, cache)
-
-		info := cache.GetCacheInfo()
-
-		assert.True(t, info.IsValid)
-		assert.Equal(t, cache.CachePath(), info.CachePath)
-		require.NotNil(t, info.CachedAt)
-	})
-}
-
 func TestSDL2SourceCache_Save(t *testing.T) {
 	t.Parallel()
 
@@ -223,7 +206,7 @@ func TestSDL2SourceCache_Save(t *testing.T) {
 
 		require.NoError(t, cache.Save(sourceDir))
 
-		cachedFile := filepath.Join(cache.GetSourceFilesPath(), "SDLActivity.java")
+		cachedFile := filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")
 		content, err := os.ReadFile(cachedFile) //nolint:gosec // テストで生成した固定パス
 		require.NoError(t, err)
 		assert.Equal(t, "test content", string(content))
@@ -263,7 +246,7 @@ func TestSDL2SourceCache_Save(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(orgDir2, "SDLActivity.java"), []byte("new content"), 0o600))
 		require.NoError(t, cache.Save(source2))
 
-		content, err := os.ReadFile(filepath.Join(cache.GetSourceFilesPath(), "SDLActivity.java")) //nolint:gosec // テストで生成した固定パス
+		content, err := os.ReadFile(filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")) //nolint:gosec // テストで生成した固定パス
 		require.NoError(t, err)
 		assert.Equal(t, "new content", string(content))
 	})
@@ -306,37 +289,6 @@ func TestSDL2SourceCache_RestoreTo(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
 		assert.ErrorContains(t, err, "有効なキャッシュがありません")
-	})
-}
-
-func TestSDL2SourceCache_Clear(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: キャッシュディレクトリを削除する", func(t *testing.T) {
-		t.Parallel()
-
-		base := t.TempDir()
-		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
-
-		sourceDir := filepath.Join(base, "source")
-		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
-		require.NoError(t, os.MkdirAll(orgDir, 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(orgDir, "SDLActivity.java"), []byte("test content"), 0o600))
-		require.NoError(t, cache.Save(sourceDir))
-
-		require.DirExists(t, cache.CachePath())
-
-		require.NoError(t, cache.Clear())
-
-		assert.NoDirExists(t, cache.CachePath())
-	})
-
-	t.Run("正常系: キャッシュが存在しなくてもエラーにならない", func(t *testing.T) {
-		t.Parallel()
-
-		cache := builder.NewSDL2SourceCache(filepath.Join(t.TempDir(), "cache"))
-
-		assert.NoError(t, cache.Clear())
 	})
 }
 

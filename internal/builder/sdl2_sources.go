@@ -57,14 +57,6 @@ const (
 // sdl2CacheMarkerTimeLayout はキャッシュ作成日時マーカーの日時フォーマット。
 const sdl2CacheMarkerTimeLayout = time.RFC3339Nano
 
-// SDL2SourceCacheInfo はキャッシュ情報を表す不変値。
-type SDL2SourceCacheInfo struct {
-	// CachedAt はキャッシュ作成日時。未作成の場合はnil。
-	CachedAt  *time.Time
-	IsValid   bool
-	CachePath string
-}
-
 // SDL2SourceCache はSDL2 Javaソースのキャッシュを管理する。
 type SDL2SourceCache struct {
 	cacheDir string
@@ -79,11 +71,6 @@ func NewSDL2SourceCache(cacheDir string) *SDL2SourceCache {
 // CachePath はキャッシュディレクトリのパスを返す。
 func (c *SDL2SourceCache) CachePath() string {
 	return c.cacheDir
-}
-
-// GetSourceFilesPath はキャッシュされたソースファイルのパス（org/libsdl/app）を返す。
-func (c *SDL2SourceCache) GetSourceFilesPath() string {
-	return filepath.Join(c.cacheDir, "org", "libsdl", "app")
 }
 
 // IsValid はキャッシュが有効か確認する。
@@ -127,20 +114,6 @@ func (c *SDL2SourceCache) GetCachedAt() (time.Time, bool) {
 	}
 
 	return cachedAt, true
-}
-
-// GetCacheInfo はキャッシュ情報を取得する。
-func (c *SDL2SourceCache) GetCacheInfo() SDL2SourceCacheInfo {
-	info := SDL2SourceCacheInfo{
-		IsValid:   c.IsValid(),
-		CachePath: c.cacheDir,
-	}
-
-	if cachedAt, ok := c.GetCachedAt(); ok {
-		info.CachedAt = &cachedAt
-	}
-
-	return info
 }
 
 // Save はソースをキャッシュに保存する。sourcesDirはorgディレクトリを含む
@@ -189,16 +162,6 @@ func (c *SDL2SourceCache) RestoreTo(destDir string) error {
 
 	if err := copyDir(srcOrgDir, destOrgDir); err != nil {
 		return fmt.Errorf("%w: %w: キャッシュ復元に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
-	}
-
-	return nil
-}
-
-// Clear はキャッシュを削除する。キャッシュが存在しない場合もエラーにはならない
-// （os.RemoveAllの仕様に準拠）。
-func (c *SDL2SourceCache) Clear() error {
-	if err := os.RemoveAll(c.cacheDir); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ削除に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
 	}
 
 	return nil

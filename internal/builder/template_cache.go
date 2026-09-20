@@ -36,8 +36,6 @@ type CacheManager interface {
 	GetCacheDir() (string, error)
 	// GetTemplateCachePath はversionに対応するキャッシュパスを返す。
 	GetTemplateCachePath(version string) (string, error)
-	// ClearCache はキャッシュを削除する。templateOnly=trueの場合はテンプレートのみ削除する。
-	ClearCache(templateOnly bool) error
 }
 
 // defaultCacheManager はinternal/cacheパッケージを利用するCacheManagerの既定実装。
@@ -54,10 +52,6 @@ func (defaultCacheManager) GetCacheDir() (string, error) {
 
 func (defaultCacheManager) GetTemplateCachePath(version string) (string, error) {
 	return cache.TemplateCachePath(version)
-}
-
-func (defaultCacheManager) ClearCache(templateOnly bool) error {
-	return cache.ClearCache(templateOnly)
 }
 
 // templateMetadata はテンプレートキャッシュのメタデータ。
@@ -301,13 +295,4 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	}
 
 	return destination, nil
-}
-
-// ClearCache はテンプレートキャッシュをクリアする。
-func (c *TemplateCache) ClearCache() error {
-	if err := c.cacheManager.ClearCache(true); err != nil {
-		return fmt.Errorf("%w: キャッシュのクリアに失敗しました: %w", ErrTemplateCache, err)
-	}
-
-	return nil
 }

@@ -39,20 +39,6 @@ func (m *MockCacheManager) EXPECT() *MockCacheManagerMockRecorder {
 	return m.recorder
 }
 
-// ClearCache mocks base method.
-func (m *MockCacheManager) ClearCache(templateOnly bool) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClearCache", templateOnly)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ClearCache indicates an expected call of ClearCache.
-func (mr *MockCacheManagerMockRecorder) ClearCache(templateOnly any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearCache", reflect.TypeOf((*MockCacheManager)(nil).ClearCache), templateOnly)
-}
-
 // GetCacheDir mocks base method.
 func (m *MockCacheManager) GetCacheDir() (string, error) {
 	m.ctrl.T.Helper()
