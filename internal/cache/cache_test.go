@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -126,53 +125,6 @@ func TestTemplateCachePath(t *testing.T) {
 	})
 }
 
-func TestIsValid(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: 存在しないファイルは無効", func(t *testing.T) {
-		t.Parallel()
-
-		result := cache.IsValid(filepath.Join(t.TempDir(), "nonexistent"), cache.DefaultMaxAgeDays)
-
-		assert.False(t, result)
-	})
-
-	t.Run("正常系: 新しいファイルは有効", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "test.txt")
-		require.NoError(t, os.WriteFile(path, []byte("test"), 0o600))
-
-		result := cache.IsValid(path, cache.DefaultMaxAgeDays)
-
-		assert.True(t, result)
-	})
-
-	t.Run("正常系: カスタムmax_ageを指定できる", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "test.txt")
-		require.NoError(t, os.WriteFile(path, []byte("test"), 0o600))
-
-		result := cache.IsValid(path, 1)
-
-		assert.True(t, result)
-	})
-
-	t.Run("異常系: 古いファイルは無効", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "test.txt")
-		require.NoError(t, os.WriteFile(path, []byte("test"), 0o600))
-		oldTime := time.Now().Add(-10 * 24 * time.Hour)
-		require.NoError(t, os.Chtimes(path, oldTime, oldTime))
-
-		result := cache.IsValid(path, 7)
-
-		assert.False(t, result)
-	})
-}
-
 func TestClearCacheDir(t *testing.T) {
 	t.Parallel()
 
@@ -283,15 +235,6 @@ func TestInfoForDir(t *testing.T) {
 		require.NotNil(t, result.TemplateExpiresInDays)
 		assert.LessOrEqual(t, *result.TemplateExpiresInDays, 7)
 	})
-}
-
-func TestGetCacheInfo(t *testing.T) {
-	t.Parallel()
-
-	result, err := cache.GetCacheInfo()
-
-	require.NoError(t, err)
-	assert.Contains(t, result.Directory, "mnemonic")
 }
 
 func TestInfo_CreationAndFieldAccess(t *testing.T) {

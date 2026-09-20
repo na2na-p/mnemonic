@@ -32,7 +32,7 @@ const DefaultGradleTimeout = 1800 * time.Second
 // RunResult は外部コマンドの実行結果を表す。
 //
 // why not: converter.CommandRunner（video.go）は非ゼロ終了コードを暗黙に
-// errorへ畳み込む設計だが、Gradleのbuild/cleanは終了コード0以外を
+// errorへ畳み込む設計だが、Gradleのbuildは終了コード0以外を
 // 「ビルド失敗」として自身で判定し、標準出力・標準エラーを結合したログを
 // 保持し続ける必要がある。そのため終了コード・stdout・stderrをそのまま呼び出し元へ返す専用の結果型を
 // 用意し、実行自体が失敗した場合（wrapper未検出・タイムアウト等）のみ
@@ -304,29 +304,6 @@ func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 		BuildTime: buildTime,
 		OutputLog: outputLog,
 	}, nil
-}
-
-// Clean はGradleのcleanタスクを実行してビルドキャッシュを削除する。
-func (b *GradleBuilder) Clean() error {
-	result, err := b.runGradle("clean")
-	if err != nil {
-		return err
-	}
-
-	if result.ExitCode != 0 {
-		outputLog := result.Stdout + result.Stderr
-
-		return fmt.Errorf("%w: exit code %d: %s", ErrGradleBuildFailed, result.ExitCode, outputLog)
-	}
-
-	return nil
-}
-
-// CheckGradleWrapper はプロジェクトディレクトリにGradle Wrapperが存在するかを確認する。
-func (b *GradleBuilder) CheckGradleWrapper() bool {
-	_, err := os.Stat(b.gradlewPath())
-
-	return err == nil
 }
 
 // GetAPKPath は生成されたAPKファイルのパスを取得する。

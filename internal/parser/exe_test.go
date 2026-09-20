@@ -38,7 +38,9 @@ func TestNewEmbeddedXP3Extractor(t *testing.T) {
 		extractor, err := parser.NewEmbeddedXP3Extractor(exeFile)
 
 		require.NoError(t, err)
-		assert.Equal(t, exeFile, extractor.ExePath())
+		result, err := extractor.FindEmbeddedXP3()
+		require.NoError(t, err)
+		assert.Empty(t, result)
 	})
 }
 

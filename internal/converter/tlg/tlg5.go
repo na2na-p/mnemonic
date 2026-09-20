@@ -324,15 +324,11 @@ func applyDeltaDecoding(channel, deltaData []byte, width, yStart, rows int) {
 // createImageFromChannels はチャンネルデータ（BGRA順）からimage.Imageを
 // 作成する。
 //
-// why not: colors==4(RGBA)ではimage.NRGBAを、colors==3(RGB)ではimage.RGBAを
-// 使い分ける。両者ともR/G/B/Pix配置は同一（差はAの意味論のみ）だが、
-// image.Image.ColorModel()の型はconverter.imageHasAlpha（呼び出し側
-// internal/converter/image.go）がPILのRGBA modeに相当する「全画素不透明でも
-// アルファ有り扱い」をNRGBAModelのみで判定する根拠にしている。RGB(3チャンネル)
-// 由来の画像はA=255固定で意味論上アルファを持たないため、NRGBAModelにすると
-// 常にアルファ有りと誤判定されWebP出力時に不要なロスレス強制が起きる。
-// image.RGBAはA=255時は非プリマルチプライ相当と数値上一致するため、この
-// 使い分けはピクセル値の意味を変えない。
+// why not: colors==4(RGBA)ではチャンネル値を非プリマルチプライのまま格納する
+// ためimage.NRGBAを使う。image.RGBAはプリマルチプライ済みの値を前提とする
+// ため、同じ値を詰めると半透明画素の色の解釈が変わる。colors==3(RGB)はA=255
+// 固定で、image.RGBAはA=255時に非プリマルチプライと数値上一致するため、
+// どちらの型でもピクセル値の意味は変わらない。
 func createImageFromChannels(channels [][]byte, width, height, colors int) image.Image {
 	rect := image.Rect(0, 0, width, height)
 	pixelCount := width * height

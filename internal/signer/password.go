@@ -17,23 +17,6 @@ const defaultPasswordPrompt = "Enter keystore password: "
 // defaultPasswordEnvVar はGetPasswordFromEnvのenvVarが空文字列の場合に使う既定値。
 const defaultPasswordEnvVar = "MNEMONIC_KEYSTORE_PASS" //nolint:gosec // これはパスワードを読み取る環境変数の"名前"であり、資格情報そのものではない
 
-// PasswordProvider はキーストアパスワードを取得するためのインターフェース。
-//
-// APK署名時に必要なキーストアパスワードを対話的入力・環境変数などの
-// 様々なソースから取得する機能を抽象化する。
-type PasswordProvider interface {
-	// GetPassword は対話的にパスワードを取得する。promptが空文字列の場合は
-	// defaultPasswordPromptを使用する。入力されたパスワードは端末にエコーされない。
-	// パスワードが空の場合はErrPasswordEmpty、ユーザー割り込みでキャンセルされた
-	// 場合はErrPasswordCancelled、それ以外の読み取り失敗はErrPasswordInputFailedを返す。
-	GetPassword(prompt string) (string, error)
-
-	// GetPasswordFromEnv はenvVarで指定した環境変数からパスワードを取得する。
-	// envVarが空文字列の場合はdefaultPasswordEnvVarを使用する。
-	// 環境変数が未設定または空文字列の場合は空文字列とfalseを返す。
-	GetPasswordFromEnv(envVar string) (string, bool)
-}
-
 // DefaultPasswordProvider はキーストアパスワードを取得する既定実装。
 // 対話的入力（端末エコーなし）と環境変数からのパスワード取得をサポートする。
 type DefaultPasswordProvider struct {
@@ -48,6 +31,9 @@ type DefaultPasswordProvider struct {
 
 // GetPassword は対話的にパスワードを取得する。標準エラー出力にpromptを表示し、
 // 標準入力からエコーなしでパスワードを読み取る。
+// promptが空文字列の場合はdefaultPasswordPromptを使用する。
+// パスワードが空の場合はErrPasswordEmpty、ユーザー割り込みでキャンセルされた
+// 場合はErrPasswordCancelled、それ以外の読み取り失敗はErrPasswordInputFailedを返す。
 func (p DefaultPasswordProvider) GetPassword(prompt string) (string, error) {
 	if prompt == "" {
 		prompt = defaultPasswordPrompt
@@ -83,6 +69,8 @@ func (p DefaultPasswordProvider) GetPassword(prompt string) (string, error) {
 }
 
 // GetPasswordFromEnv は環境変数からパスワードを取得する。
+// envVarが空文字列の場合はdefaultPasswordEnvVarを使用する。
+// 環境変数が未設定または空文字列の場合は空文字列とfalseを返す。
 func (p DefaultPasswordProvider) GetPasswordFromEnv(envVar string) (string, bool) {
 	if envVar == "" {
 		envVar = defaultPasswordEnvVar

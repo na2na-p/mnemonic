@@ -19,11 +19,13 @@ func TestAdjustmentRule_Fields(t *testing.T) {
 		Pattern:     "test_pattern",
 		Replacement: "replaced",
 		Description: "テストルール",
+		Category:    converter.RuleCategoryPlugin,
 	}
 
 	assert.Equal(t, "test_pattern", rule.Pattern)
 	assert.Equal(t, "replaced", rule.Replacement)
 	assert.Equal(t, "テストルール", rule.Description)
+	assert.Equal(t, converter.RuleCategoryPlugin, rule.Category)
 }
 
 func TestNewScriptAdjuster(t *testing.T) {
@@ -1110,6 +1112,32 @@ func TestScriptAdjuster_DefaultRulesOrder(t *testing.T) {
 func TestDefaultRulesWithoutVideoExtensions(t *testing.T) {
 	t.Parallel()
 
+	t.Run("正常系: 動画ルールを除いたDescriptionの順序がDefaultRulesと一致する", func(t *testing.T) {
+		t.Parallel()
+
+		wantDescriptions := []string{
+			"プラグインDLL読み込みの無効化",
+			"セーブデータパスをdataPathに変更（Android対応）",
+			"MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
+			"WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
+			"MIDI参照をOGGに変換（.mid → .ogg）",
+			"MIDI参照をOGGに変換（.midi → .ogg）",
+			"MIDI検索パターンを修正（.mid.ogg → .ogg）",
+			"extrans.dllをlibextrans.soに変換（Android krkrsdl2対応）",
+			"wuvorbis.dllをlibwuvorbis.soに変換（Android krkrsdl2対応）",
+			"krmovie.dllをコメントアウト（krkrsdl2未対応）",
+			"その他のDLLプラグインをコメントアウト",
+			"レイヤー透過修正: type=alphaを自動追加（krkrsdl2対応）",
+		}
+
+		gotDescriptions := make([]string, 0, len(wantDescriptions))
+		for _, rule := range converter.DefaultRulesWithoutVideoExtensions() {
+			gotDescriptions = append(gotDescriptions, rule.Description)
+		}
+
+		assert.Equal(t, wantDescriptions, gotDescriptions)
+	})
+
 	t.Run("正常系: 動画拡張子ルールの3件のみが除外される", func(t *testing.T) {
 		t.Parallel()
 
@@ -1117,8 +1145,21 @@ func TestDefaultRulesWithoutVideoExtensions(t *testing.T) {
 
 		assert.Len(t, filtered, len(converter.DefaultRules)-3)
 		for _, rule := range filtered {
-			assert.NotContains(t, rule.Description, "動画参照をMPEGに変換")
+			assert.NotEqual(t, converter.RuleCategoryVideoAsset, rule.Category)
 		}
+	})
+
+	t.Run("正常系: DefaultRulesには動画カテゴリが3件だけ存在する", func(t *testing.T) {
+		t.Parallel()
+
+		videoRuleCount := 0
+		for _, rule := range converter.DefaultRules {
+			if rule.Category == converter.RuleCategoryVideoAsset {
+				videoRuleCount++
+			}
+		}
+
+		assert.Equal(t, 3, videoRuleCount)
 	})
 
 	t.Run("正常系: 動画拡張子ルール以外は残る（MIDIルールは除外されない）", func(t *testing.T) {

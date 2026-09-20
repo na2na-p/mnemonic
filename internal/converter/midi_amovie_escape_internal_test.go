@@ -32,7 +32,7 @@ func requireFunctionalFFprobe(t *testing.T) {
 
 // writeTestWAV は440Hzの正弦波(振幅0.5、閾値-50dBを十分に上回る)audibleSeconds秒
 // の後にデジタル無音(全サンプル0)をsilentSeconds秒続けたモノラル16bit PCM WAVを
-// pathへ書き込む。detectTrailingSilenceStartが末尾無音を検出できることを、
+// pathへ書き込む。trailingSilenceDetector.silenceStartが末尾無音を検出できることを、
 // 外部ツール(ffmpeg)なしで確認するための最小自前WAV生成。
 func writeTestWAV(t *testing.T, path string, audibleSeconds, silentSeconds float64) {
 	t.Helper()
@@ -71,7 +71,7 @@ func writeTestWAV(t *testing.T, path string, audibleSeconds, silentSeconds float
 	require.NoError(t, os.WriteFile(path, wav.Bytes(), 0o600))
 }
 
-// TestMidiConverter_detectTrailingSilenceStart_SpecialCharacterPaths は
+// TestTrailingSilenceDetector_silenceStart_SpecialCharacterPaths は
 // 実ffprobe(モックなし)を使い、amovieフィルタへ渡すパスにシングルクォート・
 // コロン・バックスラッシュを含む場合でも末尾無音を検出できることを検証する。
 //
@@ -80,7 +80,7 @@ func writeTestWAV(t *testing.T, path string, audibleSeconds, silentSeconds float
 // そのエスケープ結果を正しく解釈できるかまでは検証していなかった
 // （旧実装のシェル風エスケープ(閉じクォート+バックスラッシュ+クォート+開きクォート)
 // はamovieでは機能せず、パスからクォートが消えてファイルを開けなかった）。
-func TestMidiConverter_detectTrailingSilenceStart_SpecialCharacterPaths(t *testing.T) {
+func TestTrailingSilenceDetector_silenceStart_SpecialCharacterPaths(t *testing.T) {
 	t.Parallel()
 	requireFunctionalFFprobe(t)
 
@@ -106,7 +106,7 @@ func TestMidiConverter_detectTrailingSilenceStart_SpecialCharacterPaths(t *testi
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			start, found := c.detectTrailingSilenceStart(ctx, wavPath)
+			start, found := c.silenceDetector.silenceStart(ctx, wavPath)
 
 			require.True(t, found, "特殊文字を含むパスでも末尾無音を検出できるべき")
 			assert.InDelta(t, 0.5, start, 0.1, "検出された無音開始位置は可聴区間の直後(約0.5秒)であるべき")

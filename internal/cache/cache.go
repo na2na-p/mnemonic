@@ -71,18 +71,6 @@ func TemplateCachePath(version string) (string, error) {
 	return filepath.Join(dir, "templates", version), nil
 }
 
-// IsValid はpathのキャッシュがmaxAgeDays以内に更新されているかを判定する。
-func IsValid(path string, maxAgeDays int) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	age := time.Since(info.ModTime())
-
-	return age < time.Duration(maxAgeDays)*24*time.Hour
-}
-
 // ClearCache は実行環境のキャッシュディレクトリを削除する。
 func ClearCache(templateOnly bool) error {
 	dir, err := Dir()
@@ -106,16 +94,6 @@ func ClearCacheDir(cacheDir string, templateOnly bool) error {
 	}
 
 	return nil
-}
-
-// GetCacheInfo は実行環境のキャッシュディレクトリの情報を取得する。
-func GetCacheInfo() (Info, error) {
-	dir, err := Dir()
-	if err != nil {
-		return Info{}, err
-	}
-
-	return InfoForDir(dir)
 }
 
 // InfoForDir はcacheDirのキャッシュ情報を取得する。

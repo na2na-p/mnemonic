@@ -10,11 +10,10 @@ import (
 
 // RunResult は外部コマンドの実行結果を表す。
 //
-// why not: zipalignのisAligned/apksignerのverifyは非ゼロ終了コードを
-// 「コマンド失敗」ではなく「未アラインメント/検証失敗」という正常な戻り値
-// として扱う。そのため終了コード・stdout・stderrをそのまま呼び出し元へ返し、
-// プロセスの起動自体に失敗した場合のみerrorを返す（internal/builder.RunResult
-// と同じ設計方針）。
+// why not: 非ゼロ終了をerrorへ畳み込むと、呼び出し元(Align/Sign)がツールの
+// stderrを自身のセンチネルエラーへ添えて返せなくなる。そのため終了コード・
+// stdout・stderrをそのまま呼び出し元へ返し、プロセスの起動自体に失敗した場合
+// のみerrorを返す（internal/builder.RunResultと同じ設計方針）。
 type RunResult struct {
 	ExitCode int
 	Stdout   string

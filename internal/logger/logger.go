@@ -5,13 +5,12 @@
 package logger
 
 import (
-	"bufio"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/na2na-p/mnemonic/internal/pipeline"
@@ -43,189 +42,127 @@ type ProgressDisplay interface {
 	Finish(success bool, message string)
 }
 
-// LogConfig はログ出力の動作を制御する設定。
-type LogConfig struct {
-	VerboseLevel VerboseLevel
-	// LogFile はログ出力先ファイルパス。空文字列の場合はファイル出力なし。
-	LogFile  string
-	UseColor bool
-	UseEmoji bool
-}
-
-// DefaultLogConfig はデフォルトのログ設定を返す。
-func DefaultLogConfig() LogConfig {
-	return LogConfig{
-		VerboseLevel: Normal,
-		UseColor:     true,
-		UseEmoji:     true,
-	}
-}
-
-// Statistics はビルドサマリに表示する統計情報を表す。
-//
-// OutputPath / PackageName はポインタとし、未設定であることを表現する。
-type Statistics struct {
-	OutputPath *string
-	// OutputSize はOutputPathが設定されている場合のみ意味を持つ（バイト単位）。
-	OutputSize  int64
-	PackageName *string
-}
-
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-// BuildLogger はビルドパイプラインのログ出力を管理する。
-//
-// GoではCloseメソッドを公開しio.Closerとして扱うのが自然なため、呼び出し側は
-// `defer logger.Close()` でログファイルのクローズを保証する。
+// secretFlags は値が秘密情報になる引数名。apksignerの--ks-pass / --key-passと、
+// keytoolの-storepass / -keypass。
+var secretFlags = []string{"--ks-pass", "--key-pass", "-storepass", "-keypass"}
+
+// BuildLogger はコンソールと注入されたログ出力先へビルドログを書き込む。
 type BuildLogger struct {
-	config LogConfig
+	level  VerboseLevel
 	stdout io.Writer
 	stderr io.Writer
+	file   io.Writer
 
-	logFile *os.File
-	closed  bool
+	mu  sync.Mutex
+	err error
 }
 
-// New はconfigに従いBuildLoggerを生成する。標準出力・標準エラー出力には
-// 実プロセスのos.Stdout/os.Stderrを使用する。
-func New(config LogConfig) (*BuildLogger, error) {
-	return NewWithWriters(config, os.Stdout, os.Stderr)
-}
-
-// NewWithWriters は出力先を指定してBuildLoggerを生成する。
+// New は出力先を注入してBuildLoggerを生成する。fileがnilの場合はファイル出力を行わない。
 //
-// テストで実プロセスの標準出力を捕捉すると t.Parallel() のテスト間で
-// 出力が混ざり合うため、io.Writerを直接注入できるようにしている
-// （CLAUDE.mdの「外部依存は注入可能にする」方針に沿った設計）。
-func NewWithWriters(config LogConfig, stdout, stderr io.Writer) (*BuildLogger, error) {
-	l := &BuildLogger{config: config, stdout: stdout, stderr: stderr}
+// why not: ログファイルのパスを受け取ってここで開く形にはしない。追記するか切り詰めるかの
+// 選択と書き込み完了後のCloseは、ファイルを開いた側が一貫して責任を持つ。
+func New(level VerboseLevel, stdout, stderr, file io.Writer) *BuildLogger {
+	return &BuildLogger{level: level, stdout: stdout, stderr: stderr, file: file}
+}
 
-	if config.LogFile != "" {
-		f, err := os.Create(filepath.Clean(config.LogFile))
-		if err != nil {
-			return nil, fmt.Errorf("ログファイルを開けません: %w", err)
-		}
-		l.logFile = f
+func (l *BuildLogger) write(writer io.Writer, message string) {
+	if _, err := fmt.Fprintln(writer, message); err != nil && l.err == nil {
+		l.err = fmt.Errorf("ログの書き込みに失敗しました: %w", err)
 	}
-
-	return l, nil
 }
 
-// Close はログファイルを閉じる。ログファイルを使用していない場合、
-// または既に閉じている場合は何もしない（複数回呼び出しても安全）。
-func (l *BuildLogger) Close() error {
-	if l.logFile == nil || l.closed {
-		l.closed = true
+func (l *BuildLogger) log(level, consoleMessage, fileMessage string, console io.Writer, enabled bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-		return nil
+	if enabled {
+		l.write(console, consoleMessage)
 	}
-
-	l.closed = true
-	if err := l.logFile.Close(); err != nil {
-		return fmt.Errorf("ログファイルのクローズに失敗しました: %w", err)
+	if l.file != nil {
+		clean := ansiEscapePattern.ReplaceAllString(fileMessage, "")
+		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("2006-01-02 15:04:05"), level, clean)
+		l.write(l.file, line)
 	}
-
-	return nil
-}
-
-// Closed はログファイルが（存在する場合に）クローズ済みかどうかを返す。
-func (l *BuildLogger) Closed() bool {
-	return l.closed
-}
-
-// Config は現在のログ設定を返す。
-func (l *BuildLogger) Config() LogConfig {
-	return l.config
-}
-
-func (l *BuildLogger) print(w io.Writer, message string) {
-	fmt.Fprintln(w, message) //nolint:errcheck // ログ出力の書き込み失敗は実用上ハンドリング不要
-}
-
-func (l *BuildLogger) logToFile(level, message string) {
-	if l.logFile == nil || l.closed {
-		return
-	}
-
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	clean := ansiEscapePattern.ReplaceAllString(message, "")
-	fmt.Fprintf(l.logFile, "[%s] %s: %s\n", timestamp, level, clean) //nolint:errcheck // 同上
 }
 
 // Info は情報メッセージを出力する（Normal以上）。
 func (l *BuildLogger) Info(message string) {
-	if l.config.VerboseLevel >= Normal {
-		l.print(l.stdout, message)
-	}
-	l.logToFile("INFO", message)
+	l.log("INFO", message, message, l.stdout, l.level >= Normal)
 }
 
 // Verbose は詳細メッセージを出力する（Verbose以上）。
 func (l *BuildLogger) Verbose(message string) {
-	if l.config.VerboseLevel >= Verbose {
-		l.print(l.stdout, message)
-	}
-	l.logToFile("VERBOSE", message)
+	l.log("VERBOSE", message, message, l.stdout, l.level >= Verbose)
 }
 
 // Debug はデバッグメッセージを出力する（Debug以上）。
 func (l *BuildLogger) Debug(message string) {
-	if l.config.VerboseLevel >= Debug {
-		l.print(l.stdout, message)
-	}
-	l.logToFile("DEBUG", message)
-}
-
-// Error はエラーメッセージを常に標準エラー出力へ出力する。
-func (l *BuildLogger) Error(message string) {
-	l.print(l.stderr, fmt.Sprintf("エラー: %s", message))
-	l.logToFile("ERROR", message)
+	l.log("DEBUG", message, message, l.stdout, l.level >= Debug)
 }
 
 // Warning は警告メッセージを出力する（Quietより上のレベル）。
 func (l *BuildLogger) Warning(message string) {
-	if l.config.VerboseLevel > Quiet {
-		l.print(l.stdout, fmt.Sprintf("警告: %s", message))
-	}
-	l.logToFile("WARNING", message)
+	l.log("WARNING", fmt.Sprintf("警告: %s", message), message, l.stdout, l.level > Quiet)
 }
 
-// CreateProgress は進捗表示インスタンスを作成する。
-func (l *BuildLogger) CreateProgress() ProgressDisplay {
-	return NewConsoleProgressDisplayWithWriter(l.config.UseColor, l.config.UseEmoji, l.stdout)
+// Error はエラーメッセージを常に標準エラー出力へ出力する。
+func (l *BuildLogger) Error(message string) {
+	l.log("ERROR", fmt.Sprintf("エラー: %s", message), message, l.stderr, true)
 }
 
-// LogCommand は外部コマンド実行をログする（Debug以上）。
-func (l *BuildLogger) LogCommand(command []string, output string) {
-	l.Debug(fmt.Sprintf("実行: %s", strings.Join(command, " ")))
-	if output == "" {
-		return
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		l.Debug(fmt.Sprintf("  > %s", scanner.Text()))
-	}
-}
-
-// LogConversion はファイル変換をログする（Verbose以上）。
+// LogConversion はファイル変換の結果を記録する（Verbose以上）。
+//
+// why not: filepath.Baseで短くしない。bg/a.pngとfg/a.pngのように同名のファイルを
+// 区別できなくなるため、呼び出し側が渡したパスをそのまま出す。
 func (l *BuildLogger) LogConversion(source, dest, status string) {
-	l.Verbose(fmt.Sprintf("変換: %s -> %s [%s]", filepath.Base(source), filepath.Base(dest), status))
+	l.Verbose(fmt.Sprintf("変換: %s -> %s [%s]", source, dest, status))
 }
 
-// LogSummary はビルドサマリを出力する（Normal以上）。
-func (l *BuildLogger) LogSummary(stats Statistics) {
-	emoji := "✅"
-	if !l.config.UseEmoji {
-		emoji = "[OK]"
+// redactCommand はsecretFlagsの値を伏字にしたargvの写しを返す。
+//
+// why not: argvを書き換えない。呼び出し側は同じスライスをコマンドの実行にも使う。
+func redactCommand(argv []string) []string {
+	redacted := slices.Clone(argv)
+	for i, arg := range redacted {
+		for _, flag := range secretFlags {
+			if arg == flag {
+				if i+1 < len(redacted) {
+					redacted[i+1] = "***"
+				}
+				break
+			}
+			prefix := flag + "="
+			if strings.HasPrefix(arg, prefix) {
+				redacted[i] = prefix + "***"
+				break
+			}
+		}
 	}
-	l.Info(fmt.Sprintf("%s Build complete!", emoji))
 
-	if stats.OutputPath != nil {
-		sizeMB := float64(stats.OutputSize) / (1024 * 1024)
-		l.Info(fmt.Sprintf("   Output: %s (%.1f MB)", *stats.OutputPath, sizeMB))
+	return redacted
+}
+
+// LogCommand は外部コマンドの引数と成否を記録する（Debug以上）。
+//
+// why not: コマンドの出力とエラー値は受け取らない。署名ツールの出力や環境由来の
+// 文字列は秘密を含み得るため、伏字化した引数と成否だけを記録する。
+func (l *BuildLogger) LogCommand(argv []string, succeeded bool) {
+	status := "失敗"
+	if succeeded {
+		status = "成功"
 	}
-	if stats.PackageName != nil {
-		l.Info(fmt.Sprintf("   Package: %s", *stats.PackageName))
-	}
+	l.Debug(fmt.Sprintf("実行: %s [%s]", strings.Join(redactCommand(argv), " "), status))
+}
+
+// Err は最初に発生した書き込みエラーを返す。失敗がなければnil。
+//
+// why not: 書き込みに失敗しても以降の書き込みは止めない。ログファイルの障害で
+// コンソール出力まで失わないよう、エラーは保持して扱いを呼び出し側に委ねる。
+func (l *BuildLogger) Err() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.err
 }

@@ -31,8 +31,7 @@ func TestNewDefaultApkSignerRunner_NilRunnerFallsBackToExecCommandRunner(t *test
 
 func TestKeystoreConfig_KeyPasswordDefaultsToNil(t *testing.T) {
 	// KeystoreConfigは不変値として扱う。Goの構造体はフィールド変更メソッドを
-	// 提供しないことで不変性の契約を保つ（internal/apperr.Resultと同じ
-	// 設計方針）。
+	// 提供しないことで生成後の値を変更しない契約を保つ。
 	cfg := signer.KeystoreConfig{
 		KeystorePath:     "keystore.jks",
 		KeyAlias:         "my_alias",
@@ -291,104 +290,6 @@ func TestDefaultApkSignerRunner_Sign(t *testing.T) {
 
 		require.ErrorIs(t, err, signer.ErrApkSignFailed)
 		assert.NotContains(t, err.Error(), "super_secret_pw")
-	})
-}
-
-func TestDefaultApkSignerRunner_Verify(t *testing.T) {
-	t.Run("正常系: 終了コード0で署名有効", func(t *testing.T) {
-		dir := t.TempDir()
-		apk := filepath.Join(dir, "test.apk")
-		require.NoError(t, os.WriteFile(apk, []byte("apk"), 0o600))
-
-		androidHome := writeFakeTool(t, "apksigner")
-		t.Setenv("ANDROID_HOME", androidHome)
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-		runner.EXPECT().
-			Run(gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, args []string) (signer.RunResult, error) {
-				assert.Contains(t, args[0], "apksigner")
-				assert.Contains(t, args, "verify")
-				assert.Contains(t, args, apk)
-
-				return signer.RunResult{ExitCode: 0}, nil
-			})
-
-		r := signer.NewDefaultApkSignerRunner(runner)
-
-		valid, err := r.Verify(apk)
-
-		require.NoError(t, err)
-		assert.True(t, valid)
-	})
-
-	t.Run("正常系: 終了コード非ゼロは署名無効でfalse(エラーなし)", func(t *testing.T) {
-		dir := t.TempDir()
-		apk := filepath.Join(dir, "test.apk")
-		require.NoError(t, os.WriteFile(apk, []byte("apk"), 0o600))
-
-		androidHome := writeFakeTool(t, "apksigner")
-		t.Setenv("ANDROID_HOME", androidHome)
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-		runner.EXPECT().
-			Run(gomock.Any(), gomock.Any()).
-			Return(signer.RunResult{ExitCode: 1}, nil)
-
-		r := signer.NewDefaultApkSignerRunner(runner)
-
-		valid, err := r.Verify(apk)
-
-		require.NoError(t, err)
-		assert.False(t, valid)
-	})
-
-	t.Run("異常系: APKファイルが存在しない場合にErrApkNotFound", func(t *testing.T) {
-		dir := t.TempDir()
-
-		r := signer.NewDefaultApkSignerRunner(nil)
-
-		_, err := r.Verify(filepath.Join(dir, "missing.apk"))
-
-		assert.ErrorIs(t, err, signer.ErrApkNotFound)
-	})
-
-	t.Run("異常系: apksignerコマンドが見つからない場合にErrApkSignerNotFound", func(t *testing.T) {
-		dir := t.TempDir()
-		apk := filepath.Join(dir, "test.apk")
-		require.NoError(t, os.WriteFile(apk, []byte("apk"), 0o600))
-
-		t.Setenv("ANDROID_HOME", "")
-		t.Setenv("PATH", t.TempDir())
-
-		r := signer.NewDefaultApkSignerRunner(nil)
-
-		_, err := r.Verify(apk)
-
-		assert.ErrorIs(t, err, signer.ErrApkSignerNotFound)
-	})
-
-	t.Run("異常系: コマンド実行自体に失敗した場合にErrApkVerifyFailed", func(t *testing.T) {
-		dir := t.TempDir()
-		apk := filepath.Join(dir, "test.apk")
-		require.NoError(t, os.WriteFile(apk, []byte("apk"), 0o600))
-
-		androidHome := writeFakeTool(t, "apksigner")
-		t.Setenv("ANDROID_HOME", androidHome)
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-		runner.EXPECT().
-			Run(gomock.Any(), gomock.Any()).
-			Return(signer.RunResult{}, assert.AnError)
-
-		r := signer.NewDefaultApkSignerRunner(runner)
-
-		_, err := r.Verify(apk)
-
-		assert.ErrorIs(t, err, signer.ErrApkVerifyFailed)
 	})
 }
 

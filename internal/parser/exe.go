@@ -44,11 +44,6 @@ func NewEmbeddedXP3Extractor(exePath string) (*EmbeddedXP3Extractor, error) {
 	return &EmbeddedXP3Extractor{exePath: exePath}, nil
 }
 
-// ExePath は対象EXEファイルのパスを返す。
-func (e *EmbeddedXP3Extractor) ExePath() string {
-	return e.exePath
-}
-
 // FindEmbeddedXP3 はEXE内の埋め込みXP3を検索する。
 //
 // EXEファイルをスキャンし、XP3マジックバイトを検出する。

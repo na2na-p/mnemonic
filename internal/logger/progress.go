@@ -46,7 +46,7 @@ func NewConsoleProgressDisplay(useColor, useEmoji bool) *ConsoleProgressDisplay 
 // NewConsoleProgressDisplayWithWriter は出力先を指定してConsoleProgressDisplayを生成する。
 //
 // テストでt.Parallel()を安全に使うためio.Writerを注入可能にした
-// （logger.NewWithWritersと同じ設計判断）。
+// （logger.Newと同じ設計判断）。
 func NewConsoleProgressDisplayWithWriter(useColor, useEmoji bool, out io.Writer) *ConsoleProgressDisplay {
 	return &ConsoleProgressDisplay{useColor: useColor, useEmoji: useEmoji, out: out}
 }

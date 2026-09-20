@@ -23,8 +23,6 @@ var (
 	ErrXP3NotFound = errors.New("XP3ファイルが見つかりません")
 	// ErrInvalidXP3 は不正なXP3ファイル形式の場合のエラー。
 	ErrInvalidXP3 = errors.New("不正なXP3ファイル形式です")
-	// ErrFileNotInArchive はアーカイブ内に指定ファイルが存在しない場合のエラー。
-	ErrFileNotInArchive = errors.New("アーカイブ内にファイルが見つかりません")
 )
 
 // EncryptionType は検出可能な暗号化タイプを表す。
@@ -97,16 +95,6 @@ type XP3FileEntry struct {
 	Segments []XP3Segment
 	// IsEncrypted は暗号化されているか。
 	IsEncrypted bool
-}
-
-// TotalSize は全セグメントの元サイズ（OriginalSize）の合計を返す。
-func (e XP3FileEntry) TotalSize() int64 {
-	var total int64
-	for _, segment := range e.Segments {
-		total += segment.OriginalSize
-	}
-
-	return total
 }
 
 // XP3Archive はXP3アーカイブを操作する。
@@ -569,45 +557,6 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 	}
 
 	return nil
-}
-
-// ExtractFile は指定ファイルを展開する。
-//
-// アーカイブ内に該当ファイルが存在しない場合はErrFileNotInArchiveを返す。
-func (a *XP3Archive) ExtractFile(filename, outputPath string) error {
-	entry, ok := a.findEntry(filename)
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrFileNotInArchive, filename)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
-		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
-	}
-
-	f, err := os.Open(a.archivePath) //nolint:gosec // コンストラクタでexists検証済みのユーザー指定パスを読む用途のため妥当
-	if err != nil {
-		return fmt.Errorf("XP3ファイルを開けません: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	return extractEntry(f, entry, outputPath)
-}
-
-func (a *XP3Archive) findEntry(filename string) (XP3FileEntry, bool) {
-	for _, entry := range a.fileEntries {
-		if entry.Name == filename {
-			return entry, true
-		}
-	}
-
-	normalized := strings.ReplaceAll(filename, `\`, "/")
-	for _, entry := range a.fileEntries {
-		if strings.ReplaceAll(entry.Name, `\`, "/") == normalized {
-			return entry, true
-		}
-	}
-
-	return XP3FileEntry{}, false
 }
 
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
