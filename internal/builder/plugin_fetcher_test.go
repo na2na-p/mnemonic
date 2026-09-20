@@ -138,6 +138,7 @@ func TestPluginFetcher_GetPlugins(t *testing.T) {
 			require.NoError(t, err)
 			extrans, ok := result.Plugins["extrans"]
 			require.True(t, ok)
+			assert.Equal(t, "extrans", extrans.Name)
 			assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
 			for abi, path := range extrans.Paths {
 				assert.FileExists(t, path, "%sのプラグインが存在するはず", abi)
@@ -168,6 +169,7 @@ func TestPluginFetcher_DownloadAllPlugins(t *testing.T) {
 		require.NoError(t, err)
 		extrans, ok := result.Plugins["extrans"]
 		require.True(t, ok)
+		assert.Equal(t, "extrans", extrans.Name)
 		assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
 		for _, path := range extrans.Paths {
 			assert.Equal(t, ".so", filepath.Ext(path))
@@ -307,6 +309,7 @@ func TestPluginFetcher_GetAllCachedPlugins(t *testing.T) {
 
 			extrans, exists := result.Plugins["extrans"]
 			require.True(t, exists)
+			assert.Equal(t, "extrans", extrans.Name)
 			assert.Len(t, extrans.Paths, len(builder.SupportedABIs))
 			for _, path := range extrans.Paths {
 				assert.FileExists(t, path)
