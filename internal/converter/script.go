@@ -18,9 +18,12 @@ const (
 	RuleCategoryPlugin RuleCategory = "plugin"
 	// RuleCategorySavePath はセーブデータのパスを扱うルールのカテゴリ。
 	RuleCategorySavePath RuleCategory = "save_path"
-	// RuleCategoryMidiAsset はMIDIアセットを扱うルールのカテゴリ。
+	// RuleCategoryMidiAsset はMIDIアセットへの参照を書き換えるルールのカテゴリ。
 	RuleCategoryMidiAsset RuleCategory = "midi_asset"
-	// RuleCategoryVideoAsset は動画アセットを扱うルールのカテゴリ。
+	// RuleCategoryMidiCompat はMIDIアセットへの参照とは異なり、エンジンに存在しない
+	// MIDI APIへスクリプトを適応させるルールのカテゴリ。
+	RuleCategoryMidiCompat RuleCategory = "midi_compat"
+	// RuleCategoryVideoAsset は動画アセットへの参照を書き換えるルールのカテゴリ。
 	RuleCategoryVideoAsset RuleCategory = "video_asset"
 	// RuleCategoryLayerAlpha はレイヤー透過を扱うルールのカテゴリ。
 	RuleCategoryLayerAlpha RuleCategory = "layer_alpha"
@@ -37,6 +40,7 @@ const (
 // Replacementは正規表現の後方参照をGoのregexp構文（$1、$2、…）で指定する。
 //
 // Applyが非nilの場合、Pattern/Replacementの代わりにこの関数で変換される。
+// Categoryは、用途別に適用するルールを選別するために使う。
 //
 // why not: Goのregexp(RE2)はバックトラック方式の正規表現エンジンと異なり
 // 否定先読み((?!...))に対応しない。[layopt]へのtype=alpha自動追加ルール
@@ -72,13 +76,13 @@ var DefaultRules = []AdjustmentRule{
 		Pattern:     `MIDISoundBuffer`,
 		Replacement: `WaveSoundBuffer`,
 		Description: "MIDISoundBufferをWaveSoundBufferに変換（krkrsdl2対応）",
-		Category:    RuleCategoryMidiAsset,
+		Category:    RuleCategoryMidiCompat,
 	},
 	{
 		Pattern:     `^(\s*)(WaveSoundBuffer\.midiOut\([^)\n]*\);)`,
 		Replacement: `$1; // $2 // Disabled: midiOut not available in WaveSoundBuffer`,
 		Description: "WaveSoundBuffer.midiOut呼び出しを空文に置換（krkrsdl2対応）",
-		Category:    RuleCategoryMidiAsset,
+		Category:    RuleCategoryMidiCompat,
 	},
 	{
 		Pattern:     `(["'])([^"']*?)\.mid(["'])`,
