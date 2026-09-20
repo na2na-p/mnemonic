@@ -6,20 +6,16 @@ import "errors"
 //
 // errors.Is比較を前提にfmt.Errorf("...: %w", err)でラップする設計
 // （lang-go.md Criterion G3）のため、失敗理由ごとにセンチネルを分ける。
-// ファイル未検出はalign/isAligned・sign/verifyそれぞれで対象パスが異なるだけで
-// 失敗理由は同一（「操作対象のファイルが存在しない」）のため、メソッドごとに
-// メッセージを分けず一つのセンチネルに統合する。
 var (
-	// ErrZipalignFileNotFound はzipalignの操作対象ファイル
-	// （align時は入力APK、isAligned時は確認対象APK）が存在しない場合のエラー。
+	// ErrZipalignFileNotFound はzipalignの入力APKファイルが存在しない場合のエラー。
 	ErrZipalignFileNotFound = errors.New("zipalignの操作対象ファイルが見つかりません")
 	// ErrZipalignNotFound はzipalignコマンドが見つからない場合のエラー。
 	ErrZipalignNotFound = errors.New("zipalignコマンドが見つかりません")
 	// ErrZipalignFailed はzipalignコマンドの実行自体に失敗、または
-	// align/isAlignedが非ゼロ終了コードで終了した場合のエラー。
+	// 非ゼロ終了コードで終了した場合のエラー。
 	ErrZipalignFailed = errors.New("zipalignの実行に失敗しました")
 
-	// ErrApkNotFound はsign/verifyの操作対象APKファイルが存在しない場合のエラー。
+	// ErrApkNotFound は署名対象のAPKファイルが存在しない場合のエラー。
 	ErrApkNotFound = errors.New("APKファイルが見つかりません")
 	// ErrKeystoreNotFound はキーストアファイルが存在しない場合のエラー。
 	ErrKeystoreNotFound = errors.New("キーストアファイルが見つかりません")
