@@ -686,6 +686,8 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 		files       map[string]string
 		wantFailed  string
 		wantSummary string
+		// wantConverted は変換後ツリー(convertDir)で期待するファイルの内容。
+		wantConverted map[string]string
 	}{
 		{
 			name: "異常系: TLGとして解釈できない画像があれば変換元パスと原因を含むエラーを返す",
@@ -713,6 +715,17 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"data/items.csv": "id,name\n1,\xb1\xb2\xc3\xd1",
 			},
 		},
+		{
+			name: "正常系: chardetが文字コードを推定できないShift_JISの1文字の.csvはUTF-8に変換される",
+			files: map[string]string{
+				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
+				"system/font.ttf": "stub font",
+				// Shift_JISの"猫"。chardetは候補を1つも返さない。
+				"data/name.csv": "\x94\x4c",
+			},
+			wantSummary:   "成功 2件",
+			wantConverted: map[string]string{"data/name.csv": "猫"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -739,6 +752,12 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 
 			if tt.wantFailed == "" {
 				require.NoError(t, err)
+
+				for name, want := range tt.wantConverted {
+					got, readErr := os.ReadFile(filepath.Join(a.convertDir, name))
+					require.NoError(t, readErr)
+					assert.Equal(t, want, string(got))
+				}
 
 				return
 			}

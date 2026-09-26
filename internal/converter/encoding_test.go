@@ -231,6 +231,9 @@ func TestEncodingDetector_IsTextFile(t *testing.T) {
 		{"正常系: simple crypt mode 1はNULを含んでもテキストファイル", encodeSimpleCrypt(t, "[playbgm storage=\"bgm.mid\"]", 1), true},
 		{"正常系: simple crypt mode 2はNULを含んでもテキストファイル", encodeSimpleCryptCompressed(t, "[playbgm storage=\"bgm.mid\"]"), true},
 		{"正常系: 未対応モードのsimple cryptは通常判定に落ちNULを含むためバイナリファイル", []byte{0xfe, 0xfe, 0x03, 0xff, 0xfe, 0x41, 0x00}, false},
+		{"正常系: 文字コードを推定できないShift_JISの1文字もNULを含まなければテキストファイル", encodeWith(t, japanese.ShiftJIS, "猫"), true},
+		{"正常系: 文字コードを推定できないバイト列もNULを含まなければテキストファイル", []byte{0x94}, true},
+		{"正常系: NULを含むデータはバイナリファイル", []byte("[l]\x00[r]"), false},
 	}
 
 	for _, tc := range utf16Cases {
@@ -1079,6 +1082,53 @@ func TestEncodingDetector_DetectBytes_ChardetLabels(t *testing.T) {
 			wantSupported:  true,
 		},
 		{
+			name:           "前提: Shift_JISの1文字の猫はどの文字コードとも推定されない",
+			data:           encodeWith(t, japanese.ShiftJIS, "猫"),
+			wantEncoding:   "",
+			wantConfidence: 0,
+		},
+		{
+			name:           "前提: 不正なUTF-8であるLatin-1のcaf\\xe9は低信頼度のutf-8と推定される",
+			data:           []byte("caf\xe9"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 0.1,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: UTF-8 BOMの後ろが不正なUTF-8のcaf\\xe9は高信頼度のutf-8と推定される",
+			data:           []byte("\xef\xbb\xbfcaf\xe9"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 1.0,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: UTF-8 BOMに続く短いShift_JISの[config]\\ntitle=猫はwindows-1252と推定される",
+			data:           append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫")...),
+			wantEncoding:   "windows-1252",
+			wantConfidence: 0.7,
+		},
+		{
+			name:           "前提: UTF-8 BOMに続くShift_JISの1文字の猫は低信頼度のshift_jisと推定される",
+			data:           append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "猫")...),
+			wantEncoding:   "shift_jis",
+			wantConfidence: 0.1,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: 末尾の文字が途切れたUTF-8は途切れた並びが数えられず高信頼度のutf-8と推定される",
+			data:           []byte("猫猫猫猫\xe7\x8c"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 1.0,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: 半角カナだけの短いShift_JISのtitle=ﾀｲはC0 B2が有効な並びと数えられutf-8と推定される",
+			data:           encodeWith(t, japanese.ShiftJIS, "title=ﾀｲ"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 0.8,
+			wantSupported:  true,
+		},
+		{
 			name:           "前提: 非ASCIIが少ない正しいUTF-8のtitle=名前はwindows-1252と推定される",
 			data:           []byte("title=名前"),
 			wantEncoding:   "windows-1252",
@@ -1179,6 +1229,12 @@ func TestEncodingConverter_Convert_AutoDetectedSource(t *testing.T) {
 			want:     []byte("name=ｱｲﾃﾑ"),
 		},
 		{
+			name:     "正常系: 文字コードを推定できないShift_JISの1文字の.csvはShift_JISとして変換される",
+			fileName: "name.csv",
+			data:     encodeWith(t, japanese.ShiftJIS, "猫"),
+			want:     []byte("猫"),
+		},
+		{
 			name:     "正常系: gb18030と推定されるGBKの中国語はGB18030として変換される",
 			fileName: "readme.txt",
 			data:     encodeWith(t, simplifiedchinese.GBK, "这是一个中文测试文本，用于检测编码。"),
@@ -1258,12 +1314,112 @@ func TestEncodingConverter_Convert_AutoDetectedSource(t *testing.T) {
 		assert.Equal(t, converter.StatusSkipped, result.Status)
 	})
 
+	t.Run("正常系: 空の.txtはSKIPPEDになる", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "empty.txt")
+		dest := filepath.Join(dir, "out", "empty.txt")
+		writeFile(t, source, []byte{})
+
+		c := converter.NewEncodingConverter("", "")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+
+	t.Run("正常系: 変換先と同じ指定のShift_JISはUTF-8として不正でもSKIPPEDになる", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "readme.txt")
+		dest := filepath.Join(dir, "out", "readme.txt")
+		writeFile(t, source, encodeWith(t, japanese.ShiftJIS, "猫"))
+
+		c := converter.NewEncodingConverter("shift_jis", "shift_jis")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+
+	invalidUTF8Tests := []struct {
+		name           string
+		fileName       string
+		sourceEncoding string
+		data           []byte
+	}{
+		{
+			name:           "異常系: 変換元にutf-8を指定されても不正なUTF-8バイト列はSKIPPEDにせず再試行不要なエラーにする",
+			fileName:       "readme.txt",
+			sourceEncoding: "utf-8",
+			data:           []byte("caf\xe9"),
+		},
+		{
+			name:     "異常系: utf-8と推定される不正なUTF-8のLatin-1はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     []byte("caf\xe9"),
+		},
+		{
+			name:     "異常系: 末尾の文字が途切れたUTF-8はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "first.ks",
+			data:     []byte("猫猫猫猫\xe7\x8c"),
+		},
+		{
+			name:     "既知の制限: 半角カナだけの短いShift_JISはutf-8と推定され変換できない",
+			fileName: "config.ini",
+			data:     encodeWith(t, japanese.ShiftJIS, "title=ﾀｲ"),
+		},
+		{
+			name:     "異常系: utf-8と推定されるUTF-8 BOM付きの不正なUTF-8はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     []byte("\xef\xbb\xbfcaf\xe9"),
+		},
+		{
+			name:     "異常系: windows-1252と推定されるUTF-8 BOM付きのShift_JISもShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫")...),
+		},
+		{
+			name:     "異常系: shift_jisと推定されるUTF-8 BOM付きのShift_JISもShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "猫")...),
+		},
+	}
+
+	for _, tt := range invalidUTF8Tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			_, err := c.Convert(source, dest)
+
+			require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+			require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			require.ErrorContains(t, err, "不正なUTF-8")
+			assert.NotContains(t, err.Error(), "有効なUTF-8ではなく")
+			assert.NotContains(t, err.Error(), "Shift_JIS")
+			assert.NoFileExists(t, dest)
+		})
+	}
+
 	errorTests := []struct {
 		name           string
 		sourceEncoding string
 		data           []byte
 		wantInMessage  []string
 	}{
+		{
+			name:          "異常系: 文字コードを推定できずShift_JISとしても復号できないバイト列は検出結果なしを示して失敗する",
+			data:          []byte{0x94},
+			wantInMessage: []string{"検出結果なし", "Shift_JIS"},
+		},
 		{
 			name:          "異常系: 未対応と推定されShift_JISとしても復号できないバイト列は推定名を示して失敗する",
 			data:          []byte("id,name\n1,\xfd\xfe\xff\xfd"),
@@ -1329,6 +1485,12 @@ func TestEncodingConverter_ConvertBytes_AutoDetectedSource(t *testing.T) {
 			name:         "正常系: 低信頼度のgb18030からShift_JISを選んだ場合はshift_jisを返す",
 			data:         encodeWith(t, japanese.ShiftJIS, "ｾｰﾌﾞ"),
 			want:         "ｾｰﾌﾞ",
+			wantEncoding: "shift_jis",
+		},
+		{
+			name:         "正常系: 文字コードを推定できないShift_JISの1文字はshift_jisを返す",
+			data:         encodeWith(t, japanese.ShiftJIS, "猫"),
+			want:         "猫",
 			wantEncoding: "shift_jis",
 		},
 		{
