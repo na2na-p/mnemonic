@@ -71,16 +71,6 @@ func TemplateCachePath(version string) (string, error) {
 	return filepath.Join(dir, "templates", version), nil
 }
 
-// ClearCache は実行環境のキャッシュディレクトリを削除する。
-func ClearCache(templateOnly bool) error {
-	dir, err := Dir()
-	if err != nil {
-		return err
-	}
-
-	return ClearCacheDir(dir, templateOnly)
-}
-
 // ClearCacheDir はcacheDir配下を削除する。templateOnly=trueの場合はtemplatesのみ削除する。
 // cacheDirが存在しない場合もエラーにはならない（os.RemoveAllの仕様に準拠）。
 func ClearCacheDir(cacheDir string, templateOnly bool) error {

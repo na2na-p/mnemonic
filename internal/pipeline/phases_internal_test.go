@@ -10,8 +10,50 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
 )
+
+// why not: t.Setenvはt.Parallel()を呼んだテストでは使えない
+// （並列実行中の他テストに環境変数の変更が影響しうるため）ので、
+// このテストはt.Parallel()を呼ばない。
+func TestNewSDL2SourceCache(t *testing.T) {
+	tests := []struct {
+		name      string
+		home      string
+		wantCache bool
+	}{
+		{
+			name:      "正常系: キャッシュディレクトリ配下のキャッシュを返す",
+			home:      t.TempDir(),
+			wantCache: true,
+		},
+		{
+			name: "異常系: キャッシュディレクトリを解決できない場合はnilを返す",
+			home: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", tt.home)
+			t.Setenv("XDG_CACHE_HOME", "")
+
+			dir, err := cache.Dir()
+			if !tt.wantCache {
+				require.Error(t, err)
+				assert.Nil(t, newSDL2SourceCache())
+
+				return
+			}
+
+			require.NoError(t, err)
+			got := newSDL2SourceCache()
+			require.NotNil(t, got)
+			assert.Equal(t, filepath.Join(dir, "sdl2_sources"), got.CachePath())
+		})
+	}
+}
 
 // TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite は
 // CONVERTフェーズの後処理において、MIDI変換がスクリプト調整より先に実行される

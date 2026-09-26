@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/na2na-p/mnemonic/internal/builder"
+	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/parser"
 	"github.com/na2na-p/mnemonic/internal/signer"
@@ -248,9 +249,7 @@ func (b *BuildPipeline) executeBuild() error {
 	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
 	plugins := b.fetchPlugins()
 
-	// why not: パイプライン経由のビルドではSDL2 Javaソースのキャッシュを
-	// 使わず、都度ダウンロードする。これが既定の挙動である。
-	preparer := builder.NewTemplatePreparer(projectDir, nil)
+	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
 	if err := preparer.Prepare(packageName, appName, b.convertDir, b.findGameIcon(), plugins); err != nil {
 		return err
 	}
@@ -273,6 +272,20 @@ func (b *BuildPipeline) executeBuild() error {
 	b.unsignedAPK = *result.APKPath
 
 	return nil
+}
+
+// newSDL2SourceCache はSDL2ソースキャッシュを返す。キャッシュディレクトリを
+// 解決できない場合はnilを返す。
+//
+// why not: キャッシュは最適化に過ぎないため、キャッシュディレクトリの解決に
+// 失敗しても、ソースをダウンロードできるビルドまで失敗させない。
+func newSDL2SourceCache() *builder.SDL2SourceCache {
+	dir, err := cache.Dir()
+	if err != nil {
+		return nil
+	}
+
+	return builder.NewSDL2SourceCache(dir)
 }
 
 // resolveTemplate はキャッシュ済みテンプレートを解決する。キャッシュが無く

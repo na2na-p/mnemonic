@@ -57,14 +57,6 @@ const (
 // sdl2CacheMarkerTimeLayout はキャッシュ作成日時マーカーの日時フォーマット。
 const sdl2CacheMarkerTimeLayout = time.RFC3339Nano
 
-// SDL2SourceCacheInfo はキャッシュ情報を表す不変値。
-type SDL2SourceCacheInfo struct {
-	// CachedAt はキャッシュ作成日時。未作成の場合はnil。
-	CachedAt  *time.Time
-	IsValid   bool
-	CachePath string
-}
-
 // SDL2SourceCache はSDL2 Javaソースのキャッシュを管理する。
 type SDL2SourceCache struct {
 	cacheDir string
@@ -81,13 +73,12 @@ func (c *SDL2SourceCache) CachePath() string {
 	return c.cacheDir
 }
 
-// GetSourceFilesPath はキャッシュされたソースファイルのパス（org/libsdl/app）を返す。
-func (c *SDL2SourceCache) GetSourceFilesPath() string {
-	return filepath.Join(c.cacheDir, "org", "libsdl", "app")
-}
-
-// IsValid はキャッシュが有効か確認する。
-// キャッシュが存在し、有効期限内かつバージョンが一致すればtrueを返す。
+// IsValid はキャッシュが有効か確認する。マーカーとバージョンが一致し、有効期限内で、
+// org/libsdl/app配下のSDL2RequiredFilesがすべて通常ファイルならtrueを返す。
+//
+// why not: マーカーは保存完了、バージョンは保存時の版を示すだけで、その後にソースが
+// 削除・破損していないことまでは保証しない。無効なキャッシュはダウンロードと上書きで
+// 自己修復できるため、必須ファイルも確認する。
 func (c *SDL2SourceCache) IsValid() bool {
 	marker := filepath.Join(c.cacheDir, SDL2CacheMarkerFile)
 	if _, err := os.Stat(marker); err != nil {
@@ -108,7 +99,19 @@ func (c *SDL2SourceCache) IsValid() bool {
 		return false
 	}
 
-	return time.Since(cachedAt) < SDL2CacheValidityDays*24*time.Hour
+	if time.Since(cachedAt) >= SDL2CacheValidityDays*24*time.Hour {
+		return false
+	}
+
+	sdlAppDir := filepath.Join(c.cacheDir, "org", "libsdl", "app")
+	for _, filename := range SDL2RequiredFiles {
+		info, err := os.Stat(filepath.Join(sdlAppDir, filename))
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetCachedAt はキャッシュ作成日時を取得する。
@@ -127,20 +130,6 @@ func (c *SDL2SourceCache) GetCachedAt() (time.Time, bool) {
 	}
 
 	return cachedAt, true
-}
-
-// GetCacheInfo はキャッシュ情報を取得する。
-func (c *SDL2SourceCache) GetCacheInfo() SDL2SourceCacheInfo {
-	info := SDL2SourceCacheInfo{
-		IsValid:   c.IsValid(),
-		CachePath: c.cacheDir,
-	}
-
-	if cachedAt, ok := c.GetCachedAt(); ok {
-		info.CachedAt = &cachedAt
-	}
-
-	return info
 }
 
 // Save はソースをキャッシュに保存する。sourcesDirはorgディレクトリを含む
@@ -175,6 +164,7 @@ func (c *SDL2SourceCache) Save(sourcesDir string) error {
 }
 
 // RestoreTo はキャッシュからソースを復元する。
+// コピーの途中で失敗した場合は、コピー済みのdestDir/orgの削除を試みてからエラーを返す。
 func (c *SDL2SourceCache) RestoreTo(destDir string) error {
 	if !c.IsValid() {
 		return fmt.Errorf("%w: %w: 有効なキャッシュがありません", ErrSDL2SourceFetcher, ErrSDL2SourceCache)
@@ -188,17 +178,13 @@ func (c *SDL2SourceCache) RestoreTo(destDir string) error {
 	}
 
 	if err := copyDir(srcOrgDir, destOrgDir); err != nil {
+		// 部分コピーを残して呼び出し側の上書きに任せない。コピーされたファイルは
+		// キャッシュ側のパーミッションを引き継ぐため、読み取り専用のファイルが残ると
+		// ダウンロードへのフォールバックが上書きできずに失敗する。
+		// 削除に失敗しても、上書きを妨げる残骸はダウンロード側の書き込みエラーとして
+		// 表面化するため、ここではコピーのエラーだけを返す。
+		_ = os.RemoveAll(destOrgDir)
 		return fmt.Errorf("%w: %w: キャッシュ復元に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
-	}
-
-	return nil
-}
-
-// Clear はキャッシュを削除する。キャッシュが存在しない場合もエラーにはならない
-// （os.RemoveAllの仕様に準拠）。
-func (c *SDL2SourceCache) Clear() error {
-	if err := os.RemoveAll(c.cacheDir); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ削除に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
 	}
 
 	return nil
@@ -283,11 +269,15 @@ func (f *SDL2SourceFetcher) baseURL() string {
 	return defaultSDL2BaseURL
 }
 
-// Fetch はSDL2 Javaソースをダウンロードして配置する。
-// キャッシュが有効な場合はキャッシュから復元し、そうでない場合はGitHubからダウンロードする。
+// Fetch はSDL2 Javaソースをダウンロードまたはキャッシュから復元して配置する。
+// 有効なキャッシュの復元に失敗した場合はダウンロードへフォールバックする。
 func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	if f.Cache != nil && f.Cache.IsValid() {
-		return f.Cache.RestoreTo(destDir)
+		// why not: キャッシュは最適化に過ぎないため、復元や保存の失敗で
+		// ソースを取得できるビルドまで失敗させるより、再ダウンロードを選ぶ。
+		if err := f.Cache.RestoreTo(destDir); err == nil {
+			return nil
+		}
 	}
 
 	sdlAppDir := filepath.Join(destDir, "org", "libsdl", "app")
@@ -307,9 +297,7 @@ func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	}
 
 	if f.Cache != nil {
-		if err := f.Cache.Save(destDir); err != nil {
-			return err
-		}
+		_ = f.Cache.Save(destDir)
 	}
 
 	return nil
