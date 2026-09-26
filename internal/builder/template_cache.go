@@ -15,13 +15,6 @@ import (
 // ErrTemplateCache はテンプレートキャッシュ操作に関する基本エラー。
 var ErrTemplateCache = errors.New("テンプレートキャッシュの操作に失敗しました")
 
-// metadataTimeLayout はメタデータJSON内の日時フォーマット
-// （常にUTC、末尾Z表記）。
-const metadataTimeLayout = "2006-01-02T15:04:05Z"
-
-// metadataFilename はメタデータファイル名。
-const metadataFilename = "metadata.json"
-
 // defaultRefreshDays はキャッシュのデフォルト有効期間（日）。
 const defaultRefreshDays = 7
 
@@ -54,13 +47,6 @@ func (defaultCacheManager) GetTemplateCachePath(version string) (string, error) 
 	return cache.TemplateCachePath(version)
 }
 
-// templateMetadata はテンプレートキャッシュのメタデータ。
-type templateMetadata struct {
-	Version      string `json:"version"`
-	DownloadedAt string `json:"downloaded_at"`
-	ExpiresAt    string `json:"expires_at"`
-}
-
 // TemplateCache はCacheManagerを利用してkrkrsdl2テンプレートのキャッシュを管理する。
 type TemplateCache struct {
 	cacheManager CacheManager
@@ -83,31 +69,21 @@ func (c *TemplateCache) metadataPath(version string) (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(cachePath, metadataFilename), nil
+	return filepath.Join(cachePath, cache.TemplateMetadataFilename), nil
 }
 
 // readMetadata はversionのメタデータファイルを読み込む。
 // ファイルが存在しない、またはパース不能な場合はok=falseを返す。
-func (c *TemplateCache) readMetadata(version string) (templateMetadata, bool) {
-	path, err := c.metadataPath(version)
+func (c *TemplateCache) readMetadata(version string) (cache.TemplateMetadata, bool) {
+	cachePath, err := c.cacheManager.GetTemplateCachePath(version)
 	if err != nil {
-		return templateMetadata{}, false
+		return cache.TemplateMetadata{}, false
 	}
 
-	data, err := os.ReadFile(path) //nolint:gosec // キャッシュディレクトリ配下の固定ファイル名を読む用途のため妥当
-	if err != nil {
-		return templateMetadata{}, false
-	}
-
-	var metadata templateMetadata
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return templateMetadata{}, false
-	}
-
-	return metadata, true
+	return cache.ReadTemplateMetadata(cachePath)
 }
 
-func (c *TemplateCache) writeMetadata(version string, metadata templateMetadata) error {
+func (c *TemplateCache) writeMetadata(version string, metadata cache.TemplateMetadata) error {
 	path, err := c.metadataPath(version)
 	if err != nil {
 		return err
@@ -217,7 +193,7 @@ func (c *TemplateCache) IsCacheValid(version *string) bool {
 		return false
 	}
 
-	expiresAt, err := time.Parse(metadataTimeLayout, metadata.ExpiresAt)
+	expiresAt, err := time.Parse(cache.TemplateMetadataTimeLayout, metadata.ExpiresAt)
 	if err != nil {
 		return false
 	}
@@ -245,7 +221,7 @@ func (c *TemplateCache) GetCachedVersion() (string, bool) {
 			continue
 		}
 
-		downloadedAt, err := time.Parse(metadataTimeLayout, metadata.DownloadedAt)
+		downloadedAt, err := time.Parse(cache.TemplateMetadataTimeLayout, metadata.DownloadedAt)
 		if err != nil {
 			continue
 		}
@@ -295,10 +271,10 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	now := time.Now().UTC()
 	expiresAt := now.AddDate(0, 0, c.refreshDays)
 
-	metadata := templateMetadata{
+	metadata := cache.TemplateMetadata{
 		Version:      version,
-		DownloadedAt: now.Format(metadataTimeLayout),
-		ExpiresAt:    expiresAt.Format(metadataTimeLayout),
+		DownloadedAt: now.Format(cache.TemplateMetadataTimeLayout),
+		ExpiresAt:    expiresAt.Format(cache.TemplateMetadataTimeLayout),
 	}
 
 	if err := c.writeMetadata(version, metadata); err != nil {

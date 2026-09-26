@@ -12,9 +12,8 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/na2na-p/mnemonic/internal/builder"
+	"github.com/na2na-p/mnemonic/internal/cache"
 )
-
-const metadataTimeLayout = "2006-01-02T15:04:05Z"
 
 func writeCacheMetadata(t *testing.T, cachePath string, version string, downloadedAt, expiresAt time.Time) {
 	t.Helper()
@@ -23,8 +22,8 @@ func writeCacheMetadata(t *testing.T, cachePath string, version string, download
 
 	metadata := map[string]string{
 		"version":       version,
-		"downloaded_at": downloadedAt.UTC().Format(metadataTimeLayout),
-		"expires_at":    expiresAt.UTC().Format(metadataTimeLayout),
+		"downloaded_at": downloadedAt.UTC().Format(cache.TemplateMetadataTimeLayout),
+		"expires_at":    expiresAt.UTC().Format(cache.TemplateMetadataTimeLayout),
 	}
 	data, err := json.Marshal(metadata)
 	require.NoError(t, err)
