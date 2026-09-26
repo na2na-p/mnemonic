@@ -155,6 +155,11 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		return a, fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
+	b.log().Info(fmt.Sprintf(
+		"アセット変換: 成功 %d件 / 失敗 %d件 / スキップ %d件",
+		summary.Success, summary.Failed, summary.Skipped,
+	))
+
 	// why not: 変換に失敗したアセットがあってもビルドを続けると、素材が欠けた
 	// り未変換のまま残ったりしたAPKができ、原因は後段の別エラー（スクリプト
 	// 調整の失敗など）として現れて特定しにくい。後処理に進む前に、失敗した
@@ -231,7 +236,7 @@ func (b *BuildPipeline) finalizeConvertedTree(
 ) error {
 	removeStaleVideoSourceFiles(summary)
 
-	if err := convertMidiFilesUsing(directory, midiConverter); err != nil {
+	if err := convertMidiFilesUsing(directory, midiConverter, b.log()); err != nil {
 		return fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}
 

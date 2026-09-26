@@ -120,6 +120,53 @@ func TestBuildPipeline_CreateDebugKeystore_GenerateErrorIsPropagated(t *testing.
 	require.ErrorIs(t, err, wantErr)
 }
 
+// TestBuildPipeline_CreateDebugKeystore_Warning は既存キーストアを作り直す
+// 場合にだけ警告を報告することを検証する。
+func TestBuildPipeline_CreateDebugKeystore_Warning(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		existing    bool
+		valid       bool
+		wantWarning bool
+	}{
+		{name: "正常系: 既存キーストアが無ければ警告しない", existing: false, valid: false, wantWarning: false},
+		{name: "正常系: 有効な既存キーストアを再利用する場合は警告しない", existing: true, valid: true, wantWarning: false},
+		{name: "異常系: 検証に失敗した既存キーストアを再作成する場合はパスを含む警告を出す", existing: true, valid: false, wantWarning: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "keystore", "debug.keystore")
+			if tt.existing {
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+				require.NoError(t, os.WriteFile(path, []byte("existing"), 0o600))
+			}
+
+			b := newKeystoreTestPipeline(t, path, tt.valid, func(dest string) error {
+				return os.WriteFile(dest, []byte("generated"), 0o600)
+			})
+			logger := &recordingLogger{}
+			b.SetLogger(logger)
+
+			_, err := b.createDebugKeystore()
+
+			require.NoError(t, err)
+			warnings := logger.messages("WARNING")
+			if !tt.wantWarning {
+				assert.Empty(t, warnings)
+
+				return
+			}
+			require.Len(t, warnings, 1)
+			assert.Contains(t, warnings[0], path)
+		})
+	}
+}
+
 // why not: t.Setenvはt.Parallel()を呼んだテストでは使えない
 // （並列実行中の他テストに環境変数の変更が影響しうるため）ので、
 // このテストのみt.Parallel()を呼ばない。

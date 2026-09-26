@@ -65,7 +65,7 @@ func (b *BuildPipeline) newMidiConverter() *converter.MidiConverter {
 // 出力ファイル名は.mid/.midiを.oggに置換した形式にする
 // （例: bgm/sinone.mid → bgm/sinone.ogg）。変換成功後、元のMIDIファイルは
 // 削除する。
-func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter) error {
+func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter, logger Logger) error {
 	midiFiles, err := findMidiFiles(directory)
 	if err != nil {
 		return err
@@ -83,7 +83,7 @@ func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConver
 		return err
 	}
 
-	return convertMidiFileList(midiFiles, midiConverter)
+	return convertMidiFileList(midiFiles, midiConverter, logger)
 }
 
 // findMidiFiles はdirectory配下の.mid/.midiファイルを再帰的に列挙する。
@@ -165,8 +165,8 @@ func midiWorkerCount(cpuCount int) int {
 // why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
 // 失敗した全ファイルを把握できるようにするため。ただし1件でも失敗した場合は
 // エラーを返し、変換されなかったMIDIを指す.ogg参照がAPKへ混入するのを防ぐ。
-func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter) error {
-	return convertMidiFileListWith(midiFiles, midiConverter, nil)
+func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter, logger Logger) error {
+	return convertMidiFileListWith(midiFiles, midiConverter, nil, logger)
 }
 
 // convertMidiFileListWith はsleepがnilでなければConversionManagerのリトライ
@@ -179,6 +179,7 @@ func convertMidiFileListWith(
 	midiFiles []string,
 	midiConverter *converter.MidiConverter,
 	sleep func(time.Duration),
+	logger Logger,
 ) error {
 	tasks := make([]converter.FileTask, 0, len(midiFiles))
 	for _, midiFile := range midiFiles {
@@ -209,15 +210,15 @@ func convertMidiFileListWith(
 			continue
 		}
 
-		// why not: 削除失敗はビルドエラーに昇格させない。変換自体は成功して
-		// おり.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき無音に
-		// ならない（存在しないファイルを指す参照が残る不具合のクラスには該当
-		// しない）。残留した.midは再生されない死蔵アセットとしてAPKへ同梱
+		// why not: 削除失敗はビルドエラーに昇格させず警告に留める。変換自体は
+		// 成功しており.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき
+		// 無音にならない（存在しないファイルを指す参照が残る不具合のクラスには
+		// 該当しない）。残留した.midは再生されない死蔵アセットとしてAPKへ同梱
 		// されるだけ（サイズ増のみ）であり、これでビルド全体を落とす方が
-		// 損害が大きい。本パッケージには
-		// ロガーの注入口が無いため警告出力も行わない（copyPolyfillFilesUsingの
-		// フォント取得失敗と同じ方針）。
-		_ = os.Remove(result.SourcePath)
+		// 損害が大きい。
+		if err := os.Remove(result.SourcePath); err != nil {
+			logger.Warning(fmt.Sprintf("変換済みMIDIファイルを削除できませんでした（APKに残ります）: %v", err))
+		}
 	}
 
 	if len(failures) > 0 {

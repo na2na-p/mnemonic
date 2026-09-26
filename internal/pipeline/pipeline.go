@@ -52,7 +52,28 @@ type BuildPipeline struct {
 	// Config.CleanCacheのテストが開発者の実キャッシュを消さないよう差し替え可能に
 	// する（executePhaseと同じ設計方針）。
 	cacheDir func() (string, error)
+
+	logger Logger
 }
+
+// Logger はパイプラインが進捗や警告を報告する出力先。
+//
+// why not: internal/logger.BuildLoggerを直接参照しない。internal/loggerは
+// 進捗表示のためにPhase型を得ようと本パッケージをimportしており、本パッケージ
+// からinternal/loggerをimportすると循環importになる。利用側である本パッケージで
+// 必要なメソッドだけを定義し、*logger.BuildLoggerはこれを暗黙に満たす。
+type Logger interface {
+	Info(message string)
+	Warning(message string)
+	Verbose(message string)
+}
+
+// nopLogger はロガー未設定時に使う、何も出力しないLogger。
+type nopLogger struct{}
+
+func (nopLogger) Info(string)    {}
+func (nopLogger) Warning(string) {}
+func (nopLogger) Verbose(string) {}
 
 // buildArtifacts はフェーズ間で引き渡すビルド成果物。値として次のフェーズへ渡す。
 //
@@ -78,6 +99,23 @@ func NewBuildPipeline(config Config) *BuildPipeline {
 	b.cacheDir = cache.Dir
 
 	return b
+}
+
+// SetLogger はパイプラインの報告先を設定する。nilを渡すと出力を行わない。
+func (b *BuildPipeline) SetLogger(l Logger) {
+	b.logger = l
+}
+
+// log は設定済みのLoggerを返す。未設定時はnopLoggerを返す。
+//
+// why not: フィールドを直接呼ばない。NewBuildPipelineを経由せず構造体リテラルで
+// 生成したBuildPipelineやSetLogger(nil)の後でもnil参照でpanicさせないため。
+func (b *BuildPipeline) log() Logger {
+	if b.logger == nil {
+		return nopLogger{}
+	}
+
+	return b.logger
 }
 
 // Config は現在のパイプライン設定を返す。
@@ -152,6 +190,7 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 
 	for _, phase := range AllPhases() {
 		phaseStart := time.Now()
+		b.log().Verbose(fmt.Sprintf("%sフェーズを開始します", phase))
 
 		if progressCallback != nil {
 			progressCallback(Progress{
@@ -174,6 +213,7 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 
 		phasesCompleted = append(phasesCompleted, phase)
 		statistics[string(phase)+"_time_seconds"] = round2(time.Since(phaseStart).Seconds())
+		b.log().Verbose(fmt.Sprintf("%sフェーズが完了しました", phase))
 
 		if progressCallback != nil {
 			progressCallback(Progress{

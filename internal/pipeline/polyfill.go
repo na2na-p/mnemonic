@@ -13,10 +13,10 @@ import (
 // コピーする。これによりMenuItemやKAGParserなどの不足クラスが提供される。
 // また、Koruriフォントをsystem/font.ttfとしてコピーする。
 func (b *BuildPipeline) copyPolyfillFiles(directory string) error {
-	return copyPolyfillFilesUsing(directory, builder.NewFontFetcher("", nil))
+	return copyPolyfillFilesUsing(directory, builder.NewFontFetcher("", nil), b.log())
 }
 
-func copyPolyfillFilesUsing(directory string, fontFetcher *builder.FontFetcher) error {
+func copyPolyfillFilesUsing(directory string, fontFetcher *builder.FontFetcher, logger Logger) error {
 	systemDir := filepath.Join(directory, "system")
 	if err := os.MkdirAll(systemDir, 0o750); err != nil {
 		return fmt.Errorf("systemディレクトリの作成に失敗しました: %w", err)
@@ -35,9 +35,13 @@ func copyPolyfillFilesUsing(directory string, fontFetcher *builder.FontFetcher) 
 		}
 	}
 
-	// フォント取得の失敗はビルドを継続する（ログ警告のみで握りつぶす方針。
-	// 本パッケージにロガーの注入口が無いため、ここでは静かに無視する）。
-	_ = copyFontFile(systemDir, fontFetcher)
+	// why not: フォントを用意できなくてもビルドは止めず警告に留める。
+	// PolyfillInitialize.tjsはsystem/font.ttf・font.otfがどちらも無ければ
+	// -deffontを設定せずに初期化を続けるため、フォントの欠落でAPKの初期化
+	// スクリプトが失敗することはない。
+	if err := copyFontFile(systemDir, fontFetcher); err != nil {
+		logger.Warning(fmt.Sprintf("フォントを用意できなかったため既定フォントのままビルドを続けます: %v", err))
+	}
 
 	return nil
 }
@@ -53,7 +57,7 @@ func copyFontFile(systemDir string, fontFetcher *builder.FontFetcher) error {
 
 	fontInfo, err := fontFetcher.GetFont()
 	if err != nil {
-		return nil //nolint:nilerr // フォント取得失敗はビルドを継続させる意図的な握りつぶし（copyPolyfillFilesUsingのコメント参照）
+		return fmt.Errorf("フォントの取得に失敗しました: %w", err)
 	}
 
 	return copyFile(fontInfo.Path, fontDest)

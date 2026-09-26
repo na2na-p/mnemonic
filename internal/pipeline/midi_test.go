@@ -40,7 +40,7 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		}}
 		midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, runner)
 
-		err := convertMidiFilesUsing(dir, midiConverter)
+		err := convertMidiFilesUsing(dir, midiConverter, nopLogger{})
 
 		require.ErrorIs(t, err, ErrMidiConversionUnavailable)
 		assert.Contains(t, err.Error(), "fluidsynth")
@@ -66,7 +66,7 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		}}
 		midiConverter := converter.NewMidiConverter(missingSoundfont, 0, "", 0, time.Second, runner)
 
-		err := convertMidiFilesUsing(dir, midiConverter)
+		err := convertMidiFilesUsing(dir, midiConverter, nopLogger{})
 
 		require.ErrorIs(t, err, ErrMidiConversionUnavailable)
 		assert.Contains(t, err.Error(), missingSoundfont)
@@ -94,7 +94,7 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		}}
 		midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 
-		require.NoError(t, convertMidiFilesUsing(dir, midiConverter))
+		require.NoError(t, convertMidiFilesUsing(dir, midiConverter, nopLogger{}))
 
 		assert.NoFileExists(t, midiFile)
 		assert.NoFileExists(t, longExtMidiFile)
@@ -111,7 +111,7 @@ func TestBuildPipeline_ConvertMidiFiles(t *testing.T) {
 		}}
 		midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, runner)
 
-		require.NoError(t, convertMidiFilesUsing(dir, midiConverter))
+		require.NoError(t, convertMidiFilesUsing(dir, midiConverter, nopLogger{}))
 	})
 }
 
@@ -249,7 +249,7 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 			recorder := &sleepRecorder{}
 
-			err := convertMidiFileListWith(midiFiles, midiConverter, recorder.sleep)
+			err := convertMidiFileListWith(midiFiles, midiConverter, recorder.sleep, nopLogger{})
 
 			assert.Equal(t, tt.wantRenders, runner.renders.Load())
 			assert.ElementsMatch(t, tt.wantSleeps, recorder.durations)
@@ -287,6 +287,46 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestConvertMidiFileListWith_RemovalFailure は変換に成功したMIDIファイルを
+// 削除できなかった場合の扱いを検証する。
+func TestConvertMidiFileListWith_RemovalFailure(t *testing.T) {
+	t.Parallel()
+
+	// why not: rootは書き込み権限の無いディレクトリからもファイルを削除できるため、
+	// 削除失敗を再現できない。
+	if os.Geteuid() == 0 {
+		t.Skip("rootでは読み取り専用ディレクトリからの削除失敗を再現できないためスキップ")
+	}
+
+	dir := t.TempDir()
+	bgmDir := filepath.Join(dir, "bgm")
+	require.NoError(t, os.MkdirAll(bgmDir, 0o750))
+	midiFile := filepath.Join(bgmDir, "sinone.mid")
+	require.NoError(t, os.WriteFile(midiFile, []byte("MThd"), 0o600))
+	soundfont := filepath.Join(dir, "soundfont.sf2")
+	require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
+
+	require.NoError(t, os.Chmod(bgmDir, 0o500)) //nolint:gosec // 削除失敗を再現するため意図的に書き込み権限を外す
+	// t.TempDirのRemoveAllより先に権限を戻すため、TempDirの後に登録する（Cleanupは逆順に走る）。
+	t.Cleanup(func() { _ = os.Chmod(bgmDir, 0o750) }) //nolint:gosec // テスト用ディレクトリの権限を元に戻す
+
+	runner := fakeCommandRunner{responses: map[string]fakeCommandResponse{
+		"fluidsynth": {},
+		"ffmpeg":     {},
+	}}
+	midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
+	logger := &recordingLogger{}
+
+	err := convertMidiFileListWith([]string{midiFile}, midiConverter, (&sleepRecorder{}).sleep, logger)
+
+	require.NoError(t, err, "削除失敗はビルドエラーに昇格させない")
+	assert.FileExists(t, midiFile)
+	warnings := logger.messages("WARNING")
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], midiFile)
+	assert.Equal(t, 1, strings.Count(warnings[0], midiFile), "パスは1回だけ示す")
 }
 
 func TestMidiWorkerCount(t *testing.T) {
@@ -381,7 +421,7 @@ func TestConvertMidiFileListWith_Concurrency(t *testing.T) {
 		}
 		midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 
-		require.NoError(t, convertMidiFileListWith(midiFiles, midiConverter, (&sleepRecorder{}).sleep))
+		require.NoError(t, convertMidiFileListWith(midiFiles, midiConverter, (&sleepRecorder{}).sleep, nopLogger{}))
 
 		assert.LessOrEqual(t, runner.peakConcurrency(), 2)
 	})

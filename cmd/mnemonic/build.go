@@ -3,6 +3,8 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,11 +23,14 @@ type buildRunner interface {
 	Run(pipeline.ProgressCallback) pipeline.Result
 }
 
-// newBuildPipeline はconfigからbuildRunnerを生成する。テストでの差し替え口
+// newBuildPipeline はconfigとloggerからbuildRunnerを生成する。テストでの差し替え口
 // として、パッケージ変数として保持する（internal/converter.
 // ConversionManager.SleepFuncと同じ設計方針）。
-var newBuildPipeline = func(config pipeline.Config) buildRunner {
-	return pipeline.NewBuildPipeline(config)
+var newBuildPipeline = func(config pipeline.Config, log pipeline.Logger) buildRunner {
+	p := pipeline.NewBuildPipeline(config)
+	p.SetLogger(log)
+
+	return p
 }
 
 func newBuildCmd() *cobra.Command {
@@ -79,11 +84,30 @@ func newBuildCmd() *cobra.Command {
 			config.TemplateRefreshDays = templateRefreshDays
 			config.TemplateOffline = templateOffline
 
-			p := newBuildPipeline(config)
+			var logWriter io.Writer
+			if logFile != "" {
+				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // 利用者が--log-fileで明示したパスへ書き込む用途のため妥当
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "ログファイルを開けません: %v\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+
+					return exitWith(apperr.ExitInvalidInput)
+				}
+				defer func() { _ = f.Close() }()
+				logWriter = f
+			}
+
+			// why not: ロガーの標準エラー出力先を端末にしない。buildコマンドは入力検証の
+			// エラーとビルド失敗を自前で標準出力へ書く（root_test.goがこの出力を固定
+			// している）ため、ロガーのErrorはログファイルへの記録だけに使い、端末に
+			// 同じエラーが二重に出るのを避ける。
+			log := logger.New(verboseLevel(verbose), cmd.OutOrStdout(), io.Discard, logWriter)
+
+			p := newBuildPipeline(config, log)
 
 			if errs := p.Validate(); len(errs) > 0 {
 				for _, e := range errs {
 					fmt.Fprintf(cmd.OutOrStdout(), "Error: %s\n", e) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+					log.Error(e)
 				}
 
 				return exitWith(apperr.ExitError)
@@ -112,6 +136,7 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "ビルド失敗: %s\n", result.ErrorMessage) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+			log.Error(result.ErrorMessage)
 
 			return exitWith(apperr.ExitError)
 		},
@@ -139,6 +164,11 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&templateOffline, "template-offline", false, "オフラインモード")
 
 	return cmd
+}
+
+// verboseLevel は-vの指定回数をlogger.VerboseLevelへ変換する。-vvより多い指定はDebugとして扱う。
+func verboseLevel(count int) logger.VerboseLevel {
+	return logger.VerboseLevel(min(count, int(logger.Debug)))
 }
 
 // buildProgressCallback はinternal/logger.ProgressDisplayへ委譲する

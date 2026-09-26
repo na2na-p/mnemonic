@@ -37,7 +37,7 @@ func (b *BuildPipeline) createDebugKeystore() (string, error) {
 			return path, nil
 		}
 
-		fmt.Fprintf(os.Stderr, "警告: 既存のデバッグキーストアの検証に失敗したため再作成します: %s\n", path) //nolint:errcheck // 警告出力の書き込み失敗は実用上ハンドリング不要
+		b.log().Warning("既存のデバッグキーストアの検証に失敗したため再作成します: " + path)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {

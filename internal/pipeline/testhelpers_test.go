@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -51,4 +52,44 @@ func (r fakeCommandRunner) Run(_ context.Context, name string, _ ...string) ([]b
 	}
 
 	return resp.output, resp.err
+}
+
+// logEntry はrecordingLoggerが記録した1件のログ。
+type logEntry struct {
+	level   string
+	message string
+}
+
+// recordingLogger は受け取ったログを順に記録するLoggerのテスト用実装。
+// BuildLogger（internal/logger）と同じくmutexで保護し、ワーカーから並行に
+// ログを出す箇所が加わっても-raceでテストが壊れないようにする。
+type recordingLogger struct {
+	mu      sync.Mutex
+	entries []logEntry
+}
+
+func (r *recordingLogger) record(level, message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.entries = append(r.entries, logEntry{level: level, message: message})
+}
+
+func (r *recordingLogger) Info(message string)    { r.record("INFO", message) }
+func (r *recordingLogger) Warning(message string) { r.record("WARNING", message) }
+func (r *recordingLogger) Verbose(message string) { r.record("VERBOSE", message) }
+
+// messages はlevelのログのメッセージを記録順に返す。
+func (r *recordingLogger) messages(level string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var got []string
+	for _, e := range r.entries {
+		if e.level == level {
+			got = append(got, e.message)
+		}
+	}
+
+	return got
 }

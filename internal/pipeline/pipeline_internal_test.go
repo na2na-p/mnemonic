@@ -275,6 +275,68 @@ func TestBuildPipeline_Run_PhaseFailure(t *testing.T) {
 	assert.Equal(t, []Phase{PhaseAnalyze, PhaseExtract}, result.PhasesCompleted)
 }
 
+func TestBuildPipeline_Run_LogsPhases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		failAt      Phase
+		wantVerbose []string
+	}{
+		{
+			name: "正常系: 全フェーズの開始と完了を実行順にVerboseで報告する",
+			wantVerbose: []string{
+				"analyzeフェーズを開始します", "analyzeフェーズが完了しました",
+				"extractフェーズを開始します", "extractフェーズが完了しました",
+				"convertフェーズを開始します", "convertフェーズが完了しました",
+				"buildフェーズを開始します", "buildフェーズが完了しました",
+				"signフェーズを開始します", "signフェーズが完了しました",
+			},
+		},
+		{
+			name:   "異常系: 失敗したフェーズは開始のみ報告し以降のフェーズは報告しない",
+			failAt: PhaseConvert,
+			wantVerbose: []string{
+				"analyzeフェーズを開始します", "analyzeフェーズが完了しました",
+				"extractフェーズを開始します", "extractフェーズが完了しました",
+				"convertフェーズを開始します",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newValidPipelineForOrchestration(t)
+			p.executePhase = func(phase Phase, a buildArtifacts) (buildArtifacts, error) {
+				if phase == tt.failAt {
+					return a, assert.AnError
+				}
+
+				return a, nil
+			}
+			logger := &recordingLogger{}
+			p.SetLogger(logger)
+
+			p.Run(nil)
+
+			assert.Equal(t, tt.wantVerbose, logger.messages("VERBOSE"))
+		})
+	}
+}
+
+func TestBuildPipeline_SetLogger_NilDisablesOutput(t *testing.T) {
+	t.Parallel()
+
+	p := newValidPipelineForOrchestration(t)
+	p.SetLogger(nil)
+
+	result := p.Run(nil)
+
+	assert.True(t, result.Success)
+}
+
 func TestBuildPipeline_Run_ThreadsArtifactsBetweenPhases(t *testing.T) {
 	t.Parallel()
 
@@ -620,9 +682,10 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		files      map[string]string
-		wantFailed string
+		name        string
+		files       map[string]string
+		wantFailed  string
+		wantSummary string
 	}{
 		{
 			name: "異常系: TLGとして解釈できない画像があれば変換元パスと原因を含むエラーを返す",
@@ -630,7 +693,8 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"first.ks":       "*start\n吾輩は猫である。名前はまだ無い。\n",
 				"image/bg01.tlg": "not a tlg image",
 			},
-			wantFailed: filepath.Join("image", "bg01.tlg"),
+			wantFailed:  filepath.Join("image", "bg01.tlg"),
+			wantSummary: "失敗 1件",
 		},
 		{
 			name: "正常系: 変換可能なアセットだけならエラーを返さない",
@@ -638,6 +702,7 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
 				"system/font.ttf": "stub font",
 			},
+			wantSummary: "失敗 0件",
 		},
 		{
 			name: "正常系: chardetが未対応の文字コードと推定する短いShift_JISの.csvがあってもエラーを返さない",
@@ -663,8 +728,14 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 
 			p := newTestPipeline(t)
 			t.Cleanup(p.cleanupTempDirs)
+			logger := &recordingLogger{}
+			p.SetLogger(logger)
 
 			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+			infos := logger.messages("INFO")
+			require.Len(t, infos, 1, "変換結果の集計は失敗時も含めて1回報告する")
+			assert.Contains(t, infos[0], tt.wantSummary)
 
 			if tt.wantFailed == "" {
 				require.NoError(t, err)

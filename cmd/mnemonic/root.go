@@ -32,7 +32,8 @@ func (e *cliExitError) Error() string { return "" }
 // 一律apperr.ExitErrorとする。原因別の終了コードはCI等が機械的に分岐する価値が
 // ある場合にだけ導入する方針で、doctorだけは必須ツール不足を
 // apperr.ExitDependencyErrorで返し、「実行環境が未整備」を他の失敗と区別できる
-// ようにしている。
+// ようにしている。buildの--log-fileを開けない場合も、処理に入る前に弾く
+// 引数の誤りとしてcobraのフラグ誤りと同じapperr.ExitInvalidInputを返す。
 func exitWith(code apperr.ExitCode) error {
 	if code == apperr.ExitSuccess {
 		return nil
