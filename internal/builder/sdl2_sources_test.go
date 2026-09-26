@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,12 @@ func writeValidSDL2Cache(t *testing.T, cache *builder.SDL2SourceCache) {
 		[]byte(builder.SDL2CacheCurrentVersion),
 		0o600,
 	))
+
+	sdlAppDir := filepath.Join(cache.CachePath(), "org", "libsdl", "app")
+	require.NoError(t, os.MkdirAll(sdlAppDir, 0o750))
+	for _, filename := range builder.SDL2RequiredFiles {
+		require.NoError(t, os.WriteFile(filepath.Join(sdlAppDir, filename), []byte("cached content"), 0o600))
+	}
 }
 
 func TestSDL2SourceCache_New(t *testing.T) {
@@ -155,6 +162,39 @@ func TestSDL2SourceCache_IsValid(t *testing.T) {
 
 		assert.False(t, cache.IsValid())
 	})
+
+	t.Run("異常系: 必須ファイルが1つ欠けている場合はfalse", func(t *testing.T) {
+		t.Parallel()
+
+		cache := builder.NewSDL2SourceCache(t.TempDir())
+		writeValidSDL2Cache(t, cache)
+		require.NoError(t, os.Remove(filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")))
+
+		assert.False(t, cache.IsValid())
+	})
+
+	t.Run("異常系: orgがディレクトリではなくファイルの場合はfalse", func(t *testing.T) {
+		t.Parallel()
+
+		cache := builder.NewSDL2SourceCache(t.TempDir())
+		writeValidSDL2Cache(t, cache)
+		require.NoError(t, os.RemoveAll(filepath.Join(cache.CachePath(), "org")))
+		require.NoError(t, os.WriteFile(filepath.Join(cache.CachePath(), "org"), []byte("not a directory"), 0o600))
+
+		assert.False(t, cache.IsValid())
+	})
+
+	t.Run("異常系: 必須ファイルの位置にディレクトリがある場合はfalse", func(t *testing.T) {
+		t.Parallel()
+
+		cache := builder.NewSDL2SourceCache(t.TempDir())
+		writeValidSDL2Cache(t, cache)
+		filePath := filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")
+		require.NoError(t, os.Remove(filePath))
+		require.NoError(t, os.Mkdir(filePath, 0o750))
+
+		assert.False(t, cache.IsValid())
+	})
 }
 
 func TestSDL2SourceCache_GetCachedAt(t *testing.T) {
@@ -264,7 +304,9 @@ func TestSDL2SourceCache_RestoreTo(t *testing.T) {
 		sourceDir := filepath.Join(base, "source")
 		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
 		require.NoError(t, os.MkdirAll(orgDir, 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(orgDir, "SDLActivity.java"), []byte("test content"), 0o600))
+		for _, filename := range builder.SDL2RequiredFiles {
+			require.NoError(t, os.WriteFile(filepath.Join(orgDir, filename), []byte("test content"), 0o600))
+		}
 		require.NoError(t, cache.Save(sourceDir))
 
 		destDir := filepath.Join(base, "dest")
@@ -289,6 +331,38 @@ func TestSDL2SourceCache_RestoreTo(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
 		assert.ErrorContains(t, err, "有効なキャッシュがありません")
+	})
+
+	t.Run("異常系: コピーが途中で失敗した場合はエラーを返し、復元先のorgを残さない", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootではパーミッションを除去しても読み込みを拒否できない")
+		}
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
+		// SDLActivity.java は SDLControllerManager.java より辞書順で先に走査されるため、
+		// 読み取り専用のファイルがコピーされた後で走査が中断される
+		cachedAppDir := filepath.Join(cache.CachePath(), "org", "libsdl", "app")
+		readOnlyFile := filepath.Join(cachedAppDir, "SDLActivity.java")
+		unreadableFile := filepath.Join(cachedAppDir, "SDLControllerManager.java")
+		require.NoError(t, os.Chmod(readOnlyFile, 0o400))
+		require.NoError(t, os.Chmod(unreadableFile, 0o000))
+		t.Cleanup(func() {
+			require.NoError(t, os.Chmod(readOnlyFile, 0o600))
+			require.NoError(t, os.Chmod(unreadableFile, 0o600))
+		})
+
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		err := cache.RestoreTo(destDir)
+
+		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
+		require.ErrorIs(t, err, builder.ErrSDL2SourceFetcher)
+		assert.NoDirExists(t, filepath.Join(destDir, "org"))
 	})
 }
 
@@ -338,14 +412,17 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 
 		base := t.TempDir()
 		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
 
-		sourceDir := filepath.Join(base, "source")
-		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
-		require.NoError(t, os.MkdirAll(orgDir, 0o750))
-		require.NoError(t, os.WriteFile(filepath.Join(orgDir, "SDLActivity.java"), []byte("cached content"), 0o600))
-		require.NoError(t, cache.Save(sourceDir))
+		var callCount atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount.Add(1)
+			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
+		}))
+		t.Cleanup(server.Close)
 
 		f := builder.NewSDL2SourceFetcher(0, cache)
+		f.BaseURL = server.URL
 		destDir := filepath.Join(base, "dest")
 		require.NoError(t, os.MkdirAll(destDir, 0o750))
 
@@ -355,6 +432,120 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 		content, err := os.ReadFile(restored) //nolint:gosec // テストで生成した固定パス
 		require.NoError(t, err)
 		assert.Equal(t, "cached content", string(content))
+		assert.Zero(t, callCount.Load())
+	})
+
+	t.Run("正常系: 必須ファイルが欠けたキャッシュは使わずダウンロードし、キャッシュを作り直す", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
+		require.NoError(t, os.Remove(filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")))
+
+		var callCount atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount.Add(1)
+			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
+		}))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(0, cache)
+		f.BaseURL = server.URL
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		require.NoError(t, f.Fetch(destDir))
+
+		assert.EqualValues(t, len(builder.SDL2RequiredFiles), callCount.Load())
+		for _, filename := range builder.SDL2RequiredFiles {
+			assert.FileExists(t, filepath.Join(destDir, "org", "libsdl", "app", filename))
+		}
+		assert.True(t, cache.IsValid())
+	})
+
+	t.Run("正常系: 有効なキャッシュの復元に失敗した場合はダウンロードへフォールバックする", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootではパーミッションを除去しても読み込みを拒否できない")
+		}
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
+		cachedFile := filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")
+		require.NoError(t, os.Chmod(cachedFile, 0o000))
+		t.Cleanup(func() {
+			require.NoError(t, os.Chmod(cachedFile, 0o600))
+		})
+
+		var callCount atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount.Add(1)
+			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
+		}))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(0, cache)
+		f.BaseURL = server.URL
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		require.NoError(t, f.Fetch(destDir))
+
+		assert.EqualValues(t, len(builder.SDL2RequiredFiles), callCount.Load())
+		for _, filename := range builder.SDL2RequiredFiles {
+			content, err := os.ReadFile(filepath.Join(destDir, "org", "libsdl", "app", filename)) //nolint:gosec // テストで生成した固定パス
+			require.NoError(t, err)
+			assert.Equal(t, "downloaded content: /"+filename, string(content))
+		}
+	})
+
+	t.Run("正常系: 復元が途中で失敗しても部分復元を残さずダウンロードで置き換える", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootではパーミッションを除去しても読み込みを拒否できない")
+		}
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
+		// Legacy.java と SDLActivity.java は SDLControllerManager.java より辞書順で先に走査されるため、
+		// 走査が中断される前に復元先へコピーされる
+		cachedAppDir := filepath.Join(cache.CachePath(), "org", "libsdl", "app")
+		require.NoError(t, os.WriteFile(filepath.Join(cachedAppDir, "Legacy.java"), []byte("legacy"), 0o600))
+		readOnlyFile := filepath.Join(cachedAppDir, "SDLActivity.java")
+		unreadableFile := filepath.Join(cachedAppDir, "SDLControllerManager.java")
+		require.NoError(t, os.Chmod(readOnlyFile, 0o400))
+		require.NoError(t, os.Chmod(unreadableFile, 0o000))
+		t.Cleanup(func() {
+			require.NoError(t, os.Chmod(readOnlyFile, 0o600))
+			require.NoError(t, os.Chmod(unreadableFile, 0o600))
+		})
+
+		var callCount atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount.Add(1)
+			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
+		}))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(0, cache)
+		f.BaseURL = server.URL
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		require.NoError(t, f.Fetch(destDir))
+
+		assert.EqualValues(t, len(builder.SDL2RequiredFiles), callCount.Load())
+		for _, filename := range builder.SDL2RequiredFiles {
+			content, err := os.ReadFile(filepath.Join(destDir, "org", "libsdl", "app", filename)) //nolint:gosec // テストで生成した固定パス
+			require.NoError(t, err)
+			assert.Equal(t, "downloaded content: /"+filename, string(content))
+		}
+		assert.NoFileExists(t, filepath.Join(destDir, "org", "libsdl", "app", "Legacy.java"))
 	})
 
 	t.Run("正常系: キャッシュが無効な場合はダウンロードする", func(t *testing.T) {
@@ -363,9 +554,9 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 		base := t.TempDir()
 		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
 
-		callCount := 0
+		var callCount atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			callCount++
+			callCount.Add(1)
 			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
 		}))
 		t.Cleanup(server.Close)
@@ -380,7 +571,7 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 		sdlAppDir := filepath.Join(destDir, "org", "libsdl", "app")
 		assert.DirExists(t, sdlAppDir)
 		assert.FileExists(t, filepath.Join(sdlAppDir, "SDLActivity.java"))
-		assert.Equal(t, len(builder.SDL2RequiredFiles), callCount)
+		assert.EqualValues(t, len(builder.SDL2RequiredFiles), callCount.Load())
 	})
 
 	t.Run("正常系: ダウンロード後にキャッシュに保存する", func(t *testing.T) {
@@ -400,6 +591,29 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 		require.NoError(t, f.Fetch(destDir))
 
 		assert.True(t, cache.IsValid())
+	})
+
+	t.Run("正常系: キャッシュ保存に失敗してもダウンロード結果を返す", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		cacheParent := filepath.Join(base, "cache-parent")
+		require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+		cache := builder.NewSDL2SourceCache(cacheParent)
+
+		server := httptest.NewServer(sdl2FetcherHandler(t))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(0, cache)
+		f.BaseURL = server.URL
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		require.NoError(t, f.Fetch(destDir))
+
+		for _, filename := range builder.SDL2RequiredFiles {
+			assert.FileExists(t, filepath.Join(destDir, "org", "libsdl", "app", filename))
+		}
 	})
 
 	t.Run("異常系: HTTPエラーの場合はErrSDL2SourceFetchNetwork", func(t *testing.T) {

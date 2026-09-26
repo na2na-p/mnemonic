@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,31 +130,21 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 		assert.Equal(t, "dummy content", string(content))
 	})
 
-	t.Run("異常系: キャッシュ復元に失敗した場合ErrTemplatePreparerとErrSDL2SourceFetchの両方を満たす", func(t *testing.T) {
+	t.Run("異常系: SDL2ソースの取得に失敗した場合ErrTemplatePreparerとErrSDL2SourceFetchの両方を満たす", func(t *testing.T) {
 		t.Parallel()
 
-		// マーカー/バージョンファイルは有効だがorgディレクトリを欠いた
-		// 壊れたキャッシュを用意し、実ネットワークに触れずに
-		// Cache.RestoreToを確実に失敗させる（レビュー指摘: 一般センチネル
-		// ErrTemplatePreparerと具体センチネルErrSDL2SourceFetchの両方を
-		// errors.Isで検証する）。
-		cacheDir := t.TempDir()
-		cache := NewSDL2SourceCache(cacheDir)
-		require.NoError(t, os.MkdirAll(cache.CachePath(), 0o750))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(cache.CachePath(), SDL2CacheMarkerFile),
-			[]byte(time.Now().Format(time.RFC3339Nano)),
-			0o600,
-		))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(cache.CachePath(), SDL2CacheVersionFile),
-			[]byte(SDL2CacheCurrentVersion),
-			0o600,
-		))
-		// "org" ディレクトリは意図的に作成しない
-
+		// 配置先のorgを通常ファイルにしておき、ダウンロードより前の配置先
+		// ディレクトリ作成でFetchを確実に失敗させる（実ネットワークには触れない）。
+		//
+		// why not: 壊れたキャッシュでは失敗させられない。キャッシュの不備は
+		// ダウンロードへのフォールバックで吸収されるため、テストが実ネットワークに
+		// 出てしまう。
 		projectDir := t.TempDir()
-		p := NewTemplatePreparer(projectDir, cache)
+		javaDir := filepath.Join(projectDir, "app", "src", "main", "java")
+		require.NoError(t, os.MkdirAll(javaDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(javaDir, "org"), []byte("not a directory"), 0o600))
+
+		p := NewTemplatePreparer(projectDir, nil)
 
 		err := p.fetchSDL2Sources()
 

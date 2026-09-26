@@ -139,6 +139,8 @@ func TestClearCacheDir(t *testing.T) {
 			t,
 			os.WriteFile(filepath.Join(templateDir, "template.txt"), []byte("template"), 0o600),
 		)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sdl2_sources"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "sdl2_sources", "x"), []byte("sdl2"), 0o600))
 
 		err := cache.ClearCacheDir(dir, false)
 
@@ -159,6 +161,9 @@ func TestClearCacheDir(t *testing.T) {
 			t,
 			os.WriteFile(filepath.Join(templateDir, "template.txt"), []byte("template"), 0o600),
 		)
+		sdl2SourceFile := filepath.Join(dir, "sdl2_sources", "x")
+		require.NoError(t, os.MkdirAll(filepath.Dir(sdl2SourceFile), 0o750))
+		require.NoError(t, os.WriteFile(sdl2SourceFile, []byte("sdl2"), 0o600))
 
 		err := cache.ClearCacheDir(dir, true)
 
@@ -167,6 +172,8 @@ func TestClearCacheDir(t *testing.T) {
 		require.NoError(t, statErr)
 		_, statErr = os.Stat(filepath.Join(dir, "templates"))
 		assert.True(t, os.IsNotExist(statErr))
+		_, statErr = os.Stat(sdl2SourceFile)
+		require.NoError(t, statErr)
 	})
 
 	t.Run("正常系: 存在しないディレクトリのクリアはエラーにならない", func(t *testing.T) {
