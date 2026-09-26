@@ -198,7 +198,9 @@ func TestBuildPipeline_SanitizeName(t *testing.T) {
 		{name: "正常系: Java予約語にプレフィックス追加", input: "true", want: "game_true"},
 		{name: "正常系: Java予約語falseにプレフィックス追加", input: "false", want: "game_false"},
 		{name: "正常系: Java予約語nullにプレフィックス追加", input: "null", want: "game_null"},
-		{name: "正常系: 数字始まりにプレフィックス追加", input: "123game", want: "_123game"},
+		{name: "正常系: 数字始まりでもプレフィックスを付けない", input: "123game", want: "123game"},
+		{name: "正常系: 先頭の空白由来アンダースコアを除去してから予約語を判定する", input: " true", want: "game_true"},
+		{name: "正常系: 先頭の空白由来アンダースコアを除去", input: "ひぐらし Game", want: "game"},
 		{name: "正常系: 特殊文字を削除", input: "game!@#$%", want: "game"},
 		{name: "正常系: スペースと数字の組み合わせ", input: "My Game 2", want: "my_game_2"},
 		{name: "正常系: 全角文字のみは空文字列になる", input: "全角だけの題名", want: ""},
@@ -214,6 +216,46 @@ func TestBuildPipeline_SanitizeName(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, tt.want, p.sanitizeName(tt.input))
+		})
+	}
+}
+
+func TestBuildPipeline_DerivePackageName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		explicit string
+		baseName string
+		want     string
+		wantErr  bool
+	}{
+		{name: "正常系: 指定されたパッケージ名をそのまま返す", explicit: "com.example.game", baseName: "全角だけの題名", want: "com.example.game"},
+		{name: "正常系: 英字のタイトルからパッケージ名を導出する", explicit: "", baseName: "TRUE REMEMBRANCE", want: "com.krkr.true_remembrance"},
+		{name: "正常系: 先頭の空白由来アンダースコアを除いた英字始まりの名前を使う", explicit: "", baseName: "ひぐらし Game", want: "com.krkr.game"},
+		{name: "異常系: 数字始まりのタイトルはエラーを返す", explicit: "", baseName: "123game", wantErr: true},
+		{name: "異常系: 全角のみのタイトルはエラーを返す", explicit: "", baseName: "全角だけの題名", wantErr: true},
+		{name: "異常系: 英数字が無いタイトルはエラーを返す", explicit: "", baseName: "ひぐらし のなく頃に", wantErr: true},
+		{name: "正常系: 末尾の空白由来アンダースコアは残す", explicit: "", baseName: "Game ひぐらし", want: "com.krkr.game_"},
+		{name: "異常系: 空白のみのタイトルはエラーを返す", explicit: "", baseName: "   ", wantErr: true},
+	}
+
+	p := newTestPipeline(t)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := p.derivePackageName(tt.explicit, tt.baseName)
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrPackageNameUndeterminable)
+				assert.Empty(t, got)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -239,6 +281,8 @@ func TestBuildPipeline_ExecuteBuild_ErrorsWhenPackageNameUndeterminable(t *testi
 	}{
 		{name: "異常系: タイトルが全角のみでパッケージ名未指定ならエラーを返す", title: "全角だけの題名", packageName: "", wantErr: true},
 		{name: "異常系: タイトルが空でファイル名も全角のみならエラーを返す", title: "", packageName: "", wantErr: true},
+		{name: "異常系: タイトルに英数字が無ければエラーを返す", title: "ひぐらし のなく頃に", packageName: "", wantErr: true},
+		{name: "異常系: タイトルが数字始まりならエラーを返す", title: "123game", packageName: "", wantErr: true},
 		{name: "正常系: パッケージ名を指定すればタイトルが全角のみでもエラーにしない", title: "全角だけの題名", packageName: "com.example.x", wantErr: false},
 	}
 
