@@ -27,8 +27,9 @@ var (
 
 // maxFileTableSize はファイルテーブルの解凍後サイズの上限。
 //
-// why not: 圧縮後サイズはファイル残量でクランプ済みだが、zlibは約1000:1まで
+// why not: 圧縮後サイズはファイル残量を超えられないが、zlibは約1000:1まで
 // 膨張しうるため、それだけでは1MBのアーカイブで約1GBを確保させられる。
+// original_sizeもアーカイブ自身の値なので上限には使えない。
 // 実アーカイブの索引は数MBが上限で、64MiBなら細工されたzlibによる膨張だけを弾ける。
 const maxFileTableSize = 64 << 20
 
@@ -327,25 +328,57 @@ func (a *XP3Archive) readRawFileTable(f io.ReadSeeker, fileSize, budget int64) (
 }
 
 // readZlibFileTable はフラグ直後のcompressed_size、original_sizeと、それに続く
-// zlib圧縮のファイルテーブルを読み取って解凍する。
+// zlib圧縮のファイルテーブルを読み取り、budgetバイトを上限に解凍して返す。
 //
-// original_sizeは解凍後サイズの検証に使える可能性があるが、現時点では読み飛ばす
-// のみで使用しない。
+// why not: 解凍できないテーブルを非圧縮のテーブルとして読み替えない。krkrz
+// （base/XP3Archive.cpp の TVP_XP3_INDEX_ENCODE_ZLIB 分岐）は解凍失敗を
+// TVPUncompressionFailed として投げ、krkrrel（krdevui RelSettingsUnit.cpp）は
+// 圧縮に失敗した索引をフラグ0x00の非圧縮インデックスとして書く。読み替えても
+// 正しいアーカイブは救えず、途切れたり壊れたりしたテーブルは原因と無関係な
+// チャンクのエラーになり、細工されたバイト列はそのままファイルテーブルとして
+// 通ってしまう。
+//
+// why not: 解凍後の長さがoriginal_sizeと違うテーブルを受け入れない。krkrz は
+// original_sizeぶんの領域へ解凍し、長さが一致しなければ同じく投げる。krkrrel は
+// 圧縮前のテーブル長をそのままoriginal_sizeに書くため、正しいアーカイブは
+// 締め出さない。
+//
+// why not: compressed_sizeを残量へ縮めて読まない。krkrz はcompressed_sizeぶんを
+// ReadBufferで読み、足りなければエラーにする（tjs2/tjs.cpp）。縮めると、宣言が
+// 残量を超えていても残りに完結したzlibストリームがあるテーブルを、krkrz が
+// 読めないのに受け入れてしまう。
 func (a *XP3Archive) readZlibFileTable(f io.ReadSeeker, fileSize, budget int64) ([]byte, error) {
 	compressedSize, ok := readUint64(f)
 	if !ok {
 		return nil, a.invalidIndexError("ファイルテーブルの圧縮後サイズを読み取れません")
 	}
-	if _, ok := readUint64(f); !ok {
+	originalSize, ok := readUint64(f)
+	if !ok {
 		return nil, a.invalidIndexError("ファイルテーブルの元サイズを読み取れません")
 	}
 
-	compressedSizeInt64, ok := safeInt64(compressedSize)
-	if !ok {
-		return nil, a.invalidIndexError("ファイルテーブルの圧縮後サイズが範囲外です")
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, a.invalidIndexError("ファイルテーブルの位置を取得できません")
+	}
+	if compressedSize > uint64(max(fileSize-offset, 0)) {
+		return nil, a.invalidIndexError("ファイルテーブルの圧縮後サイズがファイル残量を超えています")
 	}
 
-	return a.readFileTable(f, compressedSizeInt64, fileSize, budget)
+	compressed := make([]byte, compressedSize)
+	if _, err := io.ReadFull(f, compressed); err != nil {
+		return nil, a.invalidIndexError("ファイルテーブルを読み取れません")
+	}
+
+	tableData, err := decompressZlib(compressed, budget)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ファイルテーブル: %w: %s", ErrInvalidXP3, err, a.archivePath)
+	}
+	if uint64(len(tableData)) != originalSize {
+		return nil, a.invalidIndexError("ファイルテーブルの展開後サイズが宣言と一致しません")
+	}
+
+	return tableData, nil
 }
 
 func readUint64(f io.Reader) (uint64, bool) {
@@ -369,46 +402,6 @@ func safeInt64(v uint64) (int64, bool) {
 	}
 
 	return int64(v), true //nolint:gosec // 直前のv > math.MaxInt64チェックによりオーバーフローしないことを保証済み
-}
-
-// readFileTable は現在位置からtableSizeバイトのzlib圧縮ファイルテーブルを
-// 読み取り、budgetバイトを上限に解凍して返す。解凍できない場合は読み取った
-// バイト列をそのまま返す。
-//
-// why not: tableSizeはアーカイブ由来の宣言値であり、そのまま確保すると細工された
-// アーカイブ1つで数GBを確保したり、makesliceの上限超過でpanicしたりする。
-// そのため現在位置以降の実際の残量へクランプしてから確保する。
-func (a *XP3Archive) readFileTable(f io.ReadSeeker, tableSize, fileSize, budget int64) ([]byte, error) {
-	offset, err := f.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return nil, a.invalidIndexError("ファイルテーブルの位置を取得できません")
-	}
-
-	tableSize = min(tableSize, max(fileSize-offset, 0))
-	if tableSize <= 0 {
-		return nil, a.invalidIndexError("ファイルテーブルがありません")
-	}
-
-	compressed := make([]byte, tableSize)
-	n, err := io.ReadFull(f, compressed)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, a.invalidIndexError("ファイルテーブルを読み取れません")
-	}
-	compressed = compressed[:n]
-
-	tableData, err := decompressZlib(compressed, budget)
-	if errors.Is(err, ErrDecompressedTooLarge) {
-		return nil, fmt.Errorf("%w: ファイルテーブル: %w: %s", ErrInvalidXP3, err, a.archivePath)
-	}
-	if err != nil {
-		// 圧縮されていない場合はそのまま使用する。
-		tableData = compressed
-	}
-	if int64(len(tableData)) > budget {
-		return nil, a.invalidIndexError("ファイルテーブルの合計が上限を超えています")
-	}
-
-	return tableData, nil
 }
 
 // decompressZlib はdataをzlib解凍する。解凍結果がlimitバイトを超える場合は
