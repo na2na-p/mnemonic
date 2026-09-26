@@ -346,7 +346,7 @@ func TestPlannedOutputSize(t *testing.T) {
 		{"正常系: 4KiBのスクリプトと空の圧縮スクリプト10件", emptyScriptsProbe(10), 1 << 20, 4096 + 10*8*1032},
 		{"正常系: 4KiBのスクリプトと空の圧縮スクリプト100件でも1MiBに満たない", emptyScriptsProbe(100), 1 << 20, 4096 + 100*8*1032},
 		{"正常系: 圧縮セグメントの生データが解凍後サイズより大きければ生データを数える", []XP3FileEntry{entry(compressed(800, 1))}, fileSize, 800},
-		{"正常系: 圧縮フラグでも圧縮前後のサイズが等しいセグメントは非圧縮として残量へクランプする", []XP3FileEntry{entry(compressed(5000, 5000))}, fileSize, fileSize},
+		{"正常系: 圧縮前後のサイズが等しい圧縮セグメントも宣言した解凍後サイズを数える", []XP3FileEntry{entry(compressed(5000, 5000))}, fileSize, 5000},
 		{"正常系: 同じ範囲を共有する複数エントリはエントリごとに数える", []XP3FileEntry{entry(stored(0, 400)), entry(stored(0, 400)), entry(stored(0, 400))}, fileSize, 1200},
 		{"正常系: 同じ範囲を指す複数の非圧縮セグメントもセグメントごとに数える", []XP3FileEntry{entry(stored(0, 400), stored(0, 400))}, fileSize, 800},
 		{"正常系: 1エントリの合計はアーカイブサイズと解凍上限1GiBの和を上限にする", []XP3FileEntry{entry(compressed(2<<20, 1<<30), compressed(2<<20, 1<<30), compressed(2<<20, 1<<30))}, 4 << 20, 4<<20 + 1<<30},

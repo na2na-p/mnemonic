@@ -95,9 +95,9 @@ func (e *XP3EncryptionError) Error() string {
 type XP3Segment struct {
 	// Offset はセグメントデータのオフセット。
 	Offset int64
-	// Size は圧縮後サイズ。
+	// Size はアーカイブに格納されたバイト数（圧縮セグメントでは圧縮後サイズ）。
 	Size int64
-	// OriginalSize は元のサイズ。
+	// OriginalSize は元のサイズ（圧縮セグメントでは解凍後サイズ）。
 	OriginalSize int64
 	// IsCompressed は圧縮されているか。
 	IsCompressed bool
@@ -576,11 +576,16 @@ func parseSegments(segmData []byte) []XP3Segment {
 		flags := binary.LittleEndian.Uint32(record[0:4])
 		// safeInt64がfalseの場合、対応フィールドはゼロ値のまま
 		// （セグメント自体は破棄せず、パース可能な範囲の情報を活かす）。
+		//
+		// why not: 格納サイズを先に読まない。krkrz（base/XP3Archive.cpp）は+12を
+		// 元サイズ、+20を格納サイズとして読み、krkrrel-ng（src/krkrrel.cpp）も
+		// この順に書く。逆に読むと解凍後サイズの上限が格納サイズになり、格納サイズ
+		// より大きく膨らむ圧縮セグメントが展開に失敗する。
 		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[12:20])); ok {
-			segment.Size = v
+			segment.OriginalSize = v
 		}
 		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[20:28])); ok {
-			segment.OriginalSize = v
+			segment.Size = v
 		}
 		segment.IsCompressed = flags&0x07 != 0
 
@@ -759,8 +764,14 @@ func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
 }
 
 // segmentDecompresses はreadSegmentがsegmentをzlib解凍するかどうかを返す。
+//
+// why not: 格納サイズと元サイズが等しい圧縮セグメントを非圧縮とみなさない。
+// krkrrel-ng（src/krkrrel.cpp）は圧縮結果が元より小さくならなくてもzlibの
+// フラグで格納し、krkrzのtTVPXP3ArchiveStream::EnsureSegment
+// （base/XP3Archive.cpp）はサイズを比べずにzlibのセグメントをすべて解凍する。
+// 非圧縮とみなすとzlibストリームそのものを書き出してしまう。
 func segmentDecompresses(segment XP3Segment) bool {
-	return segment.IsCompressed && segment.Size != segment.OriginalSize
+	return segment.IsCompressed
 }
 
 // saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。

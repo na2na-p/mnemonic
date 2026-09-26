@@ -571,10 +571,10 @@ func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3I
 		}
 		writeChunkHeader(&entryBody, "info", info.Bytes())
 
-		// segmサブチャンク（セグメントごとに28バイトのレコードを連結）。
-		// フラグは0x07（マルチビット値）。パース側の判定はflags&0x07 != 0の
-		// ため0x01でも判定結果は同じだが、実際のXP3アーカイブで観測される値と
-		// バイト列レベルで一致させる。
+		// segmサブチャンク（セグメントごとに28バイトのレコードを連結し、
+		// flags、offset、元サイズ、格納サイズの順に書く）。
+		// フラグは0x07。パース側の判定はflags&0x07 != 0のため0x01でも判定結果は
+		// 同じになる（krkrrel-ngが圧縮セグメントに書く値は0x01）。
 		var segm bytes.Buffer
 		for _, seg := range entrySegments[i] {
 			var segmFlags uint32
@@ -583,8 +583,8 @@ func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3I
 			}
 			writeUint32(&segm, segmFlags)
 			writeUint64(&segm, uint64(seg.offset)) //nolint:gosec // テストヘルパーであり非負であることが既知
-			writeUint64(&segm, uint64(seg.size))   //nolint:gosec // テストヘルパーであり非負であることが既知
 			writeUint64(&segm, seg.originalSize)
+			writeUint64(&segm, uint64(seg.size)) //nolint:gosec // テストヘルパーであり非負であることが既知
 		}
 		writeChunkHeader(&entryBody, "segm", segm.Bytes())
 
@@ -887,8 +887,8 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 	var segm bytes.Buffer
 	writeUint32(&segm, 0)              // flags
 	writeUint64(&segm, math.MaxUint64) // offset（int64範囲超過 → セグメント自体が破棄される）
-	writeUint64(&segm, 5)              // size（範囲内だがoffset破棄により無関係）
-	writeUint64(&segm, 5)              // originalSize（同上）
+	writeUint64(&segm, 5)              // originalSize（範囲内だがoffset破棄により無関係）
+	writeUint64(&segm, 5)              // size（同上）
 
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
@@ -942,8 +942,8 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 	var segm bytes.Buffer
 	writeUint32(&segm, 0)              // flags
 	writeUint64(&segm, 0)              // offset（範囲内・破棄されない）
-	writeUint64(&segm, math.MaxUint64) // size（int64範囲超過）
 	writeUint64(&segm, math.MaxUint64) // originalSize（int64範囲超過）
+	writeUint64(&segm, math.MaxUint64) // size（int64範囲超過）
 
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
@@ -1256,81 +1256,157 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 	})
 }
 
-// TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes は、
-// segmのis_compressedフラグ（0x07）が立っていてもSize==OriginalSizeの場合は
-// 「圧縮後サイズ==元サイズ」つまり実質未圧縮を意味するため解凍を試みず、
-// アーカイブ上の生バイト列をそのまま採用すること（is_compressedかつ
-// size != original_sizeの場合のみ解凍するガード条件）をpinする。
+// engineLayoutSegment はbuildEngineLayoutXP3が書き出すsegmレコード1件分の値。
+// payloadはアーカイブに格納するバイト列そのものであり、その長さを格納サイズとして書く。
+type engineLayoutSegment struct {
+	flags        uint32
+	payload      []byte
+	originalSize uint64
+}
+
+// buildEngineLayoutXP3 はエントリnameを1件だけ持つXP3アーカイブを、非圧縮の索引で
+// 組み立てる。segmレコードはflags(4)、offset(8)、元サイズ(8)、格納サイズ(8)の順に
+// 書く。この順はkrkrzのtTVPXP3Archive（base/XP3Archive.cpp L504-505が+12を元サイズ、
+// +20を格納サイズとして読む）、GARbro（ArcFormats/KiriKiri/ArcXP3.cs L223-225）、
+// krkrrel-ng（src/krkrrel.cpp L771-777がOrgSize、StoreSizeの順に書く）で一致する。
 //
-// 生バイト列自体を「たまたま正当なzlibストリームだが別の内容を指す」もの
-// にしておくことで、ガード条件（Size != OriginalSize）が取り除かれた場合
-// （解凍が誤って実行された場合）に解凍が成功してしまい、期待値と異なる
-// 内容（別内容の解凍結果）が出力されて検出できるようにしている
-// （単なる非zlibバイト列だと、解凍失敗時にdecompressZlibのエラーが
-// 握りつぶされ元のバイト列がそのまま残るため、ガード除去のミューテーションを
-// 検出できない）。
-func TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes(t *testing.T) {
-	t.Parallel()
+// why not: buildXP3ArchiveWithLayoutを使わない。フィクスチャとパーサーが同じ順序を
+// 取り違えると往復検証はそのまま通ってしまうため、ここでは外部の実装が定める
+// レイアウトを値ごとに書き下す。
+func buildEngineLayoutXP3(name string, segments []engineLayoutSegment) []byte {
+	const headerSize = 19 // マジック(11) + 索引オフセット(8)
 
-	const headerSize = 19
+	le := binary.LittleEndian
 
-	// 「別の内容」をzlib圧縮したバイト列を、そのままアーカイブ上の生データ
-	// として配置する。ガードが正しく機能していれば、このzlib圧縮済みバイト列
-	// 自体がそのまま展開結果になるはず（内部のinnerContentへ解凍されない）。
-	innerContent := []byte("THIS_SHOULD_NOT_BE_DECOMPRESSED")
-	rawPayload := compressZlib(t, innerContent)
-	offset := int64(headerSize)
-
-	nameUTF16 := utf16.Encode([]rune("raw_passthrough.bin"))
-
-	var info bytes.Buffer
-	writeUint32(&info, 0)
-	writeUint64(&info, uint64(len(rawPayload)))
-	writeUint64(&info, uint64(len(rawPayload)))
-	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
-	for _, u := range nameUTF16 {
-		writeUint16(&info, u)
+	var data, segm []byte
+	var originalTotal, storedTotal uint64
+	for _, s := range segments {
+		segm = le.AppendUint32(segm, s.flags)
+		segm = le.AppendUint64(segm, uint64(headerSize+len(data))) //nolint:gosec // テストで組み立てる既知の小さい値
+		segm = le.AppendUint64(segm, s.originalSize)
+		segm = le.AppendUint64(segm, uint64(len(s.payload)))
+		data = append(data, s.payload...)
+		originalTotal += s.originalSize
+		storedTotal += uint64(len(s.payload))
 	}
 
-	var segm bytes.Buffer
-	writeUint32(&segm, 0x07)                    // is_compressed = true（マルチビットフラグ）
-	writeUint64(&segm, uint64(offset))          //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&segm, uint64(len(rawPayload))) // size
-	writeUint64(&segm, uint64(len(rawPayload))) // original_size（sizeと同一 → 解凍を試みてはいけない）
+	nameUTF16 := utf16.Encode([]rune(name))
+	var info []byte
+	info = le.AppendUint32(info, 0)
+	info = le.AppendUint64(info, originalTotal)
+	info = le.AppendUint64(info, storedTotal)
+	info = le.AppendUint16(info, uint16(len(nameUTF16))) //nolint:gosec // テストで渡す名前は短い既知の値
+	for _, u := range nameUTF16 {
+		info = le.AppendUint16(info, u)
+	}
 
-	var entryBody bytes.Buffer
-	writeChunkHeader(&entryBody, "info", info.Bytes())
-	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+	chunk := func(name string, body []byte) []byte {
+		return append(le.AppendUint64([]byte(name), uint64(len(body))), body...)
+	}
+	table := chunk("File", append(chunk("info", info), chunk("segm", segm)...))
 
-	var table bytes.Buffer
-	writeChunkHeader(&table, "File", entryBody.Bytes())
+	archive := bytes.Clone(parser.XP3Magic)
+	archive = le.AppendUint64(archive, uint64(headerSize+len(data))) //nolint:gosec // テストで組み立てる既知の小さい値
+	archive = append(archive, data...)
+	archive = append(archive, 0x00)
+	archive = le.AppendUint64(archive, uint64(len(table)))
 
-	compressedTable := compressZlib(t, table.Bytes())
+	return append(archive, table...)
+}
 
-	var buf bytes.Buffer
-	buf.Write(parser.XP3Magic)
-	indexOffset := int64(headerSize) + int64(len(rawPayload))
-	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
-	buf.Write(rawPayload)
+// sameSizeZlibContent は、compressZlibで圧縮した長さが元の長さと等しくなる内容を返す。
+// 疑似乱数256バイトの後ろに同じバイトの連続を1バイトずつ伸ばしていき、長さが
+// 一致したものを採る。
+//
+// why not: 内容を固定値で埋め込まない。圧縮後の長さはcompress/zlibの実装が
+// 決めるため、実行時に探す。
+func sameSizeZlibContent(t *testing.T) []byte {
+	t.Helper()
 
-	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
-	writeUint64(&buf, uint64(len(compressedTable)))
-	writeUint64(&buf, uint64(table.Len()))
-	buf.Write(compressedTable)
+	noise := make([]byte, 256)
+	x := uint32(1)
+	for i := range noise {
+		x = x*1664525 + 1013904223
+		noise[i] = byte(x >> 24)
+	}
+	for run := range 1024 {
+		content := append(bytes.Clone(noise), bytes.Repeat([]byte{'a'}, run)...)
+		if len(compressZlib(t, content)) == len(content) {
+			return content
+		}
+	}
+	require.FailNow(t, "圧縮後の長さが元の長さと等しくなる内容が見つからない")
 
-	path := filepath.Join(t.TempDir(), "raw_passthrough.xp3")
-	writeFile(t, path, buf.Bytes())
+	return nil
+}
 
-	archive, err := parser.NewXP3Archive(path)
-	require.NoError(t, err)
+// TestXP3Archive_ExtractAll_EngineSegmLayout は、krkrzが読むレイアウト
+// （buildEngineLayoutXP3参照）で書いたsegmレコードを、krkrzと同じ内容へ展開する
+// ことを検証する。
+//
+// 格納サイズと元サイズが等しいzlib圧縮セグメントも解凍する。krkrrel-ng
+// （src/krkrrel.cpp L491-549）は圧縮結果が元より小さくならなくてもフラグ1で
+// 格納し、krkrzのtTVPXP3ArchiveStream::EnsureSegment（base/XP3Archive.cpp
+// L863-893）はサイズを比べずにzlibのセグメントをすべて解凍するため。
+func TestXP3Archive_ExtractAll_EngineSegmLayout(t *testing.T) {
+	t.Parallel()
 
-	outputDir := t.TempDir()
-	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+	script := bytes.Repeat([]byte("*start\r\n[cm]こんにちは[p]\r\n"), 36)
+	ogg := bytes.Repeat([]byte{'o'}, 400)
+	emptyZlib := compressZlib(t, nil)
+	require.Len(t, emptyZlib, 8)
+	sameSize := sameSizeZlibContent(t)
 
-	extracted, err := os.ReadFile(filepath.Join(outputDir, "raw_passthrough.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
-	require.NoError(t, err)
-	assert.Equal(t, rawPayload, extracted)
-	assert.NotEqual(t, innerContent, extracted)
+	cases := map[string]struct {
+		segments []engineLayoutSegment
+		want     []byte
+	}{
+		"正常系: zlib圧縮セグメントを元サイズまで解凍する": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressZlib(t, script), originalSize: uint64(len(script))},
+			},
+			want: script,
+		},
+		"正常系: 非圧縮とzlib圧縮のセグメントを順に連結する": {
+			segments: []engineLayoutSegment{
+				{flags: 0, payload: []byte("OggS-head"), originalSize: 9},
+				{flags: 1, payload: compressZlib(t, ogg), originalSize: uint64(len(ogg))},
+			},
+			want: append([]byte("OggS-head"), ogg...),
+		},
+		"正常系: 元サイズ0を宣言した8バイトのzlibストリームは空のファイルになる": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: emptyZlib, originalSize: 0},
+			},
+			want: []byte{},
+		},
+		"正常系: 格納サイズと元サイズが等しいzlib圧縮セグメントも解凍する": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressZlib(t, sameSize), originalSize: uint64(len(sameSize))},
+			},
+			want: sameSize,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "engine.xp3")
+			writeFile(t, path, buildEngineLayoutXP3("data/entry.bin", tc.segments))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
+			require.Equal(t, []string{"data/entry.bin"}, archive.ListFiles())
+
+			outputDir := filepath.Join(tmpDir, "out")
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			got, err := os.ReadFile(filepath.Join(outputDir, "data", "entry.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize は、悪意ある
@@ -1450,8 +1526,8 @@ func buildUncompressedSingleEntryTable(name string) []byte {
 	var segm bytes.Buffer
 	writeUint32(&segm, 0) // flags
 	writeUint64(&segm, 0) // offset
-	writeUint64(&segm, 0) // size
 	writeUint64(&segm, 0) // original_size
+	writeUint64(&segm, 0) // size
 
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
@@ -2153,8 +2229,8 @@ func buildSingleCompressedSegmentArchive(t *testing.T, payload []byte, originalS
 	var segm bytes.Buffer
 	writeUint32(&segm, 0x07)
 	writeUint64(&segm, headerSize)
-	writeUint64(&segm, uint64(len(payload)))
 	writeUint64(&segm, originalSize)
+	writeUint64(&segm, uint64(len(payload)))
 
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
