@@ -65,29 +65,36 @@ go build -o mnemonic ./cmd/mnemonic
 mnemonic build <input.exe> -o <output.apk>
 ```
 
-主なオプション:
+`mnemonic build --help` の出力:
 
+<!-- build-help:start -->
 ```
-  -o, --output string               出力APKパス
+ゲームをAndroid APKにビルドする。
+
+--keystore指定時、署名パスワードは環境変数 MNEMONIC_KEYSTORE_PASS から読み込む（設定されていれば対話入力を求めない）。CI等の非対話実行では必ずこの環境変数を設定すること。
+
+Usage:
+  mnemonic build <input> [flags]
+
+Flags:
       --app-name string             アプリ表示名
-      --package-name string         Androidパッケージ名。例: com.example.game（英字始まりの 2 セグメント以上）
+      --clean                       署名鍵以外のキャッシュ（テンプレート・フォント・プラグイン・SDL2 ソース）をクリアしてからビルドする
+      --ffmpeg-timeout int          FFmpegタイムアウト（秒） (default 300)
+      --gradle-timeout int          Gradleタイムアウト（秒） (default 1800)
+  -h, --help                        help for build
       --keystore string             署名用キーストア
-      --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス
+      --log-file string             ログファイル出力先
+  -o, --output string               出力APKパス
+      --package-name string         Androidパッケージ名。例: com.example.game（英字始まりの 2 セグメント以上）
       --quality string              画像品質プリセット (default "high")
       --skip-video                  動画変換をスキップ
-      --clean                       署名鍵以外のキャッシュ（テンプレート・フォント・プラグイン・SDL2 ソース）をクリアしてからビルドする
-      --template-version string     テンプレートバージョン固定
-      --template-refresh-days int   テンプレートキャッシュ期限（日）(default 7)
+      --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス（未指定時は既定のシステムパスを探索）
       --template-offline            オフラインモード
-      --ffmpeg-timeout int          FFmpegタイムアウト（秒）(default 300)
-      --gradle-timeout int          Gradleタイムアウト（秒）(default 1800)
-      --log-file string             ログファイル出力先
+      --template-refresh-days int   テンプレートキャッシュ期限（日） (default 7)
+      --template-version string     テンプレートバージョン固定
   -v, --verbose count               詳細ログ出力
 ```
-
-`--keystore` 指定時、署名パスワードは環境変数 `MNEMONIC_KEYSTORE_PASS` から読み込む
-（設定されていれば対話入力を求めない）。CI等の非対話実行では必ずこの環境変数を
-設定すること。
+<!-- build-help:end -->
 
 ### 依存ツールのチェック
 

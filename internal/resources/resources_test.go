@@ -105,8 +105,13 @@ func TestSystemPolyfillFS_MenuFilesBraceBalance(t *testing.T) {
 // 一致しないためStatusSkippedとなりBOMを付与しない。したがってBOMは
 // embed元のファイル自体が持っていない限り実機に載らない。3ファイルは
 // いずれも日本語コメントや、画面に表示される日本語文字列(MenuOpener.tjsの
-// 「✓」「次へ...」)を含むため、BOM無しで実機のkirikiriエンジンが
-// Shift_JISと誤認すると文字化けする。
+// 「✓」「次へ...」)をUTF-8で含む。吉里吉里がBOM無しテキストを読む文字コードは
+// ビルドで決まり（TVP_TEXT_READ_ANSI_MBCSありならShift_JIS、なしなら厳格な
+// UTF-8。krkrsdl2 external/krkrz/base/TextStream.cpp:33-37, :205-227）、起動
+// オプション-readencodingでも変わる（同base/ScriptMgnIntf.cpp:141-147）。
+// Shift_JISで読む設定ではBOM無しのUTF-8を正しく読めない。UTF-8 BOMがあれば
+// 設定によらずUTF-8として読まれる（同TextStream.cpp:181-193）ため、BOMで
+// ファイル自身に文字コードを示させる。
 //
 // why not(対象を3ファイルに限定する理由): 同じ一覧に含まれる
 // MIDISoundBuffer_stub.tjs/VideoOverlay_stub.tjsは、この3ファイルとは別に

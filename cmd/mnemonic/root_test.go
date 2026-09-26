@@ -90,6 +90,43 @@ func TestBuildCommand_Help(t *testing.T) {
 	assert.True(t, strings.Contains(result.stdout, "ビルド") || strings.Contains(lower, "build"))
 }
 
+// TestBuildCommand_HelpMatchesREADME は、README.mdのbuild-helpマーカー間の
+// コードブロックが`mnemonic build --help`の出力と一字一句一致することを検証する。
+//
+// why not(部分一致にしない理由): フラグの追加・説明変更・既定値表記の差分は
+// 行単位の小さなずれとして現れ、特定の文字列を含むかどうかの検査では
+// READMEの写しが古くなっても検出できない。
+func TestBuildCommand_HelpMatchesREADME(t *testing.T) {
+	t.Parallel()
+
+	const (
+		startMarker = "<!-- build-help:start -->"
+		endMarker   = "<!-- build-help:end -->"
+		fenceOpen   = "\n```\n"
+		fenceClose  = "```\n"
+	)
+
+	result := invoke(t, []string{"build", "--help"})
+	require.Equal(t, 0, result.exitCode)
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	require.NoError(t, err)
+
+	_, afterStart, found := strings.Cut(string(readme), startMarker)
+	require.True(t, found, "README.mdに%sがありません", startMarker)
+
+	block, _, found := strings.Cut(afterStart, endMarker)
+	require.True(t, found, "README.mdに%sがありません", endMarker)
+
+	body, found := strings.CutPrefix(block, fenceOpen)
+	require.True(t, found, "%sの直後がコードブロックの開始になっていません", startMarker)
+
+	body, found = strings.CutSuffix(body, fenceClose)
+	require.True(t, found, "%sの直前がコードブロックの終了になっていません", endMarker)
+
+	assert.Equal(t, result.stdout, body, "README.mdのbuild --help写しが実際の出力と一致しません。`go run ./cmd/mnemonic build --help`の出力で置き換えてください")
+}
+
 // TestBuildCommand_MissingInput / TestBuildCommand_InvalidInputType は
 // newBuildPipeline（buildコマンドが参照するパッケージ変数）を実際に読み出す。
 // TestBuildCommand_Success等が同じ変数へスタブを書き込むため、t.Parallel()を

@@ -57,7 +57,7 @@ func newBuildCmd() *cobra.Command {
 		Short: "ゲームをAndroid APKにビルドする",
 		Long: "ゲームをAndroid APKにビルドする。\n\n" +
 			"--keystore指定時、署名パスワードは環境変数 MNEMONIC_KEYSTORE_PASS " +
-			"から読み込む（設定されていれば対話入力を求めない）。CI等の非対話 " +
+			"から読み込む（設定されていれば対話入力を求めない）。CI等の非対話" +
 			"実行では必ずこの環境変数を設定すること。",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
