@@ -306,8 +306,8 @@ func TestGameDetector_Integration(t *testing.T) {
 //
 // github.com/saintfish/chardet は純ASCII入力に対して専用の判定器を持たず
 // "ISO-8859-1"（低信頼度）等を返すことがあり、"ascii"という一貫した結果に
-// ならない問題がある（再エンコード判定に影響するユーザー
-// 可視の差分）ため、detectCharsetのASCII優先判定を固定する。
+// ならない問題がある（検出結果はそのままユーザーに表示されるため
+// 可視の差分になる）ため、charset.DetectのASCII優先判定を固定する。
 func TestGameDetector_ScriptEncodingDetection(t *testing.T) {
 	t.Parallel()
 

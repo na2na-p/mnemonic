@@ -15,6 +15,8 @@ import (
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/encoding/traditionalchinese"
+
+	"github.com/na2na-p/mnemonic/internal/charset"
 )
 
 // ErrUnsupportedEncoding はencodingByNameが未対応のエンコーディング名を受け取った場合のエラー。
@@ -44,21 +46,6 @@ var encodingAliases = map[string]string{
 	"utf8":      "utf-8",
 	"utf-8-sig": "utf-8",
 	"ascii":     "utf-8",
-}
-
-// isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
-//
-// why not: ESC(0x1B)はISO-2022-JP等7bitエンコーディングの制御文字であり、
-// これを含む入力をASCIIと即断するとchardetの正しいISO-2022-JP判定を
-// 潰してしまうため除外する（internal/parser/detector.goのisASCIIと同じ理由）。
-func isASCII(data []byte) bool {
-	for _, b := range data {
-		if b >= 0x80 || b == 0x1b {
-			return false
-		}
-	}
-
-	return true
 }
 
 // normalizeEncoding はエンコーディング名を正規化する。
@@ -122,16 +109,11 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		return EncodingDetectionResult{Encoding: "", Confidence: 0.0, IsSupported: false}
 	}
 
-	// why not: github.com/saintfish/chardetには専用のASCII判定器が無く、純ASCII
-	// バイト列に対しても単バイト系のフォールバック候補（例: "ISO-8859-1"、低信頼度）
-	// を返すことがある（internal/parser/detector.goのdetectCharsetと同じ既知差異）。
-	// この差を放置すると、ASCIIのみの.ini/.txt/.ks/.csvがsupportedEncodingsに
-	// 含まれないエンコーディング名として検出され、本来SKIPPEDが適切なはずの
-	// ケースでConvertがFAILEDを返してしまう。そのためGo側でもASCII判定を
-	// 先に行い、chardetの推定より優先する。ESC(0x1B)はISO-2022-JP等7bit
-	// エンコーディングの制御文字であり、これを含む入力をASCII短絡させると
-	// chardetの正しいISO-2022-JP判定を潰してしまうため除外する。
-	if isASCII(data) {
+	// why not: 純ASCIIをchardetの推定名のまま扱うと、ASCIIのみの.ini/.txt/.csv/.ksが
+	// SupportedEncodingsに含まれないエンコーディング名として検出され、本来SKIPPED
+	// （.ksならBOM付与のSUCCESS）が適切なケースでConvertがFAILEDを返してしまう。
+	// そのためASCIIはUTF-8のサブセットとして"utf-8"（対応済み）に確定させる。
+	if charset.IsASCII(data) {
 		return EncodingDetectionResult{Encoding: "utf-8", Confidence: 1.0, IsSupported: true}
 	}
 
