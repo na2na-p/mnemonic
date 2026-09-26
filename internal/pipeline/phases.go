@@ -294,7 +294,16 @@ func (b *BuildPipeline) resolveTemplate() (string, error) {
 	templatePath, ok := templateCache.GetCachedTemplate(b.config.TemplateVersion)
 
 	if !ok && !b.config.TemplateOffline {
-		downloader := builder.NewTemplateDownloader("", nil)
+		// why not: ダウンロードしたZIPはSaveTemplateがキャッシュへコピーする中間物に
+		// すぎない。キャッシュ配下へ直接落とすとコピー先と同一ファイルになり、他の
+		// 永続ディレクトリへ落とすとcache cleanの届かない重複が残るため、Run終了時に
+		// 消える一時ディレクトリへ置く。
+		downloadDir, err := b.newTempDir("mnemonic_template_")
+		if err != nil {
+			return "", err
+		}
+
+		downloader := builder.NewTemplateDownloader(downloadDir, nil)
 
 		downloaded, err := downloader.Download(b.config.TemplateVersion)
 		if err != nil {

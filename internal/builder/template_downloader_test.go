@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -187,6 +188,34 @@ func TestTemplateDownloader_Download(t *testing.T) {
 
 				require.ErrorIs(t, err, builder.ErrInvalidVersion)
 				assert.Zero(t, requestCount)
+			})
+		}
+	})
+
+	t.Run("異常系: ダウンロード先ディレクトリ未指定ではHTTPリクエストを送らずErrTemplateDownloadDirUnset", func(t *testing.T) {
+		t.Parallel()
+
+		testCases := []struct {
+			name    string
+			version *string
+		}{
+			{name: "異常系: バージョン指定あり", version: new("template-2026.01.31")},
+			{name: "異常系: バージョン未指定（最新版の問い合わせも行わない）", version: nil},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				var requestCount atomic.Int32
+				d := newTestDownloader(t, "", func(_ http.ResponseWriter, _ *http.Request) {
+					requestCount.Add(1)
+				})
+
+				_, err := d.Download(tc.version)
+
+				require.ErrorIs(t, err, builder.ErrTemplateDownloadDirUnset)
+				assert.Zero(t, requestCount.Load())
 			})
 		}
 	})

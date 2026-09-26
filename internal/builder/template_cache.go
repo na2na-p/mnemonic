@@ -263,7 +263,8 @@ func (c *TemplateCache) GetCachedVersion() (string, bool) {
 // SaveTemplate はテンプレートをキャッシュに保存する。
 // templatePathが存在しない場合はos.ErrNotExistを満たすerrorを返す。
 func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, error) {
-	if _, err := os.Stat(templatePath); err != nil {
+	srcInfo, err := os.Stat(templatePath)
+	if err != nil {
 		return "", err
 	}
 
@@ -277,8 +278,18 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	}
 
 	destination := filepath.Join(cachePath, filepath.Base(templatePath))
-	if err := copyFile(templatePath, destination); err != nil {
+
+	alreadyInPlace, err := isSameFile(srcInfo, destination)
+	if err != nil {
 		return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
+	}
+
+	// why not: copyFileは読み出し前に保存先をO_TRUNCで開くため、同一ファイルへの
+	// コピーは内容を消してしまう。既に保存先にある場合はメタデータの更新だけ行う。
+	if !alreadyInPlace {
+		if err := copyFile(templatePath, destination); err != nil {
+			return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -295,4 +306,24 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	}
 
 	return destination, nil
+}
+
+// isSameFile はsrcInfoのファイルとdstが同じファイル実体を指すかを返す。dstが存在
+// しない場合は同一になり得ないためfalseを返す。
+//
+// why not: パス文字列の正規化（Abs + EvalSymlinks）で比べると、ハードリンクや
+// 大文字小文字を区別しないファイルシステム上の表記違いを別ファイルと誤判定し、
+// コピーで内容を消してしまう。os.SameFileはデバイスとinodeで比べるため、
+// これらも同一と判定できる。
+func isSameFile(srcInfo os.FileInfo, dst string) (bool, error) {
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return os.SameFile(srcInfo, dstInfo), nil
 }

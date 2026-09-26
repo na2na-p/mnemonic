@@ -272,6 +272,83 @@ func TestTemplateCache_SaveTemplate(t *testing.T) {
 		assert.NotEmpty(t, metadata["expires_at"])
 	})
 
+	t.Run("正常系: 保存先と同じパスのテンプレートを渡しても内容が保たれメタデータが書かれる", func(t *testing.T) {
+		t.Parallel()
+
+		cachePath := filepath.Join(t.TempDir(), "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+
+		templateFile := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(templateFile, []byte("test content"), 0o600))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		result, err := c.SaveTemplate(templateFile, "template-2026.01.31")
+
+		require.NoError(t, err)
+		assert.Equal(t, templateFile, result)
+		content, err := os.ReadFile(templateFile) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "test content", string(content))
+		assert.FileExists(t, filepath.Join(cachePath, "metadata.json"))
+	})
+
+	t.Run("正常系: 保存先へのハードリンクを渡しても内容が保たれる", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		cachePath := filepath.Join(root, "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+		destination := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(destination, []byte("test content"), 0o600))
+		linked := filepath.Join(root, "other", "android-template.zip")
+		require.NoError(t, os.MkdirAll(filepath.Dir(linked), 0o750))
+		require.NoError(t, os.Link(destination, linked))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		_, err := c.SaveTemplate(linked, "template-2026.01.31")
+
+		require.NoError(t, err)
+		content, err := os.ReadFile(destination) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "test content", string(content))
+	})
+
+	t.Run("正常系: 既存の保存先と別内容のテンプレートは上書きされる", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		cachePath := filepath.Join(root, "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+		destination := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(destination, []byte("old"), 0o600))
+		downloaded := filepath.Join(root, "download", "android-template.zip")
+		require.NoError(t, os.MkdirAll(filepath.Dir(downloaded), 0o750))
+		require.NoError(t, os.WriteFile(downloaded, []byte("new"), 0o600))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		_, err := c.SaveTemplate(downloaded, "template-2026.01.31")
+
+		require.NoError(t, err)
+		content, err := os.ReadFile(destination) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(content))
+	})
+
 	t.Run("異常系: 指定されたテンプレートファイルが存在しない場合", func(t *testing.T) {
 		t.Parallel()
 

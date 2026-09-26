@@ -23,6 +23,8 @@ var (
 	ErrFileIntegrity = errors.New("ファイルの整合性チェックに失敗しました")
 	// ErrInvalidVersion はバージョン文字列の形式が不正な場合のエラー。
 	ErrInvalidVersion = errors.New("バージョン形式が不正です")
+	// ErrTemplateDownloadDirUnset はダウンロード先ディレクトリ（CacheDir）が空の場合のエラー。
+	ErrTemplateDownloadDirUnset = errors.New("テンプレートのダウンロード先ディレクトリが指定されていません")
 )
 
 // defaultGitHubAPIBase は既定のGitHub API向けベースURL。
@@ -71,8 +73,8 @@ type TemplateInfo struct {
 
 // TemplateDownloader はGitHub Releasesからkrkrsdl2テンプレートをダウンロードする。
 type TemplateDownloader struct {
-	// CacheDir はダウンロード先ディレクトリ。空文字列の場合は
-	// ~/.cache/mnemonic/templates を使用する。
+	// CacheDir はダウンロード先ディレクトリ（必須）。空文字列の場合、Downloadは
+	// ErrTemplateDownloadDirUnsetを返す。
 	CacheDir string
 	// HTTPClient はHTTPリクエストに使用するクライアント。
 	HTTPClient *http.Client
@@ -128,6 +130,12 @@ type githubAsset struct {
 // Download は指定バージョンのテンプレートをダウンロードする。
 // versionがnilの場合は最新バージョンをダウンロードする。
 func (d *TemplateDownloader) Download(version *string) (string, error) {
+	// why not: 最新バージョン問い合わせ（GetLatestVersion）より前で弾かないと、
+	// 保存先が無いと分かっている呼び出しでもGitHub APIへリクエストしてしまう。
+	if d.CacheDir == "" {
+		return "", fmt.Errorf("%w: TemplateDownloader.CacheDirを設定してください", ErrTemplateDownloadDirUnset)
+	}
+
 	targetVersion := ""
 	if version != nil {
 		targetVersion = *version
@@ -148,18 +156,11 @@ func (d *TemplateDownloader) Download(version *string) (string, error) {
 		return "", err
 	}
 
-	cacheDir := d.CacheDir
-	if cacheDir == "" {
-		cacheDir, err = defaultDownloaderCacheDir()
-		if err != nil {
-			return "", err
-		}
-	}
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
-		return "", fmt.Errorf("キャッシュディレクトリの作成に失敗しました: %w", err)
+	if err := os.MkdirAll(d.CacheDir, 0o750); err != nil {
+		return "", fmt.Errorf("ダウンロード先ディレクトリの作成に失敗しました: %w", err)
 	}
 
-	downloadPath := filepath.Join(cacheDir, targetVersion, templateInfo.FileName)
+	downloadPath := filepath.Join(d.CacheDir, targetVersion, templateInfo.FileName)
 	if err := os.MkdirAll(filepath.Dir(downloadPath), 0o750); err != nil {
 		return "", fmt.Errorf("ダウンロード先ディレクトリの作成に失敗しました: %w", err)
 	}
@@ -173,15 +174,6 @@ func (d *TemplateDownloader) Download(version *string) (string, error) {
 	}
 
 	return downloadPath, nil
-}
-
-func defaultDownloaderCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("ホームディレクトリを取得できません: %w", err)
-	}
-
-	return filepath.Join(home, ".cache", "mnemonic", "templates"), nil
 }
 
 // GetLatestVersion は最新バージョンを取得する。
@@ -377,7 +369,7 @@ func (d *TemplateDownloader) downloadFileOnce(downloadURL, destination string) e
 		return fmt.Errorf("%w: ダウンロード中にHTTPエラーが発生しました: %d", ErrNetwork, resp.StatusCode)
 	}
 
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // 呼び出し元がキャッシュディレクトリ配下に限定して構築したパスのため妥当
+	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // 呼び出し元がダウンロード先ディレクトリ配下に限定して構築したパスのため妥当
 	if err != nil {
 		return fmt.Errorf("ダウンロード先ファイルの作成に失敗しました: %w", err)
 	}
