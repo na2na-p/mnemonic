@@ -316,7 +316,7 @@ func TestBuildPipeline_ExecuteBuild_ErrorsWhenPackageNameUndeterminable(t *testi
 			}
 
 			require.NotErrorIs(t, err, ErrPackageNameUndeterminable)
-			assert.ErrorContains(t, err, "テンプレートが利用できません")
+			require.ErrorIs(t, err, ErrTemplateUnavailable)
 		})
 	}
 }
@@ -400,6 +400,63 @@ func TestBuildPipeline_ExecuteConvert_MissingExtractDir(t *testing.T) {
 	_, err := p.executeConvert(buildArtifacts{extractDir: filepath.Join(t.TempDir(), "does-not-exist")})
 
 	require.Error(t, err)
+}
+
+func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		files      map[string]string
+		wantFailed string
+	}{
+		{
+			name: "異常系: TLGとして解釈できない画像があれば変換元パスと原因を含むエラーを返す",
+			files: map[string]string{
+				"first.ks":       "*start\n吾輩は猫である。名前はまだ無い。\n",
+				"image/bg01.tlg": "not a tlg image",
+			},
+			wantFailed: filepath.Join("image", "bg01.tlg"),
+		},
+		{
+			name: "正常系: 変換可能なアセットだけならエラーを返さない",
+			files: map[string]string{
+				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
+				"system/font.ttf": "stub font",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			extractDir := t.TempDir()
+			for name, content := range tt.files {
+				path := filepath.Join(extractDir, name)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+			}
+
+			p := newTestPipeline(t)
+			t.Cleanup(p.cleanupTempDirs)
+
+			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+			if tt.wantFailed == "" {
+				require.NoError(t, err)
+
+				return
+			}
+
+			require.ErrorIs(t, err, ErrAssetConversionFailed)
+			require.ErrorContains(t, err, filepath.Join(extractDir, tt.wantFailed))
+			require.ErrorContains(t, err, "TLG形式ではありません")
+			// system/はcopyPolyfillFilesが作るため、これが無いことで変換失敗時に
+			// finalizeConvertedTreeへ進んでいないことを確かめる。
+			assert.NoDirExists(t, filepath.Join(a.convertDir, "system"))
+		})
+	}
 }
 
 func TestBuildPipeline_ExecuteConvert_ReturnsErrorWhenExtractPhaseNotDone(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,14 @@ import (
 // ErrGradleAPKMissing はGradleビルドが成功終了コードを返したにもかかわらず、
 // 期待される場所にAPKファイルが生成されなかった場合のエラー。
 var ErrGradleAPKMissing = errors.New("Gradleビルド後にAPKファイルが見つかりません")
+
+// ErrAssetConversionFailed はCONVERTフェーズで1つ以上のアセットの変換に
+// 失敗した場合のエラー。
+var ErrAssetConversionFailed = errors.New("アセットの変換に失敗しました")
+
+// ErrTemplateUnavailable はテンプレートをキャッシュから解決できなかった場合
+// （オフラインモードで未取得の場合など）のエラー。
+var ErrTemplateUnavailable = errors.New("テンプレートが利用できません。オンラインモードで再実行してください。")
 
 // executeAnalyze はANALYZEフェーズを実行する: 入力ファイルの形式を確認し、
 // 必要に応じて暗号化チェックを行う。
@@ -146,7 +155,48 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		return a, fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
+	// why not: 変換に失敗したアセットがあってもビルドを続けると、素材が欠けた
+	// り未変換のまま残ったりしたAPKができ、原因は後段の別エラー（スクリプト
+	// 調整の失敗など）として現れて特定しにくい。後処理に進む前に、失敗した
+	// 全ファイルとその原因を報告して止める。
+	if err := conversionFailureError(summary); err != nil {
+		return a, err
+	}
+
 	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter())
+}
+
+// conversionFailureError はsummaryに失敗した結果が含まれる場合、
+// ErrAssetConversionFailedをラップしたエラーを返す。
+//
+// why not: StatusFailedとの一致だけで判定しない。ConversionManagerは
+// StatusSuccess/StatusSkipped以外の状態をすべてFailedとして集計するため、
+// 一致判定だとsummary.Failedに数えられた失敗を見逃しうる。
+func conversionFailureError(summary converter.ConversionSummary) error {
+	var failed []converter.ConversionResult
+	for _, result := range summary.Results {
+		if result.Status != converter.StatusSuccess && result.Status != converter.StatusSkipped {
+			failed = append(failed, result)
+		}
+	}
+
+	if len(failed) == 0 {
+		return nil
+	}
+
+	// why not: ConvertDirectoryの結果は並列ワーカーの完了順に並び実行ごとに
+	// 変わるため、そのまま報告すると同じ失敗でもエラー文の並びが揺れる。
+	// 変換元パス順に並べ替えて報告を決定的にする。
+	slices.SortFunc(failed, func(a, b converter.ConversionResult) int {
+		return cmp.Compare(a.SourcePath, b.SourcePath)
+	})
+
+	failures := make([]string, 0, len(failed))
+	for _, result := range failed {
+		failures = append(failures, fmt.Sprintf("%s: %s", result.SourcePath, result.Message))
+	}
+
+	return fmt.Errorf("%w: %s", ErrAssetConversionFailed, strings.Join(failures, " / "))
 }
 
 // finalizeConvertedTree はアセット変換済みのdirectoryへ後処理を順に適用する。
@@ -321,7 +371,7 @@ func (b *BuildPipeline) resolveTemplate() (string, error) {
 	}
 
 	if !ok {
-		return "", errors.New("テンプレートが利用できません。オンラインモードで再実行してください。")
+		return "", ErrTemplateUnavailable
 	}
 
 	return templatePath, nil
