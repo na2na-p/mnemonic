@@ -123,10 +123,15 @@ func (d *EncodingDetector) Detect(filePath string) (EncodingDetectionResult, err
 
 // DetectBytes はバイトデータの文字コードを検出する。
 //
-// UTF-16はBOMで始まる場合に限り"utf-16le"/"utf-16be"として検出する。
+// UTF-16はBOMで始まる場合に限り"utf-16le"/"utf-16be"として検出する。吉里吉里の
+// simple crypt形式は復号するとUTF-16LEになるため、復号せずに"utf-16le"として検出する。
 func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 	if len(data) == 0 {
 		return EncodingDetectionResult{Encoding: "", Confidence: 0.0, IsSupported: false}
+	}
+
+	if _, ok := isSimpleCrypt(data); ok {
+		return EncodingDetectionResult{Encoding: "utf-16le", Confidence: 1.0, IsSupported: true}
 	}
 
 	if enc := utf16EncodingByBOM(data); enc != "" {
@@ -178,9 +183,9 @@ func (d *EncodingDetector) IsTextFile(filePath string) (bool, error) {
 		return true, nil
 	}
 
-	// UTF-16のテキストはASCII文字の上位バイトとしてNULを含むため、NULによる
-	// バイナリ判定より先に判定する。
-	if utf16EncodingByBOM(data) != "" {
+	// UTF-16のテキストやsimple crypt形式はNULを含むため、NULによるバイナリ判定より
+	// 先に判定する。
+	if _, ok := isSimpleCrypt(data); ok || utf16EncodingByBOM(data) != "" {
 		return true, nil
 	}
 
@@ -292,6 +297,7 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 // それ以外はStatusSuccessとなる。既にUTF-8の吉里吉里スクリプトもUTF-8 BOMを
 // 付与して書き出すためStatusSuccessとなる。変換先がUTF-8のとき、UTF-8 BOMは
 // 吉里吉里スクリプトと、拡張子によらず変換元がUTF-16のファイルに付与する。
+// 吉里吉里のsimple crypt形式は復号し、変換元UTF-16LEとして扱う。
 func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := ensureSourceExists(source); err != nil {
 		return ConversionResult{SourcePath: source}, err
@@ -304,7 +310,10 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
 	}
 
-	sourceEncoding := c.resolveSourceEncoding(data)
+	data, sourceEncoding, err := c.prepareSource(data)
+	if err != nil {
+		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %w", ErrEncodingConversionFailed, err))
+	}
 
 	targetNormalized := strings.ReplaceAll(strings.ToLower(c.targetEncoding), "-", "_")
 	sourceNormalized := strings.ReplaceAll(strings.ToLower(sourceEncoding), "-", "_")
@@ -365,7 +374,10 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 // デコード/エンコード失敗はerrとして返す。Convertと異なり
 // ErrEncodingConversionFailed・ErrPermanentFailureでのラップは行わない。
 func (c *EncodingConverter) ConvertBytes(data []byte) ([]byte, string, error) {
-	sourceEncoding := c.resolveSourceEncoding(data)
+	data, sourceEncoding, err := c.prepareSource(data)
+	if err != nil {
+		return nil, "", err
+	}
 
 	data = bytes.TrimPrefix(data, utf8BOM)
 
@@ -375,6 +387,27 @@ func (c *EncodingConverter) ConvertBytes(data []byte) ([]byte, string, error) {
 	}
 
 	return resultBytes, sourceEncoding, nil
+}
+
+// prepareSource は変換元dataと、その変換元エンコーディングを返す。dataが吉里吉里の
+// simple crypt形式であれば、復号したBOM付きUTF-16LEと"utf-16le"を返す。
+func (c *EncodingConverter) prepareSource(data []byte) ([]byte, string, error) {
+	// why not: モードが対応済みかどうかに関わらず、FE FEで始まれば復号へ回し、
+	// 未対応モードや壊れた形式はエラーにする。吉里吉里本体もそれらのテキストは
+	// 読み込みエラーにするため、別エンコーディングとして推定し直して変換を続けても、
+	// エンジンが読めないファイルを別の中身に書き換えるだけになる。
+	if !bytes.HasPrefix(data, simpleCryptSignature) {
+		return data, c.resolveSourceEncoding(data), nil
+	}
+
+	decoded, err := decodeSimpleCrypt(data)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// why not: 変換元エンコーディングの指定より優先する。復号結果は常にUTF-16LEで
+	// あり、指定に従うと復号済みのデータを別エンコーディングとして誤読する。
+	return decoded, "utf-16le", nil
 }
 
 func (c *EncodingConverter) resolveSourceEncoding(data []byte) string {

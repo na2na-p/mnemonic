@@ -129,6 +129,43 @@ func TestBuildPipeline_UTF16ScriptConversion(t *testing.T) {
 	assert.Contains(t, string(content), "吉里吉里のUTF-16スクリプトです。")
 }
 
+// TestBuildPipeline_SimpleCryptScriptConversion は吉里吉里のsimple crypt（mode 0）で
+// 保存されたスクリプトが復号・文字コード変換を経てスクリプト調整まで通ることを、
+// CONVERTフェーズと同じConvertDirectory→adjustScriptsの順で検証する。
+func TestBuildPipeline_SimpleCryptScriptConversion(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPipeline(t)
+	extractDir := t.TempDir()
+	convertDir := t.TempDir()
+
+	const text = "[playbgm storage=\"bgm.mid\"]\r\n吉里吉里の暗号化スクリプトです。\r\n"
+	encrypted := []byte{0xfe, 0xfe, 0x00, 0xff, 0xfe}
+	for _, u := range utf16.Encode([]rune(text)) {
+		if u >= 0x20 {
+			u ^= (u&0xfe)<<8 ^ 1
+		}
+		encrypted = binary.LittleEndian.AppendUint16(encrypted, u)
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(extractDir, "scenario"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "scenario", "first.ks"), encrypted, 0o600))
+
+	manager := converter.NewConversionManager([]converter.Converter{converter.NewEncodingConverter("", "")}, nil, 1, nil)
+	summary, err := manager.ConvertDirectory(extractDir, convertDir, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Success, "simple cryptのスクリプトが変換対象として処理される: %+v", summary.Results)
+
+	require.NoError(t, p.adjustScripts(convertDir))
+
+	content, err := os.ReadFile(filepath.Join(convertDir, "scenario", "first.ks")) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}), "UTF-8 BOMで始まる")
+	assert.True(t, utf8.Valid(content))
+	assert.Contains(t, string(content), `storage="bgm.ogg"`)
+	assert.NotContains(t, string(content), ".mid")
+	assert.Contains(t, string(content), "吉里吉里の暗号化スクリプトです。")
+}
+
 // TestBuildPipeline_AdjustScripts_SkipVideo は--skip-video時にスクリプト
 // 参照だけが.mpgへ書き換わり実体の無い参照が残る不具合の修正をピン留めする。
 //

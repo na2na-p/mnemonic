@@ -140,6 +140,21 @@ func TestEncodingDetector_DetectBytes(t *testing.T) {
 			data:         encodeUTF16("吉里吉里スクリプト", true, true),
 			wantEncoding: "utf-16be",
 		},
+		{
+			name:         "正常系: simple crypt mode 0のバイト列はutf-16leとして検出される",
+			data:         encodeSimpleCrypt(t, "吉里吉里スクリプト", 0),
+			wantEncoding: "utf-16le",
+		},
+		{
+			name:         "正常系: simple crypt mode 1のバイト列はutf-16leとして検出される",
+			data:         encodeSimpleCrypt(t, "吉里吉里スクリプト", 1),
+			wantEncoding: "utf-16le",
+		},
+		{
+			name:         "正常系: simple crypt mode 2のバイト列はutf-16leとして検出される",
+			data:         encodeSimpleCryptCompressed(t, "吉里吉里スクリプト"),
+			wantEncoding: "utf-16le",
+		},
 	}
 
 	for _, tc := range bomCases {
@@ -207,6 +222,10 @@ func TestEncodingDetector_IsTextFile(t *testing.T) {
 		{"正常系: BOM付きUTF-16BEはNULを含んでもテキストファイル", encodeUTF16("[playbgm storage=\"bgm.mid\"]", true, true), true},
 		{"正常系: BOM無しUTF-16LEはバイナリファイル", encodeUTF16("[playbgm storage=\"bgm.mid\"]", false, false), false},
 		{"正常系: UTF-32LEのBOMで始まるデータはUTF-16扱いせずバイナリファイル", []byte{0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00}, false},
+		{"正常系: simple crypt mode 0はNULを含んでもテキストファイル", encodeSimpleCrypt(t, "[playbgm storage=\"bgm.mid\"]", 0), true},
+		{"正常系: simple crypt mode 1はNULを含んでもテキストファイル", encodeSimpleCrypt(t, "[playbgm storage=\"bgm.mid\"]", 1), true},
+		{"正常系: simple crypt mode 2はNULを含んでもテキストファイル", encodeSimpleCryptCompressed(t, "[playbgm storage=\"bgm.mid\"]"), true},
+		{"正常系: 未対応モードのsimple cryptは通常判定に落ちNULを含むためバイナリファイル", []byte{0xfe, 0xfe, 0x03, 0xff, 0xfe, 0x41, 0x00}, false},
 	}
 
 	for _, tc := range utf16Cases {
@@ -565,6 +584,194 @@ func TestEncodingConverter_Convert_UTF16(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrUnsupportedEncoding)
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
 		assert.NoFileExists(t, dest)
+	})
+}
+
+func TestEncodingConverter_Convert_SimpleCrypt(t *testing.T) {
+	t.Parallel()
+
+	const text = "[playbgm storage=\"bgm.mid\"]\r\n吉里吉里の暗号化スクリプトです。"
+	utf8BOM := []byte{0xef, 0xbb, 0xbf}
+
+	tests := []struct {
+		name     string
+		fileName string
+		data     []byte
+		want     []byte
+	}{
+		{
+			name:     "正常系: simple crypt mode 0の.ksはUTF-8 BOM付きの平文に変換される",
+			fileName: "first.ks",
+			data:     encodeSimpleCrypt(t, text, 0),
+			want:     append(bytes.Clone(utf8BOM), text...),
+		},
+		{
+			name:     "正常系: simple crypt mode 1の.ksはUTF-8 BOM付きの平文に変換される",
+			fileName: "first.ks",
+			data:     encodeSimpleCrypt(t, text, 1),
+			want:     append(bytes.Clone(utf8BOM), text...),
+		},
+		{
+			name:     "正常系: simple crypt mode 2（zlib圧縮）の.ksはUTF-8 BOM付きの平文に変換される",
+			fileName: "first.ks",
+			data:     encodeSimpleCryptCompressed(t, text),
+			want:     append(bytes.Clone(utf8BOM), text...),
+		},
+		{
+			name:     "正常系: simple crypt mode 1の.txtもUTF-16由来としてUTF-8 BOM付きに変換される",
+			fileName: "readme.txt",
+			data:     encodeSimpleCrypt(t, text, 1),
+			want:     append(bytes.Clone(utf8BOM), text...),
+		},
+		{
+			name:     "正常系: simple crypt mode 1の符号単位に満たない末尾の1バイトは捨てる",
+			fileName: "first.ks",
+			data:     append(encodeSimpleCrypt(t, text, 1), 0x41),
+			want:     append(bytes.Clone(utf8BOM), text...),
+		},
+		{
+			name:     "正常系: mode 0の既知の暗号文（A→40 40・改行はそのまま・あ→43 72）を復号する",
+			fileName: "vector.ks",
+			data:     []byte{0xfe, 0xfe, 0x00, 0xff, 0xfe, 0x40, 0x40, 0x0a, 0x00, 0x43, 0x72},
+			want:     append(bytes.Clone(utf8BOM), "A\nあ"...),
+		},
+		{
+			name:     "正常系: mode 0の境界 0x0020 は復号され 0x001F はそのまま",
+			fileName: "vector.ks",
+			data:     []byte{0xfe, 0xfe, 0x00, 0xff, 0xfe, 0x20, 0x00, 0x1f, 0x00},
+			want:     append(bytes.Clone(utf8BOM), "‡\x1f"...),
+		},
+		{
+			name:     "正常系: mode 1の既知の暗号文（A→82 00・改行→05 00・あ→81 30）を復号する",
+			fileName: "vector.ks",
+			data:     []byte{0xfe, 0xfe, 0x01, 0xff, 0xfe, 0x82, 0x00, 0x05, 0x00, 0x81, 0x30},
+			want:     append(bytes.Clone(utf8BOM), "A\nあ"...),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", "")
+			require.True(t, c.CanConvert(source))
+
+			result, err := c.Convert(source, dest)
+
+			require.NoError(t, err)
+			assert.Equal(t, converter.StatusSuccess, result.Status)
+			assert.Equal(t, tt.want, readFile(t, dest))
+		})
+	}
+
+	plain := encodeUTF16(text, false, false)
+	compressed := zlibCompress(t, plain)
+
+	errorTests := []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{
+			name:    "異常系: 未対応のモードバイトは恒久的な変換失敗になる",
+			data:    []byte{0xfe, 0xfe, 0x03, 0xff, 0xfe, 0x41, 0x00},
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: モードバイトの後にUTF-16LEのBOMが無ければ恒久的な変換失敗になる",
+			data:    []byte{0xfe, 0xfe, 0x00, 0x41, 0x00, 0x42, 0x00},
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: mode 2でサイズ欄が欠けていれば恒久的な変換失敗になる",
+			data:    []byte{0xfe, 0xfe, 0x02, 0xff, 0xfe, 0x00, 0x00},
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: mode 2で宣言された展開後サイズが上限を超えればErrScriptTooLargeになる",
+			data:    simpleCryptCompressed(uint64(len(compressed)), 64<<20+1, compressed),
+			wantErr: converter.ErrScriptTooLarge,
+		},
+		{
+			name:    "異常系: mode 2で宣言された圧縮後サイズが実データより大きければ恒久的な変換失敗になる",
+			data:    simpleCryptCompressed(uint64(len(compressed))+10, uint64(len(plain)), compressed),
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: mode 2のzlibストリームが途中で切れていれば恒久的な変換失敗になる",
+			data:    simpleCryptCompressed(uint64(len(compressed)/2), uint64(len(plain)), compressed[:len(compressed)/2]),
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: mode 2の展開結果が宣言サイズより長ければ恒久的な変換失敗になる",
+			data:    simpleCryptCompressed(uint64(len(compressed)), uint64(len(plain))-2, compressed),
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+		{
+			name:    "異常系: mode 2の展開結果が宣言サイズより短ければ恒久的な変換失敗になる",
+			data:    simpleCryptCompressed(uint64(len(compressed)), uint64(len(plain))+2, compressed),
+			wantErr: converter.ErrEncodingConversionFailed,
+		},
+	}
+
+	for _, tt := range errorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "broken.ks")
+			dest := filepath.Join(dir, "out", "broken.ks")
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", "")
+			_, err := c.Convert(source, dest)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+			require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			assert.NoFileExists(t, dest)
+		})
+	}
+}
+
+func TestEncodingConverter_ConvertBytes_SimpleCrypt(t *testing.T) {
+	t.Parallel()
+
+	const text = "吉里吉里の暗号化スクリプトです。"
+
+	tests := []struct {
+		name           string
+		sourceEncoding string
+	}{
+		{name: "正常系: 自動検出ではsimple cryptを復号してutf-16leとして変換する", sourceEncoding: ""},
+		{name: "正常系: 変換元エンコーディングの指定があってもsimple cryptは復号後のutf-16leとして変換する", sourceEncoding: "shift_jis"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			resultBytes, detected, err := c.ConvertBytes(encodeSimpleCrypt(t, text, 1))
+
+			require.NoError(t, err)
+			assert.Equal(t, text, string(resultBytes))
+			assert.Equal(t, "utf-16le", detected)
+		})
+	}
+
+	t.Run("異常系: 未対応のモードバイトはエラーになる", func(t *testing.T) {
+		t.Parallel()
+
+		c := converter.NewEncodingConverter("", "")
+		_, _, err := c.ConvertBytes([]byte{0xfe, 0xfe, 0x03, 0xff, 0xfe, 0x41, 0x00})
+
+		require.Error(t, err)
 	})
 }
 
