@@ -124,8 +124,11 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 
 // ConvertFiles は複数ファイルを並列変換し、サマリーを返す。
 //
-// 同じDestを持つタスクが2件以上ある場合、それらはいずれも変換せず、
-// ErrDestinationCollisionを恒久的な失敗としてラップしたStatusFailedの結果とする。
+// 同じDestを持つタスクが2件以上ある場合、変換元の拡張子がDestの拡張子と
+// 大文字小文字を無視して一致するタスクがちょうど1件なら、そのタスクだけを変換し、
+// 残りはDestPathに共有するDestを記録したStatusSkippedの結果とする。該当するタスクが
+// 0件または2件以上なら、いずれも変換せず、ErrDestinationCollisionを恒久的な失敗として
+// ラップしたStatusFailedの結果とする。
 //
 // why not: Goではerrgroup.WithContextは最初のエラーで打ち切る挙動になるが、
 // convertWithRetry内で既に全ての失敗を捕捉しStatusFailedのConversionResultへ変換している
@@ -152,12 +155,7 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	for range workers {
 		wg.Go(func() {
 			for task := range tasksCh {
-				var result ConversionResult
-				if err, collided := collisions[task.Dest]; collided {
-					result = ConversionResult{SourcePath: task.Source, Status: StatusFailed, Message: err.Error()}
-				} else {
-					result = m.convertWithRetry(task.Source, task.Dest)
-				}
+				result := m.convertTask(task, collisions)
 
 				// why: ロック解放後にコールバックを呼ぶと、複数のgoroutineが
 				// completedCountの読み取り値をまたいで並行にコールバックを
@@ -206,32 +204,79 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	return summary
 }
 
-// destinationCollisions は2件以上のタスクが共有するDestごとに、共有する全ての
-// 変換元をパス順に列挙したエラーを返す。
+// destinationCollision は2件以上のタスクが共有するDestの扱い。winnerが空でなければ
+// winnerだけを変換し、それ以外の変換元はスキップする。winnerが空なら重複した全ての
+// 変換元をerrで失敗とする。
+type destinationCollision struct {
+	winner string
+	err    error
+}
+
+func (m *ConversionManager) convertTask(task FileTask, collisions map[string]destinationCollision) ConversionResult {
+	collision, collided := collisions[task.Dest]
+	switch {
+	case !collided || collision.winner == task.Source:
+		return m.convertWithRetry(task.Source, task.Dest)
+	case collision.winner != "":
+		return ConversionResult{
+			SourcePath: task.Source,
+			DestPath:   task.Dest,
+			Status:     StatusSkipped,
+			Message:    fmt.Sprintf("同名の %s を優先したため変換しません", collision.winner),
+		}
+	default:
+		return ConversionResult{SourcePath: task.Source, Status: StatusFailed, Message: collision.err.Error()}
+	}
+}
+
+// destinationCollisions は2件以上のタスクが共有するDestごとの扱いを返す。
+// 変換元の拡張子がDestの拡張子と大文字小文字を無視して一致する変換元がちょうど1件
+// なら、それをwinnerとする。それ以外は共有する全ての変換元をパス順に列挙したエラーとする。
 //
 // why not: 重複したタスクのうち先勝ち/後勝ちで片方だけ変換すると、どちらの素材が
-// APKに入るかが完了順や列挙順に依存し再現しない。そのため重複した全タスクを失敗とする。
+// APKに入るかが完了順や列挙順に依存し再現しない。拡張子ごとの優先順位表で選ぶと、
+// どの素材を捨てるかを根拠無く決めることになる。Destと同じ拡張子の変換元は、
+// 出力先と同じ名前・同じ形式で既に同梱されている素材であり、これを選べばDestの
+// 名前を指す参照の内容は変わらない。該当が無い、または複数あれば決められないため
+// 重複した全タスクを失敗とする。
+//
+// why not: 出力拡張子はConverter.GetOutputExtensionではなくDestの拡張子から得る。
+// ConvertDirectoryはDestをGetOutputExtensionから組み立てるため同じ値になり、
+// ConvertFilesを直接呼ぶ利用側(MIDI変換)ではDestが出力先そのものだからである。
 //
 // why not: Destは大文字小文字を同一視せず、文字列の完全一致で比較する。大文字小文字
 // だけが異なる出力先は、区別しないFS（macOS既定のAPFS等）では同一ファイルになり本検査
 // では検出できない。しかし区別するFSでは別ファイルであり、畳み込むと誤検出するため
 // 文字列一致に留める。
-func destinationCollisions(files []FileTask) map[string]error {
+func destinationCollisions(files []FileTask) map[string]destinationCollision {
 	sourcesByDest := make(map[string][]string, len(files))
 	for _, f := range files {
 		sourcesByDest[f.Dest] = append(sourcesByDest[f.Dest], f.Source)
 	}
 
-	collisions := make(map[string]error)
+	collisions := make(map[string]destinationCollision)
 	for dest, sources := range sourcesByDest {
 		if len(sources) < 2 {
 			continue
 		}
 
+		var candidates []string
+		for _, source := range sources {
+			if strings.EqualFold(filepath.Ext(source), filepath.Ext(dest)) {
+				candidates = append(candidates, source)
+			}
+		}
+
+		if len(candidates) == 1 {
+			collisions[dest] = destinationCollision{winner: candidates[0]}
+
+			continue
+		}
+
 		slices.Sort(sources)
-		collisions[dest] = permanentError(
+		collisions[dest] = destinationCollision{err: permanentError(
 			fmt.Errorf("%w: %s ← %s", ErrDestinationCollision, dest, strings.Join(sources, ", ")),
-		)
+		)}
 	}
 
 	return collisions

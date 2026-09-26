@@ -416,6 +416,121 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		require.Len(t, calls, 3)
 		assert.Equal(t, [2]int{3, 3}, calls[len(calls)-1])
 	})
+
+	t.Run("出力先が重複する動画タスク", func(t *testing.T) {
+		t.Parallel()
+
+		type task struct {
+			source string
+			dest   string
+		}
+
+		cases := map[string]struct {
+			tasks []task
+			// winnerが空のときは重複した全タスクが恒久的な失敗となることを期待する。
+			winner string
+		}{
+			"正常系: 出力形式と同じ拡張子の.mpgを変換し.wmvはスキップする": {
+				tasks:  []task{{"op.wmv", "out/op.mpg"}, {"op.mpg", "out/op.mpg"}},
+				winner: "op.mpg",
+			},
+			"正常系: 大文字拡張子の.MPGも出力形式と同じ拡張子として優先する": {
+				tasks:  []task{{"OP.wmv", "out/OP.mpg"}, {"OP.MPG", "out/OP.mpg"}},
+				winner: "OP.MPG",
+			},
+			"正常系: 3件以上重複しても.mpgだけを変換し残りはスキップする": {
+				tasks:  []task{{"op.avi", "out/op.mpg"}, {"op.wmv", "out/op.mpg"}, {"op.mpg", "out/op.mpg"}},
+				winner: "op.mpg",
+			},
+			"正常系: .mpegは出力拡張子.mpgと異なるため.mpgを優先する": {
+				tasks:  []task{{"op.mpeg", "out/op.mpg"}, {"op.mpg", "out/op.mpg"}},
+				winner: "op.mpg",
+			},
+			"異常系: 出力形式と同じ拡張子の変換元が無ければ全て失敗とする": {
+				tasks: []task{{"op.wmv", "out/op.mpg"}, {"op.avi", "out/op.mpg"}},
+			},
+			"異常系: .mpegと.wmvはどちらも出力拡張子.mpgと異なるため全て失敗とする": {
+				tasks: []task{{"op.mpeg", "out/op.mpg"}, {"op.wmv", "out/op.mpg"}},
+			},
+			"異常系: 出力形式と同じ拡張子の変換元が2件以上あれば全て失敗とする": {
+				tasks: []task{{"a/op.mpg", "out/op.mpg"}, {"b/op.mpg", "out/op.mpg"}, {"op.wmv", "out/op.mpg"}},
+			},
+		}
+
+		for name, tc := range cases {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+				files := make([]converter.FileTask, 0, len(tc.tasks))
+				for _, tk := range tc.tasks {
+					files = append(files, converter.FileTask{
+						Source: filepath.Join(dir, tk.source),
+						Dest:   filepath.Join(dir, tk.dest),
+					})
+				}
+				dest := files[0].Dest
+
+				conv := newMockConverter(".mpg", ".mpeg", ".wmv", ".avi")
+				conv.outputExtension = ".mpg"
+				var (
+					mu     sync.Mutex
+					called []string
+				)
+				conv.convertFunc = func(source, dest string, _ int) (converter.ConversionResult, error) {
+					mu.Lock()
+					called = append(called, source)
+					mu.Unlock()
+
+					return converter.ConversionResult{SourcePath: source, DestPath: dest, Status: converter.StatusSuccess}, nil
+				}
+
+				m := converter.NewConversionManager([]converter.Converter{conv}, nil, 2, nil)
+				m.SleepFunc = func(time.Duration) {}
+				summary := m.ConvertFiles(files)
+
+				require.Len(t, summary.Results, len(files))
+				results := make(map[string]converter.ConversionResult, len(summary.Results))
+				for _, result := range summary.Results {
+					results[result.SourcePath] = result
+				}
+
+				if tc.winner == "" {
+					assert.Equal(t, len(files), summary.Failed)
+					assert.Empty(t, called)
+					for _, f := range files {
+						require.Contains(t, results, f.Source)
+						assert.Equal(t, converter.StatusFailed, results[f.Source].Status)
+						assert.Contains(t, results[f.Source].Message, converter.ErrDestinationCollision.Error())
+					}
+
+					return
+				}
+
+				winner := filepath.Join(dir, tc.winner)
+				assert.Equal(t, 1, summary.Success)
+				assert.Equal(t, len(files)-1, summary.Skipped)
+				assert.Equal(t, 0, summary.Failed)
+				assert.Equal(t, []string{winner}, called)
+
+				require.Contains(t, results, winner)
+				assert.Equal(t, converter.StatusSuccess, results[winner].Status)
+				assert.Equal(t, dest, results[winner].DestPath)
+
+				for _, f := range files {
+					if f.Source == winner {
+						continue
+					}
+					require.Contains(t, results, f.Source)
+					assert.Equal(t, converter.StatusSkipped, results[f.Source].Status)
+					assert.Equal(t, "同名の "+winner+" を優先したため変換しません", results[f.Source].Message)
+					// why: 動画の残留ファイル削除がスキップした変換元の旧拡張子ファイルを
+					// 特定できるよう、共有する出力先を記録していることを固定する。
+					assert.Equal(t, dest, results[f.Source].DestPath)
+				}
+			})
+		}
+	})
 }
 
 func TestConversionManager_Retry(t *testing.T) {

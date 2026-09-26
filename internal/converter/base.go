@@ -21,8 +21,8 @@ var (
 	// Converterはこれを%wでラップしたerrを返し、呼び出し側にリトライ不要を伝える。
 	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
 	// ErrDestinationCollision は複数の変換元が同じ出力先へ変換される場合のエラー。
-	// ConversionManagerはこれをErrPermanentFailureでラップし、該当する変換元を
-	// いずれも変換しない。
+	// 出力先と同じ拡張子の変換元がちょうど1件でない場合、ConversionManagerは
+	// これをErrPermanentFailureでラップし、該当する変換元をいずれも変換しない。
 	ErrDestinationCollision = errors.New("出力先が重複しています")
 )
 
@@ -44,6 +44,9 @@ const (
 // 場合のErrDestinationCollisionを含むエラーの文言、または
 // RetryConfig.MaxAttemptsが0以下で一度も変換を試みなかった場合の
 // 「変換に失敗しました」となる。
+//
+// 出力先が重複し別の変換元を優先したためConversionManagerが変換しなかった
+// 変換元は、DestPathに優先した変換元の出力先を持つStatusSkippedとなる。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
