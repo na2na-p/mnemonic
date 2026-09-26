@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 )
 
 // ErrVideoSourceNotFound はget_video_info対象の動画ファイルが存在しない場合のエラー。
@@ -288,66 +289,17 @@ func nearestLegalFrameRateArg(fps float64) string {
 	return best.Arg
 }
 
-// copyFile はsourceの内容をそのままdestへコピーする(パススルー用)。sourceとdest
-// が同一ファイル実体（同一パス、ハードリンク、大文字小文字を区別しない
-// ファイルシステム上の別表記など）を指す場合は何もせずnilを返す。
+// copyFile はsourceの内容をそのままdestへコピーする(パススルー用)。
 //
 // why not: os.Renameではなくコピーを使う。sourceは展開済みゲームツリー内の
 // ファイルであり、変換先ディレクトリへ移動すると元のツリーからファイルが
 // 消え、リトライや他の後続処理がsourceを参照できなくなる。
-//
-// why not: 同一ファイル判定にパス文字列の比較（Abs/EvalSymlinks）ではなく
-// os.SameFileを使う。パス比較ではハードリンクや大文字小文字を区別しない
-// ファイルシステムを検出できない。
-//
-// why not: 同一ファイルをエラーではなくnilで返す。呼び出し元はハードリンクの
-// 有無を知り得ず、望む終状態（destがsourceの内容を持つ）は既に成立している。
 func copyFile(source, dest string) error {
-	in, err := os.Open(source) //nolint:gosec // 変換元パスは呼び出し元(ConversionManager)が決定する
-	if err != nil {
-		return fmt.Errorf("変換元ファイルを開けません: %w", err)
-	}
-	defer func() { _ = in.Close() }()
-
-	info, err := in.Stat()
-	if err != nil {
-		return fmt.Errorf("変換元ファイルの情報を取得できません: %w", err)
-	}
-
-	sameFile, err := isSameFile(info, dest)
-	if err != nil {
-		return fmt.Errorf("出力先ファイルの情報を取得できません: %w", err)
-	}
-	if sameFile {
-		return nil
-	}
-
-	out, err := os.Create(dest) //nolint:gosec // 変換先パスは呼び出し元(ConversionManager)が決定する
-	if err != nil {
-		return fmt.Errorf("出力ファイルを作成できません: %w", err)
-	}
-	defer func() { _ = out.Close() }()
-
-	if _, err := io.Copy(out, in); err != nil {
+	if err := fsutil.CopyFile(source, dest); err != nil {
 		return fmt.Errorf("ファイルのコピーに失敗しました: %w", err)
 	}
 
 	return nil
-}
-
-// isSameFile はsrcInfoのファイルとdstが同じファイル実体を指すかを返す。dstが存在
-// しない場合は同一になり得ないためfalseを返す。
-func isSameFile(srcInfo os.FileInfo, dst string) (bool, error) {
-	dstInfo, err := os.Stat(dst)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return os.SameFile(srcInfo, dstInfo), nil
 }
 
 // finalizeTempOutput はtempDestのサイズを検証し、destへrenameする。

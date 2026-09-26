@@ -1,55 +1,15 @@
 package builder
 
 import (
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 )
 
-// copyFile はsrcの内容をdstへコピーする。
-// 既存のdstは上書きされる。srcとdstが同一ファイル実体（同一パス、ハードリンク、
-// 大文字小文字を区別しないファイルシステム上の別表記など）を指す場合は何もせず
-// nilを返す。
-//
-// why not: パス文字列の比較（Abs/EvalSymlinks）ではハードリンクや大文字小文字を
-// 区別しないファイルシステムを検出できない。os.SameFileはデバイスとinodeで比べる
-// ため、これらも同一と判定できる。
-//
-// why not: 同一ファイルをエラーではなくnilで返す。copyDirなどの呼び出し元は
-// ハードリンクの有無を知り得ず、望む終状態（dstがsrcの内容を持つ）は既に
-// 成立している。
 func copyFile(src, dst string) error {
-	in, err := os.Open(src) //nolint:gosec // 呼び出し元で存在検証済みのファイルを読む用途のため妥当
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-
-	sameFile, err := isSameFile(info, dst)
-	if err != nil {
-		return err
-	}
-	if sameFile {
-		return nil
-	}
-
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm()) //nolint:gosec // 呼び出し元がキャッシュ/プロジェクトディレクトリ配下に限定して呼び出す用途のため妥当
-	if err != nil {
-		return err
-	}
-	defer func() { _ = out.Close() }()
-
-	if _, err := io.Copy(out, in); err != nil { //nolint:gosec // テンプレート/アセットファイルのコピーでありサイズ上限は設けない
-		return err
-	}
-
-	return nil
+	return fsutil.CopyFile(src, dst)
 }
 
 // copyDir はsrcディレクトリの内容を再帰的にdstへコピーする。
