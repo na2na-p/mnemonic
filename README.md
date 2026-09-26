@@ -70,7 +70,7 @@ mnemonic build <input.exe> -o <output.apk>
 ```
   -o, --output string               出力APKパス
       --app-name string             アプリ表示名
-      --package-name string         Androidパッケージ名
+      --package-name string         Androidパッケージ名。例: com.example.game（英字始まりの 2 セグメント以上）
       --keystore string             署名用キーストア
       --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス
       --quality string              画像品質プリセット (default "high")

@@ -97,6 +97,12 @@ func (b *BuildPipeline) Validate() []string {
 		}
 	}
 
+	if b.config.PackageName != "" {
+		if err := validatePackageName(b.config.PackageName); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
 	return errs
 }
 

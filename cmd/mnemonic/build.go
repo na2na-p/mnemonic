@@ -118,7 +118,7 @@ func newBuildCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&output, "output", "o", "", "出力APKパス")
-	cmd.Flags().StringVar(&packageName, "package-name", "", "Androidパッケージ名")
+	cmd.Flags().StringVar(&packageName, "package-name", "", "Androidパッケージ名。例: com.example.game（英字始まりの 2 セグメント以上）")
 	cmd.Flags().StringVar(&appName, "app-name", "", "アプリ表示名")
 	cmd.Flags().StringVar(&keystore, "keystore", "", "署名用キーストア")
 	cmd.Flags().StringVar(

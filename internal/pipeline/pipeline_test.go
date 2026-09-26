@@ -61,6 +61,33 @@ func TestBuildPipeline_Validate(t *testing.T) {
 			errContain: "キーストア",
 		},
 		{
+			name: "異常系: 指定されたパッケージ名が applicationId 規則に反する",
+			setupFn: func(t *testing.T, dir string) pipeline.Config {
+				t.Helper()
+				input := filepath.Join(dir, "game.exe")
+				writeFile(t, input, make([]byte, 100))
+				cfg := pipeline.NewConfig(input, filepath.Join(dir, "output.apk"))
+				cfg.PackageName = "com.9game"
+
+				return cfg
+			},
+			wantErr:    true,
+			errContain: pipeline.ErrInvalidPackageName.Error(),
+		},
+		{
+			name: "正常系: 規則を満たすパッケージ名を指定した有効な設定",
+			setupFn: func(t *testing.T, dir string) pipeline.Config {
+				t.Helper()
+				input := filepath.Join(dir, "game.exe")
+				writeFile(t, input, make([]byte, 100))
+				cfg := pipeline.NewConfig(input, filepath.Join(dir, "output.apk"))
+				cfg.PackageName = "com.example.game"
+
+				return cfg
+			},
+			wantErr: false,
+		},
+		{
 			name: "正常系: 有効な設定",
 			setupFn: func(t *testing.T, dir string) pipeline.Config {
 				t.Helper()
