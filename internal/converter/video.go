@@ -80,14 +80,35 @@ type CommandRunner interface {
 }
 
 // execCommandRunner はos/execを使った既定のCommandRunner実装。
-type execCommandRunner struct{}
+//
+// stderrLineLimitが正の場合、失敗時のエラーに含めるstderrをsummarizeStderrで
+// 先頭のその行数までに絞る。0の場合はstderr全体を含める。
+//
+// why not: NewExecCommandRunnerが返す実装（MidiConverterが使う）では絞らない。
+// MIDI変換はバナーを抑止せずにffmpegを起動しており、ffmpeg 9.0.1で同じ形の
+// 呼び出しに壊れた入力を与えると、先頭3行はバージョンとビルド構成のバナーだった。
+type execCommandRunner struct {
+	stderrLineLimit int
+}
+
+// videoStderrLineLimit はVideoConverterの既定のCommandRunnerが失敗時のエラーに
+// 含めるstderrの行数。
+//
+// why not: 末尾の行ではなく先頭の行を残す。ffmpeg 9.0.1でlavfiのtestsrcが
+// 生成した15fpsの映像をmpeg1videoへ変換させて測ったところ、バナー付きの
+// stderrでは原因の「MPEG-1/2 does not support 15/1 fps」は出力の途中
+// （28行中18行目）にあり、末尾の3行は「Nothing was written into output file…」
+// 「frame=…」「Conversion failed!」という原因を含まない行だった。
+// -hide_banner -loglevel errorを付けると、原因は1行目に出た。VideoConverterは
+// これらを付けてffmpegを起動する。
+const videoStderrLineLimit = 3
 
 // NewExecCommandRunner はos/execベースのCommandRunnerを返す。
 func NewExecCommandRunner() CommandRunner {
 	return execCommandRunner{}
 }
 
-func (execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+func (r execCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // ffmpeg/ffprobeを呼び出す用途のため妥当
 
 	var stdout, stderr bytes.Buffer
@@ -95,10 +116,32 @@ func (execCommandRunner) Run(ctx context.Context, name string, args ...string) (
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return stdout.Bytes(), fmt.Errorf("%s実行に失敗しました: %w: %s", name, err, strings.TrimSpace(stderr.String()))
+		detail := strings.TrimSpace(stderr.String())
+		if r.stderrLineLimit > 0 {
+			detail = summarizeStderr(stderr.String(), r.stderrLineLimit)
+		}
+
+		return stdout.Bytes(), fmt.Errorf("%s実行に失敗しました: %w: %s", name, err, detail)
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// summarizeStderr はstderrの空でない行のうち先頭limit行を「 | 」でつないだ
+// 1行を返す。空でない行がlimit行を超える場合は、末尾に空でない行の総数を添える。
+func summarizeStderr(stderr string, limit int) string {
+	var lines []string
+	for line := range strings.Lines(stderr) {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+
+	if len(lines) <= limit {
+		return strings.Join(lines, " | ")
+	}
+
+	return fmt.Sprintf("%s（全 %d 行）", strings.Join(lines[:limit], " | "), len(lines))
 }
 
 // VideoInfo は動画ファイルのメタデータを表す不変値。
@@ -126,13 +169,14 @@ type VideoConverter struct {
 
 // NewVideoConverter はVideoConverterを初期化する。
 // timeoutが0以下の場合はデフォルト値(300秒)を使用する。
-// runnerがnilの場合はos/execベースの既定実装を使用する。
+// runnerがnilの場合は、失敗時のstderrを先頭videoStderrLineLimit行に絞る
+// os/execベースの既定実装を使用する。
 func NewVideoConverter(timeout time.Duration, runner CommandRunner) *VideoConverter {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
 	if runner == nil {
-		runner = NewExecCommandRunner()
+		runner = execCommandRunner{stderrLineLimit: videoStderrLineLimit}
 	}
 
 	return &VideoConverter{
@@ -253,7 +297,13 @@ func (c *VideoConverter) runFFmpegConvert(source, tempDest string, info VideoInf
 		rate = info.FrameRate
 	}
 
+	// why not: -hide_banner -loglevel errorを外さない。失敗時のエラーにはstderrの
+	// 先頭videoStderrLineLimit行しか残らないが、これらが無いとstderrはバージョンや
+	// ビルド構成のバナーで始まる（ffmpeg 9.0.1で壊れた入力を与えると13行中10行が
+	// バナーだった）。
 	args := []string{
+		"-hide_banner",
+		"-loglevel", "error",
 		"-y",
 		"-i", source,
 		"-r", nearestLegalFrameRateArg(rate),
@@ -344,7 +394,7 @@ type ffprobeFormat struct {
 // GetVideoInfo は動画ファイルの情報をffprobeで取得する。
 //
 // 実行される実効的なffprobeコマンドは以下の通り:
-// `ffprobe -show_format -show_streams -of json <file>`
+// `ffprobe -hide_banner -show_format -show_streams -of json <file>`
 func (c *VideoConverter) GetVideoInfo(filePath string) (VideoInfo, error) {
 	if _, err := os.Stat(filePath); err != nil {
 		return VideoInfo{}, fmt.Errorf("%w: %s", ErrVideoSourceNotFound, filePath)
@@ -353,7 +403,7 @@ func (c *VideoConverter) GetVideoInfo(filePath string) (VideoInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
-	stdout, err := c.runner.Run(ctx, "ffprobe", "-show_format", "-show_streams", "-of", "json", filePath)
+	stdout, err := c.runner.Run(ctx, "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", filePath)
 	if err != nil {
 		return VideoInfo{}, fmt.Errorf("%w: %s: %w", ErrVideoInfoUnavailable, filePath, err)
 	}

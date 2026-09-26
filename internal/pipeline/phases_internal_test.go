@@ -2,8 +2,10 @@ package pipeline
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +191,33 @@ func TestBuildPipeline_NewMidiConverter(t *testing.T) {
 func TestConversionFailureError(t *testing.T) {
 	t.Parallel()
 
+	extractDir := filepath.Join(t.TempDir(), "extract")
+	under := func(rel string) string { return filepath.Join(extractDir, rel) }
+
+	const videoHint = "\n動画を変換しない場合は --skip-video を指定してください"
+
+	// cappedResults は変換元パス順で先頭からn件の失敗結果を、並びを崩して返す。
+	cappedResults := func(n int) []converter.ConversionResult {
+		results := make([]converter.ConversionResult, 0, n)
+		for i := range n {
+			results = append(results, converter.ConversionResult{
+				SourcePath: under(fmt.Sprintf("image/bg%02d.tlg", n-1-i)),
+				Status:     converter.StatusFailed,
+				Message:    "TLG形式ではありません",
+			})
+		}
+
+		return results
+	}
+	cappedLines := func(n int) string {
+		var b strings.Builder
+		for i := range n {
+			fmt.Fprintf(&b, "\n  - %s: TLG形式ではありません", filepath.Join("image", fmt.Sprintf("bg%02d.tlg", i)))
+		}
+
+		return b.String()
+	}
+
 	tests := []struct {
 		name    string
 		results []converter.ConversionResult
@@ -197,27 +226,73 @@ func TestConversionFailureError(t *testing.T) {
 		{
 			name: "正常系: 失敗が無ければnilを返す",
 			results: []converter.ConversionResult{
-				{SourcePath: "a.ks", Status: converter.StatusSuccess},
-				{SourcePath: "b.tlg", Status: converter.StatusSkipped, Message: "変換不要"},
+				{SourcePath: under("a.ks"), Status: converter.StatusSuccess},
+				{SourcePath: under("b.tlg"), Status: converter.StatusSkipped, Message: "変換不要"},
 			},
 		},
 		{
-			name: "異常系: 失敗した結果だけを変換元パス順に並べて報告する",
+			name: "異常系: 1件の失敗をextractDirからの相対パスで1行に報告する",
 			results: []converter.ConversionResult{
-				{SourcePath: "video/op.wmv", Status: converter.StatusFailed, Message: "ffmpegが失敗しました"},
-				{SourcePath: "first.ks", Status: converter.StatusSuccess},
-				{SourcePath: "image/bg.tlg", Status: converter.StatusFailed, Message: "TLG形式ではありません"},
-				{SourcePath: "image/ev.tlg", Status: converter.StatusSkipped, Message: "変換不要"},
+				{SourcePath: under("image/bg.tlg"), Status: converter.StatusFailed, Message: "TLG形式ではありません"},
 			},
-			wantErr: "アセットの変換に失敗しました: image/bg.tlg: TLG形式ではありません / " +
-				"video/op.wmv: ffmpegが失敗しました",
+			wantErr: "アセットの変換に失敗しました（1 件）\n" +
+				"  - " + filepath.Join("image", "bg.tlg") + ": TLG形式ではありません",
+		},
+		{
+			name: "異常系: 失敗した結果だけを変換元パス順に1件1行で報告する",
+			results: []converter.ConversionResult{
+				{SourcePath: under("script/c.ks"), Status: converter.StatusFailed, Message: "文字コードを判定できません"},
+				{SourcePath: under("first.ks"), Status: converter.StatusSuccess},
+				{SourcePath: under("image/bg.tlg"), Status: converter.StatusFailed, Message: "TLG形式ではありません"},
+				{SourcePath: under("image/ev.tlg"), Status: converter.StatusSkipped, Message: "変換不要"},
+				{SourcePath: under("image/aa.bmp"), Status: converter.StatusFailed, Message: "BMPを読めません"},
+			},
+			wantErr: "アセットの変換に失敗しました（3 件）\n" +
+				"  - " + filepath.Join("image", "aa.bmp") + ": BMPを読めません\n" +
+				"  - " + filepath.Join("image", "bg.tlg") + ": TLG形式ではありません\n" +
+				"  - " + filepath.Join("script", "c.ks") + ": 文字コードを判定できません",
 		},
 		{
 			name: "異常系: 成功とスキップ以外の状態はConversionManagerの集計と同じく失敗として報告する",
 			results: []converter.ConversionResult{
-				{SourcePath: "first.ks", Status: "", Message: "状態不明"},
+				{SourcePath: under("first.ks"), Status: "", Message: "状態不明"},
 			},
-			wantErr: "アセットの変換に失敗しました: first.ks: 状態不明",
+			wantErr: "アセットの変換に失敗しました（1 件）\n  - first.ks: 状態不明",
+		},
+		{
+			name:    "異常系: 20件を超える失敗は変換元パス順の先頭20件だけを列挙し残りを件数で示す",
+			results: cappedResults(25),
+			wantErr: "アセットの変換に失敗しました（25 件）" + cappedLines(20) + "\n  …ほか 5 件",
+		},
+		{
+			name:    "異常系: ちょうど20件の失敗は省略せずに全件列挙する",
+			results: cappedResults(20),
+			wantErr: "アセットの変換に失敗しました（20 件）" + cappedLines(20),
+		},
+		{
+			name: "異常系: 動画の変換に失敗した場合は--skip-videoの案内を1回だけ末尾に付ける",
+			results: []converter.ConversionResult{
+				{SourcePath: under("video/op.wmv"), Status: converter.StatusFailed, Message: "動画変換に失敗しました"},
+				{SourcePath: under("video/ed.AVI"), Status: converter.StatusFailed, Message: "動画変換に失敗しました"},
+			},
+			wantErr: "アセットの変換に失敗しました（2 件）\n" +
+				"  - " + filepath.Join("video", "ed.AVI") + ": 動画変換に失敗しました\n" +
+				"  - " + filepath.Join("video", "op.wmv") + ": 動画変換に失敗しました" +
+				videoHint,
+		},
+		{
+			name: "異常系: 列挙から省略された失敗が動画でも--skip-videoを案内する",
+			results: append(cappedResults(20), converter.ConversionResult{
+				SourcePath: under("video/op.mpg"), Status: converter.StatusFailed, Message: "動画変換に失敗しました",
+			}),
+			wantErr: "アセットの変換に失敗しました（21 件）" + cappedLines(20) + "\n  …ほか 1 件" + videoHint,
+		},
+		{
+			name: "異常系: extractDirからの相対パスにできない変換元はそのままのパスで報告する",
+			results: []converter.ConversionResult{
+				{SourcePath: "image/bg.tlg", Status: converter.StatusFailed, Message: "TLG形式ではありません"},
+			},
+			wantErr: "アセットの変換に失敗しました（1 件）\n  - image/bg.tlg: TLG形式ではありません",
 		},
 	}
 
@@ -225,7 +300,7 @@ func TestConversionFailureError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := conversionFailureError(converter.ConversionSummary{Results: tt.results})
+			err := conversionFailureError(extractDir, converter.ConversionSummary{Results: tt.results})
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -235,6 +310,90 @@ func TestConversionFailureError(t *testing.T) {
 
 			require.ErrorIs(t, err, ErrAssetConversionFailed)
 			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestLogPreferredSourceSkips(t *testing.T) {
+	t.Parallel()
+
+	extractDir := filepath.Join(t.TempDir(), "extract")
+	under := func(rel string) string { return filepath.Join(extractDir, rel) }
+	loser := func(rel, winnerRel string) converter.ConversionResult {
+		dest := filepath.Join(t.TempDir(), "convert", strings.TrimSuffix(rel, filepath.Ext(rel))+filepath.Ext(winnerRel))
+
+		return converter.ConversionResult{
+			SourcePath: under(rel),
+			DestPath:   dest,
+			Status:     converter.StatusSkipped,
+			Message:    fmt.Sprintf("同名の %s を優先したため変換しません", under(winnerRel)),
+		}
+	}
+	losers := func(n int) []converter.ConversionResult {
+		results := make([]converter.ConversionResult, 0, n)
+		for i := range n {
+			results = append(results, loser(fmt.Sprintf("video/op%02d.wmv", n-1-i), fmt.Sprintf("video/op%02d.mpg", n-1-i)))
+		}
+
+		return results
+	}
+	loserLines := func(n int) []string {
+		lines := make([]string, 0, n)
+		for i := range n {
+			lines = append(lines, fmt.Sprintf("%s: 同名の %s を優先したため変換しません",
+				filepath.Join("video", fmt.Sprintf("op%02d.wmv", i)), under(fmt.Sprintf("video/op%02d.mpg", i))))
+		}
+
+		return lines
+	}
+
+	tests := []struct {
+		name    string
+		results []converter.ConversionResult
+		want    []string
+	}{
+		{
+			name: "正常系: 出力先が重複して別の変換元を優先したスキップだけを1件1行でINFOに出す",
+			results: []converter.ConversionResult{
+				loser("video/op.wmv", "video/op.mpg"),
+				{SourcePath: under("video/op.mpg"), DestPath: filepath.Join(t.TempDir(), "op.mpg"), Status: converter.StatusSuccess},
+				{
+					SourcePath: under("scenario/first.ks"), DestPath: filepath.Join(t.TempDir(), "first.ks"),
+					Status: converter.StatusSkipped, Message: "既にターゲットエンコーディングです",
+				},
+				{SourcePath: under("scenario/plain.tjs"), Status: converter.StatusSkipped, Message: "調整が不要なファイルです"},
+				{SourcePath: under("image/bg.tlg"), Status: converter.StatusFailed, Message: "TLG形式ではありません"},
+			},
+			want: []string{
+				filepath.Join("video", "op.wmv") + ": 同名の " + under("video/op.mpg") + " を優先したため変換しません",
+			},
+		},
+		{
+			name: "正常系: 該当するスキップが無ければ何も出さない",
+			results: []converter.ConversionResult{
+				{
+					SourcePath: under("scenario/first.ks"), DestPath: filepath.Join(t.TempDir(), "first.ks"),
+					Status: converter.StatusSkipped, Message: "既にターゲットエンコーディングです",
+				},
+			},
+		},
+		{
+			name:    "正常系: 20件を超える場合は変換元パス順の先頭20件だけを出し残りを件数で示す",
+			results: losers(22),
+			want:    append(loserLines(20), "…ほか 2 件"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger := &recordingLogger{}
+
+			logPreferredSourceSkips(logger, extractDir, converter.ConversionSummary{Results: tt.results})
+
+			assert.Equal(t, tt.want, logger.messages("INFO"))
+			assert.Empty(t, logger.messages("WARNING"))
 		})
 	}
 }

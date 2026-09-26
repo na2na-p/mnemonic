@@ -763,7 +763,7 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, ErrAssetConversionFailed)
-			require.ErrorContains(t, err, filepath.Join(extractDir, tt.wantFailed))
+			require.ErrorContains(t, err, "  - "+tt.wantFailed+": ")
 			require.ErrorContains(t, err, "TLG形式ではありません")
 			// system/はcopyPolyfillFilesが作るため、これが無いことで変換失敗時に
 			// finalizeConvertedTreeへ進んでいないことを確かめる。
@@ -815,7 +815,7 @@ func TestBuildPipeline_ExecuteConvert_SourceEncoding(t *testing.T) {
 
 			if tt.wantFailed {
 				require.ErrorIs(t, err, ErrAssetConversionFailed)
-				require.ErrorContains(t, err, path)
+				require.ErrorContains(t, err, "  - "+filepath.Join("data", "config.ini")+": ")
 
 				return
 			}
@@ -827,6 +827,37 @@ func TestBuildPipeline_ExecuteConvert_SourceEncoding(t *testing.T) {
 			assert.Equal(t, tt.wantConverted, string(got))
 		})
 	}
+}
+
+// TestBuildPipeline_ExecuteConvert_ReportsPreferredSourceAndVideoHint は、出力先が
+// 重複して変換しなかった動画をINFOで報告し、動画の変換失敗には--skip-videoを
+// 案内することを検証する。
+//
+// why not: 変換に失敗させる動画は、ffmpeg/ffprobeが入っていない環境では実行
+// できずに、入っている環境では動画として読めずに失敗する中身にする。どちらの
+// 環境でも同じ結果になり、実行環境のffmpegの有無にテストが左右されない。
+func TestBuildPipeline_ExecuteConvert_ReportsPreferredSourceAndVideoHint(t *testing.T) {
+	t.Parallel()
+
+	extractDir := t.TempDir()
+	for _, name := range []string{"video/op.wmv", "video/op.mpg"} {
+		path := filepath.Join(extractDir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte("not a video"), 0o600))
+	}
+
+	p := newTestPipeline(t)
+	t.Cleanup(p.cleanupTempDirs)
+	logger := &recordingLogger{}
+	p.SetLogger(logger)
+
+	_, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+	require.ErrorIs(t, err, ErrAssetConversionFailed)
+	require.ErrorContains(t, err, "  - "+filepath.Join("video", "op.mpg")+": ")
+	assert.True(t, strings.HasSuffix(err.Error(), "\n動画を変換しない場合は --skip-video を指定してください"), err.Error())
+	assert.Contains(t, logger.messages("INFO"),
+		filepath.Join("video", "op.wmv")+": 同名の "+filepath.Join(extractDir, "video", "op.mpg")+" を優先したため変換しません")
 }
 
 func TestBuildPipeline_ExecuteConvert_ReturnsErrorWhenExtractPhaseNotDone(t *testing.T) {
