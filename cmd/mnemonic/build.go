@@ -34,6 +34,12 @@ var newBuildPipeline = func(config pipeline.Config, log pipeline.Logger) buildRu
 	return p
 }
 
+// openLogFile は--log-fileのパスを追記用に開く。テストで書き込みに失敗する出力先へ
+// 差し替えるために、newBuildPipelineと同じくパッケージ変数として保持する。
+var openLogFile = func(path string) (io.WriteCloser, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // 利用者が--log-fileで明示したパスへ書き込む用途のため妥当
+}
+
 func newBuildCmd() *cobra.Command {
 	var (
 		output              string
@@ -89,7 +95,7 @@ func newBuildCmd() *cobra.Command {
 
 			var logWriter io.Writer
 			if logFile != "" {
-				f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // 利用者が--log-fileで明示したパスへ書き込む用途のため妥当
+				f, err := openLogFile(logFile)
 				if err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "ログファイルを開けません: %v\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
@@ -104,6 +110,12 @@ func newBuildCmd() *cobra.Command {
 			// している）ため、ロガーのErrorはログファイルへの記録だけに使い、端末に
 			// 同じエラーが二重に出るのを避ける。
 			log := logger.New(verboseLevel(verbose), cmd.OutOrStdout(), io.Discard, logWriter)
+			// why not: --log-file未指定時は書き込みエラーを確かめない。この確認はログファイルの
+			// 障害を知らせるためのもので、ファイルが無ければ残る失敗は標準出力への書き込み
+			// だけである。CLIの他の標準出力への書き込みも失敗を扱わない。
+			if logWriter != nil {
+				defer warnLogWriteError(cmd, log)
+			}
 
 			p := newBuildPipeline(config, log)
 
@@ -133,7 +145,7 @@ func newBuildCmd() *cobra.Command {
 					outputPath = *result.OutputPath
 				}
 
-				fmt.Fprintf(cmd.OutOrStdout(), "ビルド完了: %s\n", outputPath) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+				log.Info("ビルド完了: " + outputPath)
 
 				return nil
 			}
@@ -178,9 +190,29 @@ func newBuildCmd() *cobra.Command {
 	return cmd
 }
 
-// verboseLevel は-vの指定回数をlogger.VerboseLevelへ変換する。-vvより多い指定はDebugとして扱う。
+// warnLogWriteError はログへの書き込みに失敗していれば標準エラー出力へ警告する。
+//
+// why not: 警告の文言でログファイルの失敗と決めつけない。Errはログファイルと
+// 標準出力のうち最初に失敗した書き込みのエラーで、その文言が失敗したことを示す。
+//
+// why not: 書き込みの失敗でbuildコマンドの終了コードを変えない。ビルドの成否は
+// APKを作れたかどうかで決まっており、ログの障害で失敗の終了コードを返すと、
+// 終了コードで成否を判定する呼び出し側（CI等）に、APKができているのに失敗と
+// 判定させてしまう。失敗したビルドの終了コードは元から失敗を示している。
+func warnLogWriteError(cmd *cobra.Command, log *logger.BuildLogger) {
+	if err := log.Err(); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "警告: %v\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	}
+}
+
+// verboseLevel は-vの指定回数をlogger.VerboseLevelへ変換する。-vvより多い指定はDebugとして、
+// 負の値はNormalとして扱う。
+//
+// why not: 負の値をそのままQuietにしない。pflagのカウントフラグは--verbose=-1のような
+// 値の指定をstrconv.ParseIntでそのまま受け付ける（spf13/pflag count.go countValue.Set）。
+// QuietではBuildLogger.Infoが端末へ書かず、「ビルド完了」の表示が消える。
 func verboseLevel(count int) logger.VerboseLevel {
-	return logger.VerboseLevel(min(count, int(logger.Debug)))
+	return logger.VerboseLevel(min(max(count, 0), int(logger.Debug)))
 }
 
 // buildProgressCallback はinternal/logger.ProgressDisplayへ委譲する

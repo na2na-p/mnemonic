@@ -340,6 +340,10 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 // 付与して書き出すためStatusSuccessとなる。変換先がUTF-8のとき、UTF-8 BOMは
 // 吉里吉里スクリプトと、拡張子によらず変換元がUTF-16のファイルに付与する。
 // 吉里吉里のsimple crypt形式は復号し、変換元UTF-16LEとして扱う。
+//
+// StatusSuccessのMessageは、自動検出したときに推定と異なるエンコーディングで
+// 復号した場合だけ、推定（信頼度を含む）と復号に使ったエンコーディングを示し、
+// それ以外は空文字列になる。
 func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := ensureSourceExists(source); err != nil {
 		return ConversionResult{SourcePath: source}, err
@@ -410,6 +414,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		SourcePath:  source,
 		DestPath:    dest,
 		Status:      StatusSuccess,
+		Message:     plan.overrideMessage(sourceEncoding),
 		BytesBefore: bytesBefore,
 		BytesAfter:  getFileSize(dest),
 	}, nil
@@ -484,17 +489,37 @@ type sourcePlan struct {
 	// failure はすべての候補で復号できなかった場合のエラー文言。空文字列なら
 	// 各候補の失敗だけを返す。
 	failure string
+	// detection は候補を決める根拠にしたchardetの推定結果。変換元エンコーディングが
+	// 指定された場合、simple crypt形式のように推定を使わずに候補が決まる場合、
+	// 変換元が空の場合はnil。
+	detection *EncodingDetectionResult
 }
 
 func singleSource(enc string) sourcePlan {
 	return sourcePlan{candidates: []string{enc}}
 }
 
+// encodingKey はエンコーディング名を、大文字小文字と"-"/"_"の違いを無視して比べるための
+// キーに変換する。
+func encodingKey(name string) string { return strings.ReplaceAll(strings.ToLower(name), "-", "_") }
+
 // isOnly は候補がencだけかを、大文字小文字と"-"/"_"の違いを無視して判定する。
 func (p sourcePlan) isOnly(enc string) bool {
-	key := func(name string) string { return strings.ReplaceAll(strings.ToLower(name), "-", "_") }
+	return len(p.candidates) == 1 && encodingKey(p.candidates[0]) == encodingKey(enc)
+}
 
-	return len(p.candidates) == 1 && key(p.candidates[0]) == key(enc)
+// overrideMessage は、復号に使ったusedがchardetの推定と異なる場合にその両方を示す
+// 文言を返す。推定を使わなかった場合と推定どおりに復号した場合は空文字列を返す。
+func (p sourcePlan) overrideMessage(used string) string {
+	if p.detection == nil || encodingKey(used) == encodingKey(p.detection.Encoding) {
+		return ""
+	}
+
+	if p.detection.Encoding == "" {
+		return fmt.Sprintf("推定結果なし、%s として復号", used)
+	}
+
+	return fmt.Sprintf("推定 %s（信頼度 %.2f）を %s として復号", p.detection.Encoding, p.detection.Confidence, used)
 }
 
 // decode はdataを候補の順にUTF-8へ復号し、最初に復号できた結果とその候補を返す。
@@ -523,7 +548,18 @@ func (c *EncodingConverter) planSource(data []byte) sourcePlan {
 	}
 
 	detection := c.detector.DetectBytes(data)
+	plan := planDetectedSource(data, detection)
+	// why not: 空のデータには推定結果を持たせない。推定結果なしとなるが、復号する
+	// 内容が無いため、推定と異なる文字コードで読んだと示しても意味が無い。
+	if len(data) > 0 {
+		plan.detection = &detection
+	}
 
+	return plan
+}
+
+// planDetectedSource はchardetの推定結果detectionとdataの内容から、復号する候補を決める。
+func planDetectedSource(data []byte, detection EncodingDetectionResult) sourcePlan {
 	// why not: UTF-8であることを示す手がかり（UTF-8 BOM、またはchardetのutf-8という
 	// 推定）があるのに有効なUTF-8ではないデータは、推定されたエンコーディングとして
 	// 読み直さず、UTF-8として復号して失敗にする。

@@ -159,6 +159,7 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		"アセット変換: 成功 %d件 / 失敗 %d件 / スキップ %d件",
 		summary.Success, summary.Failed, summary.Skipped,
 	))
+	logConversionNotes(b.log(), a.extractDir, summary.Results)
 
 	logPreferredSourceSkips(b.log(), a.extractDir, summary)
 
@@ -179,6 +180,29 @@ const maxReportedAssets = 20
 
 // skipVideoHint は動画の変換に失敗したときに付ける、--skip-videoの案内。
 const skipVideoHint = "動画を変換しない場合は --skip-video を指定してください"
+
+// logConversionNotes は、成功した変換のうちMessageを持つ結果を1件ずつ
+// 「sourceDirからの相対パス: Message」としてVerboseで記録する。
+//
+// why not: resultsの順に記録しない。ConvertDirectoryの結果は並列ワーカーの
+// 完了順に並び実行ごとに変わるため、変換元パス順に並べ替えてログを決定的にする。
+func logConversionNotes(log Logger, sourceDir string, results []converter.ConversionResult) {
+	noted := slices.DeleteFunc(slices.Clone(results), func(result converter.ConversionResult) bool {
+		return result.Status != converter.StatusSuccess || result.Message == ""
+	})
+	slices.SortFunc(noted, func(a, b converter.ConversionResult) int {
+		return cmp.Compare(a.SourcePath, b.SourcePath)
+	})
+
+	for _, result := range noted {
+		path := result.SourcePath
+		if rel, err := filepath.Rel(sourceDir, result.SourcePath); err == nil {
+			path = rel
+		}
+
+		log.Verbose(fmt.Sprintf("%s: %s", path, result.Message))
+	}
+}
 
 // conversionFailureError はsummaryに失敗した結果が含まれる場合、
 // ErrAssetConversionFailedをラップしたエラーを返す。

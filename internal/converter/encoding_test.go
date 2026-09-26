@@ -1665,3 +1665,127 @@ func TestEncodingConverter_ConvertBytes_AutoDetectedSource(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrUndecodableSource)
 	})
 }
+
+func TestEncodingConverter_Convert_DetectionOverrideMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		fileName       string
+		data           []byte
+		sourceEncoding string
+		wantStatus     converter.ConversionStatus
+		wantMessage    string
+	}{
+		{
+			name:        "正常系: 未対応のwindows-1252と推定されたShift_JISの.csvは推定と復号に使った文字コードを示す",
+			fileName:    "config.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 windows-1252（信頼度 0.75）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 未対応のiso-8859-1と推定されたShift_JISの.csvは推定と復号に使った文字コードを示す",
+			fileName:    "items.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "id,name\n1,ｱｲﾃﾑ"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 iso-8859-1（信頼度 0.27）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 推定結果が無くShift_JISとして復号した場合は推定が無かったことを示す",
+			fileName:    "name.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "猫"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定結果なし、shift_jis として復号",
+		},
+		{
+			name:        "正常系: 低信頼度のgb18030と推定されShift_JISで復号した場合は両方を示す",
+			fileName:    "save.ini",
+			data:        encodeWith(t, japanese.ShiftJIS, "ｾｰﾌﾞ"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 gb18030（信頼度 0.10）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 未対応と推定された正しいUTF-8の.ksはUTF-8として復号したことを示す",
+			fileName:    "title.ks",
+			data:        []byte("title=名前"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 windows-1252（信頼度 0.90）を utf-8 として復号",
+		},
+		{
+			name:        "正常系: 空の.ksは復号する内容が無いため推定結果なしでも示さない",
+			fileName:    "empty.ks",
+			data:        []byte{},
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 低信頼度のgb18030と推定されShift_JISで復号できないEUC-JPは推定どおりなので示さない",
+			fileName:    "kanji.txt",
+			data:        encodeWith(t, japanese.EUCJP, "漢字"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 推定どおりのgb18030で復号したGBKは示さない",
+			fileName:    "readme.txt",
+			data:        encodeWith(t, simplifiedchinese.GBK, "这是一个中文测试文本，用于检测编码。"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 推定どおりのutf-8で復号したASCIIの.ksは示さない",
+			fileName:    "first.ks",
+			data:        []byte("*start\n@wait time=100\n"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: BOM付きUTF-16LEは推定によらず復号するため示さない",
+			fileName:    "readme.txt",
+			data:        encodeUTF16("本文", false, true),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:           "正常系: 変換元の文字コードを指定した場合は推定を使わないため示さない",
+			fileName:       "config.csv",
+			data:           encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫"),
+			sourceEncoding: "shift_jis",
+			wantStatus:     converter.StatusSuccess,
+			wantMessage:    "",
+		},
+		{
+			name:        "正常系: 未対応と推定された正しいUTF-8の.iniは復号しないためSKIPPEDの文言のままにする",
+			fileName:    "title.ini",
+			data:        []byte("title=名前"),
+			wantStatus:  converter.StatusSkipped,
+			wantMessage: "既にターゲットエンコーディングです",
+		},
+		{
+			name:        "正常系: utf-8と推定された正しいUTF-8の.txtはSKIPPEDの文言のままにする",
+			fileName:    "readme.txt",
+			data:        []byte("これはUTF-8で書かれた説明文です。文字コードの検出を確認します。"),
+			wantStatus:  converter.StatusSkipped,
+			wantMessage: "既にターゲットエンコーディングです",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			result, err := c.Convert(source, dest)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, result.Status)
+			assert.Equal(t, tt.wantMessage, result.Message)
+		})
+	}
+}

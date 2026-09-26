@@ -425,3 +425,86 @@ func TestBuildPipeline_NewTemplatePreparer(t *testing.T) {
 		})
 	}
 }
+
+func TestLogConversionNotes(t *testing.T) {
+	t.Parallel()
+
+	sourceDir := filepath.Join(t.TempDir(), "extract")
+
+	tests := []struct {
+		name    string
+		results []converter.ConversionResult
+		want    []string
+	}{
+		{
+			name: "正常系: Messageを持つ成功した結果はsourceDirからの相対パスとともに1行記録する",
+			results: []converter.ConversionResult{
+				{SourcePath: filepath.Join(sourceDir, "data", "name.csv"), Status: converter.StatusSuccess, Message: "推定結果なし、shift_jis として復号"},
+			},
+			want: []string{filepath.Join("data", "name.csv") + ": 推定結果なし、shift_jis として復号"},
+		},
+		{
+			name: "正常系: Messageの無い成功とSKIPPEDと失敗は記録しない",
+			results: []converter.ConversionResult{
+				{SourcePath: filepath.Join(sourceDir, "first.ks"), Status: converter.StatusSuccess},
+				{SourcePath: filepath.Join(sourceDir, "readme.txt"), Status: converter.StatusSkipped, Message: "既にターゲットエンコーディングです"},
+				{SourcePath: filepath.Join(sourceDir, "bg.tlg"), Status: converter.StatusFailed, Message: "TLG形式ではありません"},
+			},
+		},
+		{
+			name: "正常系: 並列ワーカーの完了順によらず変換元パス順に記録する",
+			results: []converter.ConversionResult{
+				{SourcePath: filepath.Join(sourceDir, "b.csv"), Status: converter.StatusSuccess, Message: "b"},
+				{SourcePath: filepath.Join(sourceDir, "a.csv"), Status: converter.StatusSuccess, Message: "a"},
+			},
+			want: []string{"a.csv: a", "b.csv: b"},
+		},
+		{
+			name: "正常系: sourceDirからの相対パスにできない変換元はそのまま示す",
+			results: []converter.ConversionResult{
+				{SourcePath: filepath.Join("relative", "name.csv"), Status: converter.StatusSuccess, Message: "m"},
+			},
+			want: []string{filepath.Join("relative", "name.csv") + ": m"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger := &recordingLogger{}
+
+			logConversionNotes(logger, sourceDir, tt.results)
+
+			assert.Equal(t, tt.want, logger.messages("VERBOSE"))
+			assert.Empty(t, logger.messages("INFO"))
+		})
+	}
+}
+
+func TestBuildPipeline_ExecuteConvert_LogsConversionNotes(t *testing.T) {
+	t.Parallel()
+
+	extractDir := t.TempDir()
+	files := map[string]string{
+		"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
+		"system/font.ttf": "stub font",
+		// Shift_JISの"猫"。chardetは候補を1つも返さない。
+		"data/name.csv": "\x94\x4c",
+	}
+	for name, content := range files {
+		path := filepath.Join(extractDir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	}
+
+	p := newTestPipeline(t)
+	t.Cleanup(p.cleanupTempDirs)
+	logger := &recordingLogger{}
+	p.SetLogger(logger)
+
+	_, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+	require.NoError(t, err)
+	assert.Contains(t, logger.messages("VERBOSE"), filepath.Join("data", "name.csv")+": 推定結果なし、shift_jis として復号")
+}
