@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -729,7 +730,7 @@ func TestImageConverter_Convert(t *testing.T) {
 		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 
-	t.Run("異常系: 存在するTLGファイルを読み込めない場合は再試行対象のエラーを返す", func(t *testing.T) {
+	t.Run("異常系: 読み取り権限の無いTLGファイルは再試行不要な読み込み失敗を返す", func(t *testing.T) {
 		t.Parallel()
 
 		if os.Geteuid() == 0 {
@@ -745,7 +746,11 @@ func TestImageConverter_Convert(t *testing.T) {
 		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
 
 		require.Error(t, err)
-		assert.NotErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		require.NotErrorIs(t, err, converter.ErrSourceNotFound)
+		assert.NotContains(t, err.Error(), "見つかりません")
 	})
 
 	t.Run("異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す", func(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,11 +120,16 @@ func detectVersion(data []byte) TLGVersion {
 }
 
 // readTLGSource はfilePathを読み込み、SDSコンテナを解いた生データを返す。
-// ファイルが存在しない場合はErrSourceNotFoundを返す。
+// ファイルが存在しない場合はErrSourceNotFound、それ以外の理由で読み込めない場合は
+// OSのエラーを包んだErrSourceUnreadableを返す。
 func readTLGSource(filePath string) ([]byte, error) {
 	data, err := os.ReadFile(filePath) //nolint:gosec // 呼び出し側が指定したアセットパスを読む用途のため妥当
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrSourceNotFound, filePath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrSourceNotFound, filePath)
+		}
+
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
 	}
 
 	return unwrapSDS(data), nil
@@ -300,12 +306,14 @@ func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 	if ext == ".tlg" {
 		img, err := c.tlgDecoder.Decode(source)
 		if err != nil {
-			// why not: readTLGSourceは読み込み失敗をOSのエラーを捨てて一律ErrSourceNotFoundに
-			// するため、ここでは原因（権限不足・削除競合・I/Oエラー）を区別できない。
-			// validateSourceで存在は確認済みであり、原因が判別できない以上は他のconverterの
-			// 読み込み失敗と同じく再試行側に寄せる。OSのエラーを包むようになった時点で
-			// fs.ErrPermission等を恒久扱いに分類し直す。
-			if errors.Is(err, ErrSourceNotFound) {
+			// why not: 読み込み失敗を一律に恒久扱いにはしない。読み込み失敗のうち、再試行しても
+			// 変わらないと原因から判別できる権限不足だけを恒久扱いにし、validateSource後の削除競合や
+			// I/Oエラーなど一時的でありうる読み込み失敗は、他のconverterと同じく再試行側に残す。
+			if errors.Is(err, fs.ErrPermission) {
+				return nil, permanentError(err)
+			}
+
+			if errors.Is(err, ErrSourceNotFound) || errors.Is(err, ErrSourceUnreadable) {
 				return nil, err
 			}
 

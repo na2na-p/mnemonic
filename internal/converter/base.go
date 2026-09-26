@@ -11,6 +11,9 @@ import (
 var (
 	// ErrSourceNotFound は変換元ファイルが存在しない場合のエラー。
 	ErrSourceNotFound = errors.New("変換元ファイルが見つかりません")
+	// ErrSourceUnreadable は存在しない以外の理由で変換元ファイルを読み込めない場合のエラー。
+	// OSのエラーを%wで保持するため、呼び出し側はerrors.Isで原因を判別できる。
+	ErrSourceUnreadable = errors.New("変換元ファイルを読み込めません")
 	// ErrSourceIsDirectory は変換元がディレクトリの場合のエラー。
 	ErrSourceIsDirectory = errors.New("変換元はファイルである必要があります")
 	// ErrPermanentFailure は同じ入力を再試行しても解消しない変換失敗を表す。
