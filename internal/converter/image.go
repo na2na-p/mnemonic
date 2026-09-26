@@ -276,7 +276,7 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 // の分岐は維持する）。
 func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := validateSource(source); err != nil {
-		return ConversionResult{}, err
+		return ConversionResult{}, permanentError(err)
 	}
 
 	bytesBefore := getFileSize(source)
@@ -298,7 +298,21 @@ func (c *ImageConverter) ConvertFromImage(img image.Image, dest string) (Convers
 func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 	ext := strings.ToLower(filepath.Ext(source))
 	if ext == ".tlg" {
-		return c.tlgDecoder.Decode(source)
+		img, err := c.tlgDecoder.Decode(source)
+		if err != nil {
+			// why not: readTLGSourceは読み込み失敗をOSのエラーを捨てて一律ErrSourceNotFoundに
+			// するため、ここでは原因（権限不足・削除競合・I/Oエラー）を区別できない。
+			// validateSourceで存在は確認済みであり、原因が判別できない以上は他のconverterの
+			// 読み込み失敗と同じく再試行側に寄せる。OSのエラーを包むようになった時点で
+			// fs.ErrPermission等を恒久扱いに分類し直す。
+			if errors.Is(err, ErrSourceNotFound) {
+				return nil, err
+			}
+
+			return nil, permanentError(err)
+		}
+
+		return img, nil
 	}
 
 	f, err := os.Open(source) //nolint:gosec // validateSourceで存在確認済みのアセットパスを読む用途のため妥当
@@ -311,26 +325,26 @@ func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 	case ".bmp":
 		img, err := bmp.Decode(f)
 		if err != nil {
-			return nil, fmt.Errorf("BMP画像のデコードに失敗しました: %w", err)
+			return nil, permanentError(fmt.Errorf("BMP画像のデコードに失敗しました: %w", err))
 		}
 
 		return img, nil
 	case ".jpg", ".jpeg":
 		img, err := jpeg.Decode(f)
 		if err != nil {
-			return nil, fmt.Errorf("JPEG画像のデコードに失敗しました: %w", err)
+			return nil, permanentError(fmt.Errorf("JPEG画像のデコードに失敗しました: %w", err))
 		}
 
 		return img, nil
 	case ".png":
 		img, err := png.Decode(f)
 		if err != nil {
-			return nil, fmt.Errorf("PNG画像のデコードに失敗しました: %w", err)
+			return nil, permanentError(fmt.Errorf("PNG画像のデコードに失敗しました: %w", err))
 		}
 
 		return img, nil
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrUnsupportedImageFormat, ext)
+		return nil, permanentError(fmt.Errorf("%w: %s", ErrUnsupportedImageFormat, ext))
 	}
 }
 

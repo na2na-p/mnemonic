@@ -13,6 +13,9 @@ var (
 	ErrSourceNotFound = errors.New("変換元ファイルが見つかりません")
 	// ErrSourceIsDirectory は変換元がディレクトリの場合のエラー。
 	ErrSourceIsDirectory = errors.New("変換元はファイルである必要があります")
+	// ErrPermanentFailure は同じ入力を再試行しても解消しない変換失敗を表す。
+	// errorを返すConverterはこれを%wでラップし、呼び出し側にリトライ不要を伝える。
+	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
 )
 
 // ConversionStatus は変換ステータスを表す。
@@ -35,6 +38,9 @@ type ConversionResult struct {
 	Message     string
 	BytesBefore int64
 	BytesAfter  int64
+
+	// Permanent は同じ入力を再試行しても結果が変わらない失敗。trueのとき呼び出し側はリトライしない。
+	Permanent bool
 }
 
 // CompressionRatio は圧縮率（BytesAfter / BytesBefore）を計算する。
@@ -76,6 +82,12 @@ func validateSource(source string) error {
 	}
 
 	return nil
+}
+
+// permanentError はerrをErrPermanentFailureでラップし、呼び出し側がerrors.Isで
+// 再試行不要と判定できるようにする。
+func permanentError(err error) error {
+	return fmt.Errorf("%w: %w", ErrPermanentFailure, err)
 }
 
 // getFileSize はpathのファイルサイズを返す。ファイルが存在しない場合は0を返す。

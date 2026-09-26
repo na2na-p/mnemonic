@@ -244,6 +244,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 
@@ -283,6 +284,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 			Status:      StatusFailed,
 			Message:     fmt.Sprintf("エンコーディング変換に失敗しました: %v", convErr),
 			BytesBefore: bytesBefore,
+			Permanent:   true,
 		}, nil
 	}
 

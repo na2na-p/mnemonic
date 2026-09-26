@@ -330,6 +330,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Equal(t, source, result.SourcePath)
 		assert.Contains(t, result.Message, "見つかりません")
+		assert.True(t, result.Permanent)
 	})
 
 	t.Run("正常系: 既にmpeg1video+mp2の場合は再エンコードせずコピーする", func(t *testing.T) {
@@ -567,6 +568,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Contains(t, result.Message, "動画変換に失敗しました")
+		assert.False(t, result.Permanent)
 		// why: fail-loud設計の検証。ffmpeg失敗時にdestの既存内容(コピー済みの
 		// 生ファイル)を0バイトへ破壊してはならない。
 		assert.Equal(t, "pre-existing copied raw file", string(readFile(t, dest)))
@@ -611,6 +613,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Contains(t, result.Message, "0バイト")
+		assert.False(t, result.Permanent)
 		assert.Equal(t, "pre-existing copied raw file", string(readFile(t, dest)))
 		assert.NoFileExists(t, dest+".tmp")
 	})
@@ -710,5 +713,6 @@ func TestCopyFile_ErrorPaths(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.False(t, result.Permanent)
 	})
 }

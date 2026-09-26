@@ -158,6 +158,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 
@@ -166,6 +167,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("サウンドフォントが見つかりません: %s", c.soundfontPath),
+			Permanent:  true,
 		}, nil
 	}
 

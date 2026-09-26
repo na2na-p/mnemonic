@@ -2,6 +2,7 @@ package converter_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -433,7 +434,74 @@ func TestConversionManager_Retry(t *testing.T) {
 
 		assert.Equal(t, 1, summary.Failed)
 		assert.Equal(t, 2, conv.CallCount())
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, "最大リトライ回数超過: 変換中にエラーが発生しました", summary.Results[0].Message)
 	})
+
+	permanentCases := []struct {
+		name        string
+		convertFunc func(source, dest string, callCount int) (converter.ConversionResult, error)
+		wantMessage string
+	}{
+		{
+			name: "正常系: Permanentな失敗結果はリトライせず変換結果をそのまま返す",
+			convertFunc: func(source, _ string, _ int) (converter.ConversionResult, error) {
+				return converter.ConversionResult{
+					SourcePath: source,
+					Status:     converter.StatusFailed,
+					Message:    "恒久的な失敗",
+					Permanent:  true,
+				}, nil
+			},
+			wantMessage: "恒久的な失敗",
+		},
+		{
+			name: "正常系: ErrPermanentFailureをラップしたエラーはリトライせずエラー文言を返す",
+			convertFunc: func(_, _ string, _ int) (converter.ConversionResult, error) {
+				return converter.ConversionResult{}, fmt.Errorf("%w: boom", converter.ErrPermanentFailure)
+			},
+			wantMessage: "再試行しても解消しない変換失敗です: boom",
+		},
+	}
+
+	for _, tc := range permanentCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "source.txt")
+			writeFile(t, source, []byte("content"))
+			dest := filepath.Join(dir, "dest.txt")
+
+			conv := newMockConverter(".txt")
+			conv.convertFunc = tc.convertFunc
+
+			rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+			m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+
+			var (
+				mu         sync.Mutex
+				sleepCount int
+			)
+			m.SleepFunc = func(time.Duration) {
+				mu.Lock()
+				sleepCount++
+				mu.Unlock()
+			}
+
+			summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: dest}})
+
+			assert.Equal(t, 1, conv.CallCount())
+			mu.Lock()
+			assert.Zero(t, sleepCount)
+			mu.Unlock()
+			assert.Equal(t, 1, summary.Failed)
+			require.Len(t, summary.Results, 1)
+			assert.Equal(t, converter.StatusFailed, summary.Results[0].Status)
+			assert.Equal(t, tc.wantMessage, summary.Results[0].Message)
+			assert.True(t, summary.Results[0].Permanent)
+		})
+	}
 }
 
 func TestConversionManager_ConvertDirectory(t *testing.T) {

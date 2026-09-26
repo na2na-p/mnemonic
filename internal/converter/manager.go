@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -23,6 +24,10 @@ import (
 // エラー戻り値として表現するため。EncodingConverter/ScriptAdjuster/
 // VideoConverterは全ての既知の失敗を自身でConversionResultへ変換している
 // ためerr=nilを返す（詳細は各Convertメソッドのdocコメントを参照）。
+//
+// 再試行しても解消しない失敗は、ConversionResult.Permanent=trueを返すか
+// ErrPermanentFailureをラップしたerrorを返す。ConversionManagerはそれらを
+// リトライしない。
 type Converter interface {
 	CanConvert(filePath string) bool
 	Convert(source, dest string) (ConversionResult, error)
@@ -220,6 +225,15 @@ func (m *ConversionManager) convertWithRetry(source, dest string) ConversionResu
 
 	for attempt := 0; attempt < m.RetryConfig.MaxAttempts; attempt++ {
 		result, err := conv.Convert(source, dest)
+
+		// why not: 決定的な失敗を再試行してもバックオフ分だけサマリーが遅れるだけなので、
+		// 恒久的な失敗は1回目で打ち切る。
+		if err != nil && errors.Is(err, ErrPermanentFailure) {
+			return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error(), Permanent: true}
+		}
+		if err == nil && result.Status != StatusSuccess && result.Permanent {
+			return result
+		}
 
 		switch {
 		case err != nil:
