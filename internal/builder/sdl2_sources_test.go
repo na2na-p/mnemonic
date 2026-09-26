@@ -1,6 +1,7 @@
 package builder_test
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -356,6 +357,10 @@ func TestSDL2SourceCache_Save(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
 		require.ErrorIs(t, err, builder.ErrSDL2SourceFetcher)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		require.NotErrorIs(t, err, builder.ErrSDL2SourceFetchNetwork)
+		assert.NotContains(t, err.Error(), builder.ErrSDL2SourceFetcher.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), unreadableFile), "エラーにパスを1回だけ含める: %s", err)
 		assert.FileExists(t, filepath.Join(cache.CachePath(), builder.SDL2CacheMarkerFile))
 		assert.True(t, cache.IsValid())
 		assert.Empty(t, sdl2CacheTempDirs(t, cache))
@@ -449,6 +454,9 @@ func TestSDL2SourceCache_RestoreTo(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
 		require.ErrorIs(t, err, builder.ErrSDL2SourceFetcher)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.NotContains(t, err.Error(), builder.ErrSDL2SourceFetcher.Error())
+		assert.Equal(t, 1, strings.Count(err.Error(), unreadableFile), "エラーにパスを1回だけ含める: %s", err)
 		assert.NoDirExists(t, filepath.Join(destDir, "org"))
 	})
 }
@@ -813,25 +821,27 @@ func TestSDL2SourceFetcher_FetchWarn(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// setup はbase配下にキャッシュを用意し、警告に含まれるべき文字列を返す
-		// （警告を期待しない場合は空）。
-		setup      func(t *testing.T, base string) (cache *builder.SDL2SourceCache, wantContains []string)
+		// setup はbase配下にキャッシュを用意し、期待する警告を返す（警告を期待しない場合は空）。
+		setup      func(t *testing.T, base string) (cache *builder.SDL2SourceCache, wantWarning string)
 		needNoRoot bool
 	}{
 		{
-			name: "正常系: キャッシュ保存に失敗した場合は保存エラーを1回警告する",
-			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+			name: "正常系: キャッシュ保存に失敗した場合はOSのエラーだけを添えて1回警告する",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, string) {
 				t.Helper()
 
 				cacheParent := filepath.Join(base, "cache-parent")
 				require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+				osErr := os.MkdirAll(cacheParent, 0o750)
+				require.Error(t, osErr)
 
-				return builder.NewSDL2SourceCache(cacheParent), []string{"キャッシュ保存に失敗しました", cacheParent}
+				return builder.NewSDL2SourceCache(cacheParent),
+					"SDL2 Javaソースをキャッシュに保存できませんでしたが、ビルドは続けます: " + osErr.Error()
 			},
 		},
 		{
-			name: "正常系: 有効なキャッシュの復元に失敗した場合は復元エラーを1回警告して再ダウンロードする",
-			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+			name: "正常系: 有効なキャッシュの復元に失敗した場合はOSのエラーだけを添えて1回警告し再ダウンロードする",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, string) {
 				t.Helper()
 
 				cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
@@ -841,28 +851,30 @@ func TestSDL2SourceFetcher_FetchWarn(t *testing.T) {
 				t.Cleanup(func() {
 					require.NoError(t, os.Chmod(cachedFile, 0o600))
 				})
+				_, osErr := os.Open(cachedFile) //nolint:gosec // テストで生成した固定パス
+				require.Error(t, osErr)
 
-				return cache, []string{"キャッシュ復元に失敗しました", cachedFile}
+				return cache, "SDL2 Javaソースをキャッシュから復元できなかったため再ダウンロードします: " + osErr.Error()
 			},
 			needNoRoot: true,
 		},
 		{
 			name: "正常系: ダウンロードしてキャッシュに保存できた場合は警告しない",
-			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, string) {
 				t.Helper()
 
-				return builder.NewSDL2SourceCache(filepath.Join(base, "cache")), nil
+				return builder.NewSDL2SourceCache(filepath.Join(base, "cache")), ""
 			},
 		},
 		{
 			name: "正常系: 有効なキャッシュから復元できた場合は警告しない",
-			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, string) {
 				t.Helper()
 
 				cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
 				writeValidSDL2Cache(t, cache)
 
-				return cache, nil
+				return cache, ""
 			},
 		},
 	}
@@ -876,7 +888,7 @@ func TestSDL2SourceFetcher_FetchWarn(t *testing.T) {
 			}
 
 			base := t.TempDir()
-			cache, wantContains := tc.setup(t, base)
+			cache, wantWarning := tc.setup(t, base)
 
 			server := httptest.NewServer(sdl2FetcherHandler(t))
 			t.Cleanup(server.Close)
@@ -895,15 +907,14 @@ func TestSDL2SourceFetcher_FetchWarn(t *testing.T) {
 			}
 
 			warnings := recorder.recorded()
-			if len(wantContains) == 0 {
+			if wantWarning == "" {
 				assert.Empty(t, warnings)
 				return
 			}
 
 			require.Len(t, warnings, 1)
-			for _, want := range wantContains {
-				assert.Equal(t, 1, strings.Count(warnings[0], want), "警告に%qを1回だけ含める: %s", want, warnings[0])
-			}
+			assert.Equal(t, wantWarning, warnings[0])
+			assert.NotContains(t, warnings[0], "取得に失敗しました")
 		})
 	}
 

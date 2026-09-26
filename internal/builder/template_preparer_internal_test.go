@@ -137,6 +137,8 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 
 		cacheParent := filepath.Join(t.TempDir(), "cache-parent")
 		require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+		osErr := os.MkdirAll(cacheParent, 0o750)
+		require.Error(t, osErr)
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
@@ -155,7 +157,8 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "downloaded content: /SDLActivity.java", string(content), "差し替えた取得元からダウンロードする")
 		require.Len(t, warnings, 1)
-		assert.Contains(t, warnings[0], "キャッシュ保存に失敗しました")
+		assert.Contains(t, warnings[0], osErr.Error())
+		assert.NotContains(t, warnings[0], "取得に失敗しました")
 	})
 
 	t.Run("異常系: SDL2ソースの取得に失敗した場合ErrTemplatePreparerとErrSDL2SourceFetchの両方を満たす", func(t *testing.T) {
