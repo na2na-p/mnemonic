@@ -164,6 +164,7 @@ func TestConvertMidiFileListWith(t *testing.T) {
 		wantRenders int32
 		wantSleeps  []time.Duration
 		// wantFailed はエラーメッセージに現れるべきdir相対パスを、現れる順に並べたもの。
+		// 報告はdir相対パスで行い、dirの絶対パスを含まない。
 		wantFailed []string
 		// wantMessage は失敗した各ファイルのパスに続く「: 」の直後に現れるべき文言の先頭部分。
 		wantMessage string
@@ -195,7 +196,7 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			vanished:    []string{"opening.mid"},
 			wantRenders: 0,
 			wantFailed:  []string{"opening.mid"},
-			wantMessage: "再試行しても解消しない変換失敗です: 変換元ファイルが見つかりません: ",
+			wantMessage: "再試行しても解消しない変換失敗です: 変換元ファイルが見つかりません: opening.mid",
 		},
 		{
 			// why: 2件seedするのは「最初の失敗でbreakせず全件試す」という仕様と
@@ -249,7 +250,7 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 			recorder := &sleepRecorder{}
 
-			err := convertMidiFileListWith(midiFiles, midiConverter, recorder.sleep, nopLogger{})
+			err := convertMidiFileListWith(dir, midiFiles, midiConverter, recorder.sleep, nopLogger{})
 
 			assert.Equal(t, tt.wantRenders, runner.renders.Load())
 			assert.ElementsMatch(t, tt.wantSleeps, recorder.durations)
@@ -260,10 +261,12 @@ func TestConvertMidiFileListWith(t *testing.T) {
 				require.ErrorIs(t, err, ErrMidiConversionFailed)
 				msg := err.Error()
 
+				assert.NotContains(t, msg, dir, "一時ディレクトリの絶対パスを報告に含めない")
+
 				lastIndex := -1
 				for _, rel := range tt.wantFailed {
-					assert.Contains(t, msg, abs(rel)+": "+tt.wantMessage)
-					entry := abs(rel) + ": "
+					assert.Contains(t, msg, filepath.FromSlash(rel)+": "+tt.wantMessage)
+					entry := filepath.FromSlash(rel) + ": "
 					assert.Equal(t, 1, strings.Count(msg, entry), "失敗は1ファイルにつき1件だけ報告する: %s", rel)
 					index := strings.Index(msg, entry)
 					assert.Greater(t, index, lastIndex, "失敗はパス順に並ぶ: %s", rel)
@@ -273,9 +276,9 @@ func TestConvertMidiFileListWith(t *testing.T) {
 				if len(tt.wantCollision) > 0 {
 					collided := make([]string, 0, len(tt.wantCollision)-1)
 					for _, rel := range tt.wantCollision[1:] {
-						collided = append(collided, abs(rel))
+						collided = append(collided, filepath.FromSlash(rel))
 					}
-					assert.Contains(t, msg, abs(tt.wantCollision[0])+" ← "+strings.Join(collided, ", "))
+					assert.Contains(t, msg, filepath.FromSlash(tt.wantCollision[0])+" ← "+strings.Join(collided, ", "))
 				}
 			}
 
@@ -319,7 +322,7 @@ func TestConvertMidiFileListWith_RemovalFailure(t *testing.T) {
 	midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 	logger := &recordingLogger{}
 
-	err := convertMidiFileListWith([]string{midiFile}, midiConverter, (&sleepRecorder{}).sleep, logger)
+	err := convertMidiFileListWith(dir, []string{midiFile}, midiConverter, (&sleepRecorder{}).sleep, logger)
 
 	require.NoError(t, err, "削除失敗はビルドエラーに昇格させない")
 	assert.FileExists(t, midiFile)
@@ -421,7 +424,7 @@ func TestConvertMidiFileListWith_Concurrency(t *testing.T) {
 		}
 		midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 
-		require.NoError(t, convertMidiFileListWith(midiFiles, midiConverter, (&sleepRecorder{}).sleep, nopLogger{}))
+		require.NoError(t, convertMidiFileListWith(dir, midiFiles, midiConverter, (&sleepRecorder{}).sleep, nopLogger{}))
 
 		assert.LessOrEqual(t, runner.peakConcurrency(), 2)
 	})

@@ -3,6 +3,8 @@ package pipeline
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,7 +92,42 @@ func TestBuildPipeline_AdjustScripts(t *testing.T) {
 
 		require.ErrorIs(t, err, converter.ErrScriptNotUTF8)
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
-		assert.Equal(t, 1, strings.Count(err.Error(), sjisKS), "パスはエラー文中に1回だけ現れる: %s", err)
+		assert.Equal(t,
+			"スクリプトの調整に失敗しました: "+filepath.FromSlash("scenario/sjis.ks")+
+				": 再試行しても解消しない変換失敗です: UTF-8として読み込めませんでした",
+			err.Error(),
+		)
+		assert.NotContains(t, err.Error(), dir)
+	})
+
+	t.Run("異常系: 読み込み権限の無いスクリプトは走査したディレクトリからの相対パスで報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		p := newTestPipeline(t)
+		dir := t.TempDir()
+		scenarioDir := filepath.Join(dir, "scenario")
+		require.NoError(t, os.MkdirAll(scenarioDir, 0o750))
+		lockedKS := filepath.Join(scenarioDir, "locked.ks")
+		require.NoError(t, os.WriteFile(lockedKS, []byte("[wait time=1]"), 0o600))
+		require.NoError(t, os.Chmod(lockedKS, 0o000))
+
+		err := p.adjustScripts(dir)
+
+		pathErr, ok := errors.AsType[*fs.PathError](err)
+		require.True(t, ok, "errors.AsはOSのエラーまでたどれる: %s", err)
+		assert.Equal(t, lockedKS, pathErr.Path, "相対化するのはError()の文言だけで、元のエラーは書き換えない")
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.True(t,
+			strings.HasPrefix(err.Error(), "スクリプトの調整に失敗しました: "+filepath.FromSlash("scenario/locked.ks")+": "),
+			"失敗したスクリプトを相対パスで示す: %s", err,
+		)
+		assert.NotContains(t, err.Error(), dir)
 	})
 }
 
