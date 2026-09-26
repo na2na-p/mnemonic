@@ -94,6 +94,7 @@ func newBuildCmd() *cobra.Command {
 			config.SourceEncoding = sourceEncoding
 
 			var logWriter io.Writer
+			var logFileHandle io.Closer
 			if logFile != "" {
 				f, err := openLogFile(logFile)
 				if err != nil {
@@ -101,8 +102,8 @@ func newBuildCmd() *cobra.Command {
 
 					return exitWith(apperr.ExitInvalidInput)
 				}
-				defer func() { _ = f.Close() }()
 				logWriter = f
+				logFileHandle = f
 			}
 
 			// why not: ロガーの標準エラー出力先を端末にしない。buildコマンドは入力検証の
@@ -113,8 +114,12 @@ func newBuildCmd() *cobra.Command {
 			// why not: --log-file未指定時は書き込みエラーを確かめない。この確認はログファイルの
 			// 障害を知らせるためのもので、ファイルが無ければ残る失敗は標準出力への書き込み
 			// だけである。CLIの他の標準出力への書き込みも失敗を扱わない。
-			if logWriter != nil {
-				defer warnLogWriteError(cmd, log)
+			//
+			// why not: Closeと警告を別々のdeferにしない。deferは登録と逆順に実行されるため、
+			// ファイルを開いた直後に登録するCloseはロガー生成後に登録する警告より後に走り、
+			// 警告の時点ではCloseの失敗がまだ分からない。
+			if logFileHandle != nil {
+				defer closeLogFile(cmd, log, logFileHandle)
 			}
 
 			p := newBuildPipeline(config, log)
@@ -190,18 +195,23 @@ func newBuildCmd() *cobra.Command {
 	return cmd
 }
 
-// warnLogWriteError はログへの書き込みに失敗していれば標準エラー出力へ警告する。
+// closeLogFile はログファイルを閉じ、ログへの書き込みかCloseに失敗していれば
+// それぞれを標準エラー出力へ警告する。ログを書き終えた後に呼ぶ。
 //
 // why not: 警告の文言でログファイルの失敗と決めつけない。Errはログファイルと
 // 標準出力のうち最初に失敗した書き込みのエラーで、その文言が失敗したことを示す。
 //
-// why not: 書き込みの失敗でbuildコマンドの終了コードを変えない。ビルドの成否は
-// APKを作れたかどうかで決まっており、ログの障害で失敗の終了コードを返すと、
+// why not: 書き込みやCloseの失敗でbuildコマンドの終了コードを変えない。ビルドの
+// 成否はAPKを作れたかどうかで決まっており、ログの障害で失敗の終了コードを返すと、
 // 終了コードで成否を判定する呼び出し側（CI等）に、APKができているのに失敗と
 // 判定させてしまう。失敗したビルドの終了コードは元から失敗を示している。
-func warnLogWriteError(cmd *cobra.Command, log *logger.BuildLogger) {
+func closeLogFile(cmd *cobra.Command, log *logger.BuildLogger, file io.Closer) {
+	closeErr := file.Close()
 	if err := log.Err(); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "警告: %v\n", err) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	}
+	if closeErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "警告: ログファイルを閉じられませんでした: %v\n", closeErr) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 	}
 }
 

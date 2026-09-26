@@ -261,6 +261,144 @@ func TestBuildLogger_FileOutput(t *testing.T) {
 	})
 }
 
+func TestBuildLogger_MultiLineFileOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		logFunc     func(l *logger.BuildLogger, message string)
+		level       string
+		message     string
+		wantConsole string
+		wantLines   []string
+	}{
+		{
+			name:        "正常系: ERRORの各行に同じ接頭辞を付ける",
+			logFunc:     (*logger.BuildLogger).Error,
+			level:       "ERROR",
+			message:     "アセットの変換に失敗しました:\n  bg/a.png\n  fg/b.png",
+			wantConsole: "エラー: アセットの変換に失敗しました:\n  bg/a.png\n  fg/b.png\n",
+			wantLines:   []string{"アセットの変換に失敗しました:", "  bg/a.png", "  fg/b.png"},
+		},
+		{
+			name:        "正常系: WARNINGの各行に同じ接頭辞を付ける",
+			logFunc:     (*logger.BuildLogger).Warning,
+			level:       "WARNING",
+			message:     "1行目\n2行目",
+			wantConsole: "警告: 1行目\n2行目\n",
+			wantLines:   []string{"1行目", "2行目"},
+		},
+		{
+			name:        "正常系: INFOの各行に同じ接頭辞を付ける",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\n2行目",
+			wantConsole: "1行目\n2行目\n",
+			wantLines:   []string{"1行目", "2行目"},
+		},
+		{
+			name:        "正常系: CRLFを行区切りとして扱う",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\r\n2行目",
+			wantConsole: "1行目\r\n2行目\n",
+			wantLines:   []string{"1行目", "2行目"},
+		},
+		{
+			name:        "正常系: 末尾の改行で空のエントリを作らない",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\n2行目\n",
+			wantConsole: "1行目\n2行目\n\n",
+			wantLines:   []string{"1行目", "2行目"},
+		},
+		{
+			name:        "正常系: 末尾のCRLFで空のエントリを作らない",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\r\n",
+			wantConsole: "1行目\r\n\n",
+			wantLines:   []string{"1行目"},
+		},
+		{
+			name:        "正常系: 途中の空行は接頭辞付きの空行として残す",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\n\n3行目",
+			wantConsole: "1行目\n\n3行目\n",
+			wantLines:   []string{"1行目", "", "3行目"},
+		},
+		{
+			name:        "正常系: 末尾の改行は1つだけ行の終端として扱い、残りは空行として記録する",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\n\n",
+			wantConsole: "1行目\n\n\n",
+			wantLines:   []string{"1行目", ""},
+		},
+		{
+			name:        "正常系: 末尾のCRLFは1つだけ行の終端として扱い、残りは空行として記録する",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "1行目\r\n\r\n",
+			wantConsole: "1行目\r\n\r\n\n",
+			wantLines:   []string{"1行目", ""},
+		},
+		{
+			name:        "正常系: 改行の無い末尾の単独のCRも除く",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "abc\r",
+			wantConsole: "abc\r\n",
+			wantLines:   []string{"abc"},
+		},
+		{
+			name:        "正常系: 行末のCRは1つだけ除く",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "abc\r\r\n",
+			wantConsole: "abc\r\r\n\n",
+			wantLines:   []string{"abc\r"},
+		},
+		{
+			name:        "正常系: 空のメッセージも1行記録する",
+			logFunc:     (*logger.BuildLogger).Info,
+			level:       "INFO",
+			message:     "",
+			wantConsole: "\n",
+			wantLines:   []string{""},
+		},
+	}
+
+	prefixPattern := regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] [A-Z]+: `)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+			file := &bytes.Buffer{}
+			l := logger.New(logger.Normal, stdout, stderr, file)
+
+			tt.logFunc(l, tt.message)
+
+			assert.Equal(t, tt.wantConsole, stdout.String()+stderr.String())
+
+			require.True(t, strings.HasSuffix(file.String(), "\n"))
+			fileLines := strings.Split(strings.TrimSuffix(file.String(), "\n"), "\n")
+			require.Len(t, fileLines, len(tt.wantLines))
+
+			firstPrefix := prefixPattern.FindString(fileLines[0])
+			require.NotEmpty(t, firstPrefix)
+			assert.True(t, strings.HasSuffix(firstPrefix, "] "+tt.level+": "))
+			for i, line := range fileLines {
+				assert.Equal(t, firstPrefix+tt.wantLines[i], line, "全ての行に1回の呼び出しで同じ接頭辞を付ける")
+			}
+		})
+	}
+}
+
 func TestBuildLogger_LogConversion(t *testing.T) {
 	t.Parallel()
 

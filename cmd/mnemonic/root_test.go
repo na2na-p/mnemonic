@@ -588,6 +588,134 @@ func TestBuildCommand_LogFile_WriteError(t *testing.T) {
 	}
 }
 
+// recordingLogFile は書き込みとCloseの回数を記録するログファイルのテスト用実装。
+// Close後の書き込みはos.ErrClosedで失敗させ、Close後に書いたことを検出できるようにする。
+type recordingLogFile struct {
+	content  bytes.Buffer
+	closes   int
+	writeErr error
+	closeErr error
+}
+
+func (f *recordingLogFile) Write(p []byte) (int, error) {
+	if f.closes > 0 {
+		return 0, os.ErrClosed
+	}
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+
+	return f.content.Write(p)
+}
+
+func (f *recordingLogFile) Close() error {
+	f.closes++
+
+	return f.closeErr
+}
+
+// TestBuildCommand_LogFile_Close はログを書き終えてからログファイルを1回だけ閉じ、
+// Closeの失敗を終了コードを変えずに標準エラー出力へ警告することを検証する。
+// newBuildPipelineとopenLogFileを差し替えるためt.Parallel()を呼ばない。
+func TestBuildCommand_LogFile_Close(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	success := func() *stubBuildRunner {
+		return &stubBuildRunner{runResult: pipeline.Result{Success: true, OutputPath: &outputFile}}
+	}
+	buildFailure := func() *stubBuildRunner {
+		return &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"}}
+	}
+	validateFailure := func() *stubBuildRunner {
+		return &stubBuildRunner{validateErrs: []string{"入力ファイルが不正です"}}
+	}
+	closeWarning := "警告: ログファイルを閉じられませんでした: " + syscall.EIO.Error() + "\n"
+	writeWarning := "警告: ログの書き込みに失敗しました: " + syscall.ENOSPC.Error() + "\n"
+
+	tests := []struct {
+		name         string
+		stub         *stubBuildRunner
+		writeErr     error
+		closeErr     error
+		wantExitCode int
+		wantFile     string
+		wantStderr   string
+	}{
+		{
+			name:         "正常系: ビルド成功時は完了を記録してから閉じる",
+			stub:         success(),
+			wantExitCode: int(apperr.ExitSuccess),
+			wantFile:     "INFO: ビルド完了: " + outputFile,
+		},
+		{
+			name:         "正常系: ビルド失敗時は失敗を記録してから閉じる",
+			stub:         buildFailure(),
+			wantExitCode: int(apperr.ExitError),
+			wantFile:     "ERROR: Gradleビルドに失敗しました",
+		},
+		{
+			name:         "正常系: 入力検証の失敗を記録してから閉じる",
+			stub:         validateFailure(),
+			wantExitCode: int(apperr.ExitError),
+			wantFile:     "ERROR: 入力ファイルが不正です",
+		},
+		{
+			name:         "異常系: Closeに失敗してもビルド成功の終了コードのまま警告する",
+			stub:         success(),
+			closeErr:     syscall.EIO,
+			wantExitCode: int(apperr.ExitSuccess),
+			wantFile:     "INFO: ビルド完了: " + outputFile,
+			wantStderr:   closeWarning,
+		},
+		{
+			name:         "異常系: Closeに失敗してもビルド失敗の終了コードのまま警告する",
+			stub:         buildFailure(),
+			closeErr:     syscall.EIO,
+			wantExitCode: int(apperr.ExitError),
+			wantFile:     "ERROR: Gradleビルドに失敗しました",
+			wantStderr:   closeWarning,
+		},
+		{
+			name:         "異常系: 入力検証の失敗時もCloseの失敗を警告する",
+			stub:         validateFailure(),
+			closeErr:     syscall.EIO,
+			wantExitCode: int(apperr.ExitError),
+			wantFile:     "ERROR: 入力ファイルが不正です",
+			wantStderr:   closeWarning,
+		},
+		{
+			name:         "異常系: 書き込みとCloseの両方に失敗した場合はそれぞれ警告する",
+			stub:         success(),
+			writeErr:     syscall.ENOSPC,
+			closeErr:     syscall.EIO,
+			wantExitCode: int(apperr.ExitSuccess),
+			wantStderr:   writeWarning + closeWarning,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := &recordingLogFile{writeErr: tt.writeErr, closeErr: tt.closeErr}
+			withStubBuildPipeline(t, tt.stub)
+			withOpenLogFile(t, file)
+
+			result := invoke(t, []string{"build", inputFile, "-o", outputFile, "--log-file", filepath.Join(dir, "build.log")})
+
+			assert.Equal(t, tt.wantExitCode, result.exitCode)
+			assert.Equal(t, 1, file.closes, "ログファイルを1回だけ閉じる")
+			if tt.wantFile == "" {
+				assert.Empty(t, file.content.String())
+			} else {
+				assert.Contains(t, file.content.String(), tt.wantFile)
+			}
+			assert.Equal(t, tt.wantStderr, result.stderr)
+		})
+	}
+}
+
 // failingWriter は書き込みを常にsyscall.EPIPEで失敗させるio.Writerのテスト用実装。
 type failingWriter struct{}
 
