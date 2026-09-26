@@ -1,6 +1,7 @@
 package doctor_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -229,6 +230,84 @@ func TestDependencies_FluidSynthHasSoundfontPostCheck(t *testing.T) {
 	assert.False(t, ok)
 	assert.Contains(t, reason, "サウンドフォントが見つかりません")
 	assert.Contains(t, reason, "--soundfont")
+}
+
+// TestCheckDependency_AndroidSDKBuildTools は本番の「Android SDK」エントリが
+// sdkmanagerの有無だけでなく、署名フェーズで使うbuild-tools（zipalign /
+// apksigner）の有無まで検査することを検証する。
+//
+// why not: t.Parallel()を呼ばない。ANDROID_HOMEとPATHをt.Setenvで差し替えるため
+// 並列実行できず（t.Setenvは並列テストでpanicする）、同パッケージ内で
+// CheckAllDependenciesを呼ぶ並列テストとも環境変数を共有してしまう。
+// 非並列テストは並列テストの再開前に完走するため、これで直列化できる。
+func TestCheckDependency_AndroidSDKBuildTools(t *testing.T) {
+	dep := findDependency(t, "Android SDK")
+
+	require.NotNil(t, dep.PostCheck)
+
+	tests := []struct {
+		name            string
+		buildTools      []string // build-tools/34.0.0/ に置くツール。nilならbuild-toolsディレクトリ自体を作らない
+		wantFound       bool
+		wantMessagePart string
+	}{
+		{
+			name:       "正常系: zipalignとapksignerが揃っていればOK",
+			buildTools: []string{"zipalign", "apksigner"},
+			wantFound:  true,
+		},
+		{
+			name:            "異常系: apksignerが無ければNGで理由にapksignerを含む",
+			buildTools:      []string{"zipalign"},
+			wantFound:       false,
+			wantMessagePart: "apksigner",
+		},
+		{
+			name:            "異常系: build-toolsディレクトリが無ければNGで理由にzipalignを含む",
+			buildTools:      nil,
+			wantFound:       false,
+			wantMessagePart: "zipalign",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			androidHome := t.TempDir()
+			if tt.buildTools != nil {
+				versionDir := filepath.Join(androidHome, "build-tools", "34.0.0")
+				require.NoError(t, os.MkdirAll(versionDir, 0o750))
+
+				for _, tool := range tt.buildTools {
+					writeFakeExecutable(t, versionDir, tool)
+				}
+			}
+
+			binDir := t.TempDir()
+			writeFakeExecutable(t, binDir, dep.Command)
+
+			t.Setenv("ANDROID_HOME", androidHome)
+			t.Setenv("PATH", binDir)
+
+			result := doctor.CheckDependency(dep)
+
+			assert.Equal(t, tt.wantFound, result.Found)
+
+			if tt.wantFound {
+				assert.Empty(t, result.Message)
+			} else {
+				assert.Contains(t, result.Message, tt.wantMessagePart)
+			}
+		})
+	}
+}
+
+// writeFakeExecutable はdir配下にバージョンを出力して正常終了するだけの
+// フェイク実行ファイルnameを作成する。
+func writeFakeExecutable(t *testing.T, dir, name string) {
+	t.Helper()
+
+	script := []byte("#!/bin/sh\necho '" + name + " 1.0.0'\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), script, 0o700)) //nolint:gosec // テスト用フェイク実行ファイルのため妥当
 }
 
 func TestDependencies_AllHaveVersionFlag(t *testing.T) {
