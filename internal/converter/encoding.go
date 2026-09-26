@@ -164,17 +164,13 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		confidence  float64
 	)
 
-	// why not: DetectBestは使わない。chardetは各判定器をgoroutineで並行に走らせ、
-	// 到着順に集めた結果を安定でないsort.Sortで並べるため、同じ信頼度の候補の
-	// どれが先頭になるかは実行ごとに変わる。短いテキストでは多バイト系判定器が
-	// 揃って「不正な並びは無いが判断材料も無い」ことを示す信頼度10を返しやすく、
-	// 同じShift_JISの"ｾｰﾌﾞ"を300回判定するとgb-18030/big5/euc-jp/euc-krに
-	// 178/41/41/40回と割れた。変換元エンコーディングの決定がこの抽選に左右され
-	// ないよう、全候補から compareDetectionCandidates の全順序で先頭を選ぶ。
-	if results, err := chardet.NewTextDetector().DetectAll(data); err == nil && len(results) > 0 {
-		best := slices.MinFunc(results, compareDetectionCandidates)
-		rawEncoding = best.Charset
-		confidence = float64(best.Confidence) / 100.0
+	// why not: DetectBestは同じ信頼度の候補から実行ごとに異なる候補を返すため使わない
+	// （理由はcharset.Detectを参照）。信頼度も要るため、全候補からcharset.BestResultで選ぶ。
+	if results, err := chardet.NewTextDetector().DetectAll(data); err == nil {
+		if best, ok := charset.BestResult(results); ok {
+			rawEncoding = best.Charset
+			confidence = float64(best.Confidence) / 100.0
+		}
 	}
 
 	normalized := ""
@@ -187,28 +183,6 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		Confidence:  confidence,
 		IsSupported: isSupportedEncoding(rawEncoding),
 	}
-}
-
-// chardetTieBreakOrder は同じ信頼度の多バイト系候補を並べる順序で、chardetが判定器を
-// 登録している順序（detector.goのrecognizers）に合わせる。
-var chardetTieBreakOrder = []string{"Shift_JIS", "GB-18030", "EUC-JP", "EUC-KR", "Big5"}
-
-// compareDetectionCandidates はchardetの候補を信頼度の降順、同じ信頼度なら
-// chardetTieBreakOrderの順、それ以外は名前の昇順に並べる全順序。
-func compareDetectionCandidates(a, b chardet.Result) int {
-	return cmp.Or(
-		cmp.Compare(b.Confidence, a.Confidence),
-		cmp.Compare(tieBreakRank(a.Charset), tieBreakRank(b.Charset)),
-		strings.Compare(a.Charset, b.Charset),
-	)
-}
-
-func tieBreakRank(charsetName string) int {
-	if i := slices.Index(chardetTieBreakOrder, charsetName); i >= 0 {
-		return i
-	}
-
-	return len(chardetTieBreakOrder)
 }
 
 // IsTextFile はfilePathがテキストファイルかどうかを判定する。
