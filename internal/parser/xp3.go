@@ -33,7 +33,8 @@ var (
 // 実アーカイブの索引は数MBが上限で、64MiBなら細工されたzlibによる膨張だけを弾ける。
 const maxFileTableSize = 64 << 20
 
-// maxSegmentDecompressedSize はセグメントの解凍後サイズの絶対的な上限。
+// maxSegmentDecompressedSize はセグメントの解凍後サイズの絶対的な上限。ExtractAllは
+// エントリ全体の解凍後サイズの合計の上限としても同じ値を使う（entryBudget参照）。
 //
 // why not: セグメントの宣言サイズ（OriginalSize）はアーカイブ自身の値なので、
 // 上限として信用しきれない。1GiBなら実素材（動画もzlib圧縮されることはまずない）を
@@ -539,7 +540,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 // どれほど巨大でも実データ長を超えて処理することはない。ただしこれは
 // 「セグメントレコードのパース時」に確保する[]XP3Segmentのメモリ量に関する
 // 主張に過ぎず、展開時に同一オフセットを指す大量のセグメントを積み重ねる
-// 攻撃までは防げない（そちらの対策はextractEntryのbudgetに関するwhy not参照）。
+// 攻撃までは防げない（そちらの対策はextractEntryのwhy not参照）。
 func parseSegments(segmData []byte) []XP3Segment {
 	const segmentRecordSize = 28
 
@@ -665,7 +666,7 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := extractEntry(f, entry, outputPath); err != nil {
+		if err := extractEntry(f, entry, outputPath, maxSegmentDecompressedSize); err != nil {
 			return fmt.Errorf("%s: %s: %w", a.archivePath, entry.Name, err)
 		}
 	}
@@ -674,7 +675,9 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 }
 
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
-// outputPathへ書き出す。
+// outputPathへ書き出す。inflatedLimitはエントリ全体で解凍により生み出せる
+// バイト数の上限であり、超えた場合はErrInvalidXP3を返す。失敗した場合は
+// 書き出し途中のファイルを残さない。
 //
 // why not: 個々のセグメントはreadSegment内でfileSizeによりオフセット以降の
 // 実際の残量へクランプされるが、それだけでは「同一オフセットを指す大量の
@@ -682,9 +685,13 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 // 読めてしまうため、セグメント数×fileSizeでアロケーション総量が膨れ上がる。
 // 52KBの細工アーカイブ・同一オフセットのセグメント20,000件で5.1GB RSSに
 // 達することを確認済み）。正当なアーカイブでは各バイトは高々1つのセグメントに
-// しか属さないため、エントリ全体で読み取れる生バイト数の総量をbudgetとして
-// fileSizeを上限に管理し、セグメントをまたいで消費させる。
-func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error {
+// しか属さないため、エントリ全体で読み取れる生バイト数の総量をfileSizeを上限に
+// entryBudgetで管理し、セグメントをまたいで消費させる。
+//
+// why not: 全セグメントを連結してから一度に書き出すと、エントリ全体を
+// メモリに保持することになる。セグメントごとに書き出せば、参照し続けるのは
+// 処理中の1セグメント分の生バイトと解凍結果だけで済む。
+func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string, inflatedLimit int64) (err error) {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
@@ -694,23 +701,51 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 		return err
 	}
 
-	budget := fileSize
+	out, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600) //nolint:gosec // outputPathは呼び出し元がsafepath.Joinで出力ディレクトリ配下に制限済み
+	if err != nil {
+		return fmt.Errorf("ファイルの書き込みに失敗しました: %w", err)
+	}
+	defer func() {
+		if closeErr := out.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("ファイルの書き込みに失敗しました: %w", closeErr)
+		}
+		if err != nil {
+			_ = os.Remove(outputPath)
+		}
+	}()
 
-	var data []byte
+	budget := entryBudget{raw: fileSize, inflated: inflatedLimit, inflatedLimit: inflatedLimit}
 	for _, segment := range entry.Segments {
-		segmentData, consumed, err := readSegment(f, segment, fileSize, budget)
+		segmentData, err := readSegment(f, segment, fileSize, &budget)
 		if err != nil {
 			return err
 		}
-		budget -= consumed
-		data = append(data, segmentData...)
-	}
-
-	if err := os.WriteFile(outputPath, data, 0o600); err != nil {
-		return fmt.Errorf("ファイルの書き込みに失敗しました: %w", err)
+		if _, err := out.Write(segmentData); err != nil {
+			return fmt.Errorf("ファイルの書き込みに失敗しました: %w", err)
+		}
 	}
 
 	return nil
+}
+
+// entryBudget はエントリ1件の展開で消費できる残量を表す。rawはファイルから
+// 読み取れる生バイト数の残り、inflatedは解凍により生み出せるバイト数の残り、
+// inflatedLimitはinflatedの初期値（エラーメッセージ用）。
+//
+// why not: セグメントごとの解凍上限（segmentDecompressionLimit）は1セグメント
+// しか縛らず、各セグメントが自身の上限内に収まっていても合計はセグメント数に
+// 応じて上限を超えうる。rawも解凍前のバイト数しか縛らず、zlibは最大圧縮で
+// 約1030:1まで膨張しうるため（16MiBのゼロ列をBestCompressionで圧縮して実測）、
+// 解凍後の合計はfileSizeのおよそ1000倍まで届く。そこで解凍により生み出した
+// バイト数をエントリ全体で数える。上限はセグメント単体と同じ1GiBとし、
+// zlib圧縮で格納された1ファイルが解凍後に1GiBを超えることはまず無いという
+// 判断に基づく。
+// 非圧縮で格納された生バイトはrawにより1:1でfileSize以内に縛られており膨張に
+// 当たらないため、inflatedには数えない（非圧縮の大きな動画素材を締め出さない）。
+type entryBudget struct {
+	raw           int64
+	inflated      int64
+	inflatedLimit int64
 }
 
 // streamSize はfの総バイト数を返す。
@@ -719,9 +754,9 @@ func extractEntry(f io.ReadSeeker, entry XP3FileEntry, outputPath string) error 
 // safeInt64の範囲チェックを通過していても実ファイルサイズを大幅に超える
 // 値になりうる（int64範囲内の巨大値の宣言は防げない）。事前にファイル全体の
 // サイズを取得しておき、readSegmentでオフセット以降の実際の残量・エントリ
-// 全体のbudgetにSizeをクランプすることで、巨大なSize宣言や大量セグメントの
-// 積み重ねによるmake([]byte, size)でのOOMを防ぐ（詳細はextractEntry・
-// readSegmentのwhy not参照）。
+// 全体の生バイトの残量（entryBudget.raw）にSizeをクランプすることで、巨大な
+// Size宣言や大量セグメントの積み重ねによるmake([]byte, size)でのOOMを防ぐ
+// （詳細はextractEntry・readSegmentのwhy not参照）。
 func streamSize(f io.ReadSeeker) (int64, error) {
 	size, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -732,41 +767,46 @@ func streamSize(f io.ReadSeeker) (int64, error) {
 }
 
 // readSegment は1セグメント分のデータを読み取り、圧縮されていれば解凍する。
-// 戻り値のconsumedは実際にファイルから読み取った生バイト数（解凍前）であり、
-// 呼び出し元はこれをbudgetから差し引いてエントリ全体の累積読み取り量を管理する
-// （budgetの必要性はextractEntryのwhy not参照）。
+// 実際にファイルから読み取った生バイト数（解凍前）をbudget.rawから、解凍で
+// 生み出したバイト数をbudget.inflatedから差し引き、エントリ全体の累積量を
+// 管理する（budgetの必要性はextractEntryとentryBudgetのwhy not参照）。
 //
 // fileSizeでセグメントのSize宣言値をクランプする理由はstreamSizeのwhy not参照。
 // readSizeはsegment.Size（safeInt64通過済みで非負）とremaining（fileSize由来で
 // 非負にクランプ済み）の小さい方であり常に非負のため、負値ガードは不要。
-func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([]byte, int64, error) {
+func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *entryBudget) ([]byte, error) {
 	if _, err := f.Seek(segment.Offset, io.SeekStart); err != nil {
-		return nil, 0, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
+		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
 	}
 
-	remaining := min(max(fileSize-segment.Offset, 0), budget)
+	remaining := min(max(fileSize-segment.Offset, 0), budget.raw)
 
 	readSize := min(segment.Size, remaining)
 
 	buf := make([]byte, readSize)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, 0, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
+		return nil, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
 	}
 	buf = buf[:n]
-	consumed := int64(n)
+	budget.raw -= int64(n)
 
 	if segment.IsCompressed && segment.Size != segment.OriginalSize {
-		decompressed, err := decompressZlib(buf, segmentDecompressionLimit(segment))
+		segmentLimit := segmentDecompressionLimit(segment)
+		decompressed, err := decompressZlib(buf, min(segmentLimit, budget.inflated))
 		if errors.Is(err, ErrDecompressedTooLarge) {
-			return nil, 0, fmt.Errorf("%w: セグメント: %w", ErrInvalidXP3, err)
+			if budget.inflated < segmentLimit {
+				return nil, fmt.Errorf("%w: エントリの解凍後サイズの合計が上限%dバイトを超えています: %w", ErrInvalidXP3, budget.inflatedLimit, ErrDecompressedTooLarge)
+			}
+			return nil, fmt.Errorf("%w: セグメント: %w", ErrInvalidXP3, err)
 		}
 		if err == nil {
+			budget.inflated -= int64(len(decompressed))
 			buf = decompressed
 		}
 	}
 
-	return buf, consumed, nil
+	return buf, nil
 }
 
 // segmentDecompressionLimit はsegmentの解凍後サイズの上限を返す。
