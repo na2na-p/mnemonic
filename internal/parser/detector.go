@@ -12,6 +12,8 @@ import (
 
 	"github.com/saintfish/chardet"
 	"golang.org/x/text/encoding/japanese"
+
+	"github.com/na2na-p/mnemonic/internal/charset"
 )
 
 // センチネルエラー群。
@@ -212,46 +214,12 @@ func (d *GameDetector) detectScriptEncoding(scripts []string) string {
 			continue
 		}
 
-		if charset, ok := detectCharset(detector, rawData); ok {
-			return charset
+		if name, ok := charset.Detect(detector, rawData); ok {
+			return name
 		}
 	}
 
 	return ""
-}
-
-// detectCharset はrawDataの文字コードを推定し、共通の語彙に正規化して返す。
-//
-// why not: github.com/saintfish/chardet には専用のASCII判定器がなく、
-// 純ASCIIバイト列に対しても単バイト系のフォールバック候補
-// （例: "ISO-8859-1"、低信頼度）を返す。ゲーム構成検出結果に含まれる
-// 文字コード名は再エンコード判定に使われるため、この
-// 判定差はユーザー可視の挙動差になる。そのため、まずGo側で純ASCIIかを
-// 判定し、"ascii"を返してchardetの推定より優先する。
-func detectCharset(detector *chardet.Detector, rawData []byte) (string, bool) {
-	if isASCII(rawData) {
-		return "ascii", true
-	}
-
-	result, err := detector.DetectBest(rawData)
-	if err != nil || result == nil || result.Charset == "" {
-		return "", false
-	}
-
-	return strings.ToLower(result.Charset), true
-}
-
-// isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
-func isASCII(data []byte) bool {
-	for _, b := range data {
-		// ISO-2022-JPは7ビットのみで構成されるため、ESC(0x1B)を含む入力を
-		// ASCIIと即断するとchardetの正しいISO-2022-JP判定を潰してしまう。
-		if b >= 0x80 || b == 0x1b {
-			return false
-		}
-	}
-
-	return true
 }
 
 // detectTitle はConfig.tjsからゲームタイトルを取得する。

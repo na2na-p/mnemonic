@@ -117,7 +117,7 @@ func TestEncodingDetector_DetectBytes(t *testing.T) {
 
 		// why: github.com/saintfish/chardetは専用のASCII判定器を持たず、純ASCII
 		// バイト列に対しても"ISO-8859-1"等の低信頼度フォールバックを返すことが
-		// あるため、isASCII短絡が効いていることをピン留めする。
+		// あるため、charset.IsASCIIによる短絡が効いていることをピン留めする。
 		result := detector.DetectBytes([]byte("key=value\nname=example\n"))
 
 		assert.Equal(t, "utf-8", result.Encoding)
@@ -593,7 +593,7 @@ func TestEncodingConverter_KirikiriScriptBOM(t *testing.T) {
 		source := filepath.Join(dir, "source.asd")
 		dest := filepath.Join(dir, "dest.asd")
 		// why: .asdアニメーションファイルはASCIIのみの内容が一般的だが、Shift_JISとして
-		// 誤解釈されるのを防ぐためBOMが必要（isASCII短絡でsourceEncoding自動検出時に
+		// 誤解釈されるのを防ぐためBOMが必要（charset.IsASCIIの短絡でsourceEncoding自動検出時に
 		// "utf-8"判定されるケースでもBOM付与ルールが正しく効くことを確認する）。
 		asciiContent := []byte("*start\r\n@wait time=150\r\n@clip left=445 top=0")
 		require.NoError(t, os.WriteFile(source, asciiContent, 0o600))

@@ -228,6 +228,7 @@ func TestXP3Archive_ExtractAll_ZipSlipGuard(t *testing.T) {
 
 			if tc.rejected {
 				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.ErrorContains(t, err, "展開先が出力ディレクトリの外を指しています: "+tc.entryName)
 				return
 			}
 

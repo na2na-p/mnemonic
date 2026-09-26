@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/saintfish/chardet"
+
+	"github.com/na2na-p/mnemonic/internal/charset"
 )
 
 // FileStats はファイル統計を表す値。
@@ -158,44 +160,12 @@ func detectEncoding(path string, extensions []string) string {
 			return nil
 		}
 
-		if charset, ok := detectCharset(detector, data); ok {
-			encoding = charset
+		if name, ok := charset.Detect(detector, data); ok {
+			encoding = name
 		}
 
 		return nil
 	})
 
 	return encoding
-}
-
-// detectCharset はdataの文字コードを推定し、共通の語彙に正規化して返す。
-//
-// why not: github.com/saintfish/chardetには専用のASCII判定器がなく、純ASCII
-// バイト列に対しても単バイト系のフォールバック候補（低信頼度）を返すことが
-// ある。internal/parser/detector.goのdetectCharsetと同じ理由でここでも
-// ASCII判定を先に行う。
-func detectCharset(detector *chardet.Detector, data []byte) (string, bool) {
-	if isASCII(data) {
-		return "ascii", true
-	}
-
-	result, err := detector.DetectBest(data)
-	if err != nil || result == nil || result.Charset == "" {
-		return "", false
-	}
-
-	return strings.ToLower(result.Charset), true
-}
-
-// isASCII はdataが7ビットASCII（0x00〜0x7F）のみで構成されているかを判定する。
-// ESC(0x1B)はISO-2022-JP等7bitエンコーディングの制御文字であるため除外する
-// （internal/parser/detector.goのisASCIIと同じ理由）。
-func isASCII(data []byte) bool {
-	for _, b := range data {
-		if b >= 0x80 || b == 0x1b {
-			return false
-		}
-	}
-
-	return true
 }

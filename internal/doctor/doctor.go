@@ -2,7 +2,6 @@
 package doctor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/na2na-p/mnemonic/internal/cmdrun"
 	"github.com/na2na-p/mnemonic/internal/converter"
 )
 
@@ -105,19 +105,11 @@ func CheckDependency(info DependencyInfo) CheckResult {
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, info.Command, info.VersionFlag) //nolint:gosec // doctorコマンドで固定の依存ツール一覧を検査する用途のため妥当
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	res, err := cmdrun.Run(ctx, cmdrun.Options{}, info.Command, info.VersionFlag)
 
 	switch {
-	case err == nil:
-		output := stdout.String() + stderr.String()
-
-		return foundResult(info, ExtractVersion(output))
+	case err == nil && res.ExitCode == 0:
+		return foundResult(info, ExtractVersion(res.Stdout+res.Stderr))
 	case ctx.Err() != nil:
 		return notFoundResult(info, "コマンド '"+info.Command+"' がタイムアウトしました")
 	default:
@@ -129,9 +121,7 @@ func CheckDependency(info DependencyInfo) CheckResult {
 		// 非ゼロ終了コード（例: javaは-versionの出力を標準エラーへ書きつつ
 		// 正常終了コード以外を返すことがある）でもバージョン情報自体は
 		// 取得できている場合があるため、foundとして扱いバージョン抽出を試みる。
-		output := stdout.String() + stderr.String()
-
-		return foundResult(info, ExtractVersion(output))
+		return foundResult(info, ExtractVersion(res.Stdout+res.Stderr))
 	}
 }
 

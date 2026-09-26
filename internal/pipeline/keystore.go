@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/na2na-p/mnemonic/internal/cache"
+	"github.com/na2na-p/mnemonic/internal/cmdrun"
 )
 
 // debugKeystoreTimeout はkeytoolコマンドのタイムアウト。
@@ -69,14 +69,14 @@ func validateDebugKeystoreFile(path string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), debugKeystoreTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "keytool", //nolint:gosec // 固定の引数列でkeytoolを呼び出す用途のため妥当
+	res, err := cmdrun.Run(ctx, cmdrun.Options{}, "keytool",
 		"-list",
 		"-keystore", path,
 		"-storepass", "android",
 		"-alias", "debug",
 	)
 
-	return cmd.Run() == nil
+	return err == nil && res.ExitCode == 0
 }
 
 // generateDebugKeystoreFile はkeytoolコマンドを使用してdestPathにデバッグ用の自己署名キーストアを生成する。
@@ -91,7 +91,7 @@ func generateDebugKeystoreFile(destPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), debugKeystoreTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "keytool", //nolint:gosec // 固定の引数列でkeytoolを呼び出す用途のため妥当
+	res, err := cmdrun.Run(ctx, cmdrun.Options{}, "keytool",
 		"-genkeypair", "-v",
 		"-keystore", destPath,
 		"-storepass", "android",
@@ -103,10 +103,7 @@ func generateDebugKeystoreFile(destPath string) error {
 		"-dname", "CN=Debug,OU=Debug,O=Debug,L=Debug,ST=Debug,C=US",
 	)
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
+	if err != nil || res.ExitCode != 0 {
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
 			return errors.New("keytoolコマンドが見つかりません。JDKをインストールしてください")
@@ -115,7 +112,7 @@ func generateDebugKeystoreFile(destPath string) error {
 			return errors.New("keytoolコマンドがタイムアウトしました")
 		}
 
-		return fmt.Errorf("keytoolの実行に失敗しました: %s", stderr.String())
+		return fmt.Errorf("keytoolの実行に失敗しました: %s", res.Stderr)
 	}
 
 	return nil
