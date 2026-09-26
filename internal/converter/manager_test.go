@@ -502,6 +502,48 @@ func TestConversionManager_Retry(t *testing.T) {
 			assert.True(t, summary.Results[0].Permanent)
 		})
 	}
+
+	t.Run("正常系: スキップ結果はリトライせず変換結果をそのまま返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		writeFile(t, source, []byte("content"))
+		dest := filepath.Join(dir, "dest.txt")
+
+		conv := newMockConverter(".txt")
+		conv.convertFunc = func(source, _ string, _ int) (converter.ConversionResult, error) {
+			return converter.ConversionResult{
+				SourcePath: source,
+				Status:     converter.StatusSkipped,
+				Message:    "変換不要のためスキップ",
+			}, nil
+		}
+
+		rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+
+		var (
+			mu         sync.Mutex
+			sleepCount int
+		)
+		m.SleepFunc = func(time.Duration) {
+			mu.Lock()
+			sleepCount++
+			mu.Unlock()
+		}
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: dest}})
+
+		assert.Equal(t, 1, conv.CallCount())
+		mu.Lock()
+		assert.Zero(t, sleepCount)
+		mu.Unlock()
+		assert.Equal(t, 1, summary.Skipped)
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, converter.StatusSkipped, summary.Results[0].Status)
+		assert.Equal(t, "変換不要のためスキップ", summary.Results[0].Message)
+	})
 }
 
 func TestConversionManager_ConvertDirectory(t *testing.T) {

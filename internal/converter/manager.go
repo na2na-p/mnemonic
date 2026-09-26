@@ -240,7 +240,7 @@ func (m *ConversionManager) convertWithRetry(source, dest string) ConversionResu
 			lastErr = err
 			lastResult = ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}
 			hasLastResult = true
-		case result.Status == StatusSuccess:
+		case result.Status == StatusSuccess, result.Status == StatusSkipped:
 			return result
 		default:
 			lastResult = result
