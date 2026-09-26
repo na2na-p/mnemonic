@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
 // stubExecutePhase を差し込み、実際のフェーズ処理をスキップしてRun()の
@@ -199,6 +201,7 @@ func TestBuildPipeline_SanitizeName(t *testing.T) {
 		{name: "正常系: 数字始まりにプレフィックス追加", input: "123game", want: "_123game"},
 		{name: "正常系: 特殊文字を削除", input: "game!@#$%", want: "game"},
 		{name: "正常系: スペースと数字の組み合わせ", input: "My Game 2", want: "my_game_2"},
+		{name: "正常系: 全角文字のみは空文字列になる", input: "全角だけの題名", want: ""},
 	}
 
 	dir := t.TempDir()
@@ -223,6 +226,55 @@ func newTestPipeline(t *testing.T) *BuildPipeline {
 	require.NoError(t, os.WriteFile(input, make([]byte, 100), 0o600))
 
 	return NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+}
+
+func TestBuildPipeline_ExecuteBuild_ErrorsWhenPackageNameUndeterminable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		title       string
+		packageName string
+		wantErr     bool
+	}{
+		{name: "異常系: タイトルが全角のみでパッケージ名未指定ならエラーを返す", title: "全角だけの題名", packageName: "", wantErr: true},
+		{name: "異常系: タイトルが空でファイル名も全角のみならエラーを返す", title: "", packageName: "", wantErr: true},
+		{name: "正常系: パッケージ名を指定すればタイトルが全角のみでもエラーにしない", title: "全角だけの題名", packageName: "com.example.x", wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newTestPipeline(t)
+			input := filepath.Join(t.TempDir(), "ゲーム.exe")
+			require.NoError(t, os.WriteFile(input, make([]byte, 100), 0o600))
+			p.config.InputPath = input
+			p.config.PackageName = tt.packageName
+			p.config.TemplateOffline = true
+			// ホストのテンプレートキャッシュの有無に左右されず、パッケージ名の判定より
+			// 先へ進んだ場合は必ずテンプレート未取得で失敗させる。
+			p.config.TemplateVersion = new("v0.0.0-mnemonic-test-nonexistent")
+			t.Cleanup(p.cleanupTempDirs)
+
+			a := buildArtifacts{
+				convertDir:    t.TempDir(),
+				gameStructure: &parser.GameStructure{Title: tt.title},
+			}
+
+			_, err := p.executeBuild(a)
+
+			require.Error(t, err)
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrPackageNameUndeterminable)
+
+				return
+			}
+
+			require.NotErrorIs(t, err, ErrPackageNameUndeterminable)
+			assert.ErrorContains(t, err, "テンプレートが利用できません")
+		})
+	}
 }
 
 func TestBuildPipeline_FindGameIcon_ReturnsEmptyWhenExtractDirIsUnset(t *testing.T) {

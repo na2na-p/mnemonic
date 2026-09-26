@@ -19,6 +19,11 @@ import (
 // 期待される場所にAPKファイルが生成されなかった場合のエラー。
 var ErrGradleAPKMissing = errors.New("Gradleビルド後にAPKファイルが見つかりません")
 
+// ErrPackageNameUndeterminable は--package-name が未指定で、パッケージ名の元になる
+// 名前（ゲームタイトル。タイトルが空なら入力ファイル名）にパッケージ名へ使える
+// 文字が無い場合のエラー。
+var ErrPackageNameUndeterminable = errors.New("ゲームタイトルまたは入力ファイル名からパッケージ名を決定できません。--package-name で指定してください")
+
 // executeAnalyze はANALYZEフェーズを実行する: 入力ファイルの形式を確認し、
 // 必要に応じて暗号化チェックを行う。
 func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error) {
@@ -213,6 +218,27 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 		return a, errors.New("変換フェーズが完了していません")
 	}
 
+	baseName := strings.TrimSuffix(filepath.Base(b.config.InputPath), filepath.Ext(b.config.InputPath))
+	if a.gameStructure != nil && a.gameStructure.Title != "" {
+		baseName = a.gameStructure.Title
+	}
+
+	packageName := b.config.PackageName
+	if packageName == "" {
+		sanitized := b.sanitizeName(baseName)
+		// why not: 固定の代替名（例: game）で補うと、無関係なゲーム同士が同じ
+		// パッケージ名になり端末上で互いを上書きしてしまうため、利用者に指定させる。
+		if sanitized == "" {
+			return a, fmt.Errorf("%w: 名前 %q", ErrPackageNameUndeterminable, baseName)
+		}
+		packageName = "com.krkr." + sanitized
+	}
+
+	appName := b.config.AppName
+	if appName == "" {
+		appName = baseName
+	}
+
 	projectDir, err := b.newTempDir("mnemonic_project_")
 	if err != nil {
 		return a, err
@@ -226,21 +252,6 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 
 	if err := extractTemplateZip(templatePath, projectDir); err != nil {
 		return a, err
-	}
-
-	baseName := strings.TrimSuffix(filepath.Base(b.config.InputPath), filepath.Ext(b.config.InputPath))
-	if a.gameStructure != nil && a.gameStructure.Title != "" {
-		baseName = a.gameStructure.Title
-	}
-
-	packageName := b.config.PackageName
-	if packageName == "" {
-		packageName = "com.krkr." + b.sanitizeName(baseName)
-	}
-
-	appName := b.config.AppName
-	if appName == "" {
-		appName = baseName
 	}
 
 	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
