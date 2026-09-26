@@ -11,6 +11,7 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
@@ -53,6 +54,11 @@ type BuildPipeline struct {
 	// Config.CleanCacheのテストが開発者の実キャッシュを消さないよう差し替え可能に
 	// する（executePhaseと同じ設計方針）。
 	cacheDir func() (string, error)
+
+	// freeSpace はパスを含むファイルシステムの空き容量の取得関数。既定値は
+	// fsutil.FreeSpace。展開前の容量確認を実際の空き容量に依存せずテストするため
+	// 差し替え可能にする（executePhaseと同じ設計方針）。
+	freeSpace func(path string) (uint64, error)
 
 	logger Logger
 }
@@ -98,6 +104,7 @@ func NewBuildPipeline(config Config) *BuildPipeline {
 	b.keystoreValid = validateDebugKeystoreFile
 	b.keystoreGenerate = generateDebugKeystoreFile
 	b.cacheDir = cache.Dir
+	b.freeSpace = fsutil.FreeSpace
 
 	return b
 }
