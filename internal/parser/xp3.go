@@ -119,6 +119,7 @@ type XP3FileEntry struct {
 // 内包されているファイルの一覧取得や展開を行う。
 type XP3Archive struct {
 	archivePath string
+	fileSize    int64
 	fileEntries []XP3FileEntry
 	isEncrypted bool
 }
@@ -222,6 +223,7 @@ func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) error {
 	if err != nil {
 		return fmt.Errorf("%w: %w: %s", ErrInvalidXP3, err, a.archivePath)
 	}
+	a.fileSize = fileSize
 	if indexOffset > fileSize {
 		return a.invalidIndexError("インデックスオフセットがファイル末尾を超えています")
 	}
@@ -674,6 +676,111 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 	return nil
 }
 
+// PlannedOutputSize はExtractAllが書き出しうるバイト数の上限を、索引だけから
+// 求めて返す。合計がint64を超える場合はmath.MaxInt64を返す。
+//
+// why not: アーカイブサイズに対する比率では上限を決めない。krkrrel
+// （krdevui RelSettingsUnit.cpp）は内容が同一のファイルを格納し直さず、先に
+// 格納したファイルのセグメント情報を複写した索引エントリを追加する。krkrzの
+// tTVPXP3Archive（base/XP3Archive.cpp）もOggVorbisのコードブック共有のために
+// セグメントがアーカイブ内の範囲を共有しうる前提で読む。そのため正当な
+// アーカイブでもエントリサイズの合計はアーカイブサイズの何倍にもなりうる。
+func (a *XP3Archive) PlannedOutputSize() int64 {
+	return plannedOutputSize(a.fileEntries, a.fileSize)
+}
+
+// plannedOutputSize はentriesをExtractAllで展開したときに書き出しうる
+// バイト数の上限を返す。エントリごとの上限はentryOutputLimitによる。
+//
+// why not: 同じ出力パスを持つエントリの上書きや、共有するバイト範囲の重複を
+// 差し引かない。上限は展開の実際の書き出し量を下回ってはならず、重複を
+// 数えすぎる方向の誤差しか許されないため。
+func plannedOutputSize(entries []XP3FileEntry, fileSize int64) int64 {
+	var total int64
+	for _, entry := range entries {
+		total = saturatingAdd(total, entryOutputLimit(entry, fileSize, maxSegmentDecompressedSize))
+	}
+
+	return total
+}
+
+// entryOutputLimit はextractEntryがentryについて書き出しうるバイト数の上限を
+// 返す。セグメントごとの上限の合計を、entryBudgetが許す生バイト（fileSize）と
+// 解凍後バイト（inflatedLimit）の和で頭打ちにする。
+func entryOutputLimit(entry XP3FileEntry, fileSize, inflatedLimit int64) int64 {
+	var total int64
+	for _, segment := range entry.Segments {
+		total = saturatingAdd(total, segmentOutputLimit(segment, fileSize))
+	}
+
+	return min(total, saturatingAdd(fileSize, inflatedLimit))
+}
+
+// maxDeflateRatio はdeflateが入力1バイトあたりに生み出せる出力バイト数の上限。
+//
+// RFC 1951では1組の長さ・距離が出力できるのは最大258バイトで、その符号は
+// 少なくとも2ビットを要する。リテラル/長さの符号表には長さ符号のほかに
+// ブロック終端（256）が必ず含まれるため長さ符号は1ビット以上になり、距離符号も
+// 1つしか使わない場合でも1ビットで符号化される（3.2.7節）。よって入力1バイト
+// （8ビット）からの出力は258×4=1032バイト以下になる。zlibのヘッダー・
+// adler32・非圧縮ブロックは入力を増やすだけで、この上限を超えさせない。
+//
+// why not: 展開側（readSegment・entryBudget）の上限と共有しない。これは
+// 方針として選んだ値ではなく形式から決まる物理的な上限であり、展開時には
+// 実際に解凍した量を数えられるため必要ない。見積もりだけが、解凍せずに
+// 解凍後サイズを抑えるためにこの上限を使う。
+const maxDeflateRatio = 1032
+
+// segmentOutputLimit はreadSegmentがsegmentについて返しうるバイト数の上限を返す。
+//
+// why not: 解凍するセグメントでも解凍後サイズの上限だけを見積もりにしない。
+// zlibとして解凍できないセグメントは、readSegmentが読み取った生データを
+// そのまま返すため、生データの方が長ければそちらが書き出される。
+//
+// why not: 解凍後サイズの上限をsegmentDecompressionLimitのままにしない。
+// krkrrelは空のファイルも圧縮して格納し（格納サイズ8バイト・解凍後サイズ0）、
+// 解凍後サイズ0は64MiBへフォールバックするため、空のファイル1件ごとに64MiBを
+// 見積もってしまう。生データのmaxDeflateRatio倍を超えて膨張することはないため、
+// そちらでも抑える。
+func segmentOutputLimit(segment XP3Segment, fileSize int64) int64 {
+	raw := segmentReadLimit(segment, fileSize)
+	if !segmentDecompresses(segment) {
+		return raw
+	}
+
+	return max(raw, min(segmentDecompressionLimit(segment), saturatingMul(raw, maxDeflateRatio)))
+}
+
+// segmentReadLimit はsegmentについてファイルから読み取れる生バイト数の上限を返す。
+// Size宣言値をオフセット以降の実際の残量へクランプする（理由はstreamSizeの
+// why not参照）。
+func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
+	return min(segment.Size, max(fileSize-segment.Offset, 0))
+}
+
+// segmentDecompresses はreadSegmentがsegmentをzlib解凍するかどうかを返す。
+func segmentDecompresses(segment XP3Segment) bool {
+	return segment.IsCompressed && segment.Size != segment.OriginalSize
+}
+
+// saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
+func saturatingAdd(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+
+	return a + b
+}
+
+// saturatingMul は非負のaと正のbの積を返す。積がint64を超える場合はmath.MaxInt64を返す。
+func saturatingMul(a, b int64) int64 {
+	if a > math.MaxInt64/b {
+		return math.MaxInt64
+	}
+
+	return a * b
+}
+
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
 // outputPathへ書き出す。inflatedLimitはエントリ全体で解凍により生み出せる
 // バイト数の上限であり、超えた場合はErrInvalidXP3を返す。失敗した場合は
@@ -772,16 +879,15 @@ func streamSize(f io.ReadSeeker) (int64, error) {
 // 管理する（budgetの必要性はextractEntryとentryBudgetのwhy not参照）。
 //
 // fileSizeでセグメントのSize宣言値をクランプする理由はstreamSizeのwhy not参照。
-// readSizeはsegment.Size（safeInt64通過済みで非負）とremaining（fileSize由来で
-// 非負にクランプ済み）の小さい方であり常に非負のため、負値ガードは不要。
+// readSizeはsegmentReadLimit（safeInt64通過済みで非負のsegment.Sizeと、非負に
+// クランプした残量の小さい方）とbudget.raw（読み取った分しか減らないため非負）の
+// 小さい方であり常に非負のため、負値ガードは不要。
 func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *entryBudget) ([]byte, error) {
 	if _, err := f.Seek(segment.Offset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
 	}
 
-	remaining := min(max(fileSize-segment.Offset, 0), budget.raw)
-
-	readSize := min(segment.Size, remaining)
+	readSize := min(segmentReadLimit(segment, fileSize), budget.raw)
 
 	buf := make([]byte, readSize)
 	n, err := io.ReadFull(f, buf)
@@ -791,7 +897,7 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *en
 	buf = buf[:n]
 	budget.raw -= int64(n)
 
-	if segment.IsCompressed && segment.Size != segment.OriginalSize {
+	if segmentDecompresses(segment) {
 		segmentLimit := segmentDecompressionLimit(segment)
 		decompressed, err := decompressZlib(buf, min(segmentLimit, budget.inflated))
 		if errors.Is(err, ErrDecompressedTooLarge) {

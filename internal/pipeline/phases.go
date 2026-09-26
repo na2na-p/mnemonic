@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/na2na-p/mnemonic/internal/builder"
 	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 	"github.com/na2na-p/mnemonic/internal/parser"
 	"github.com/na2na-p/mnemonic/internal/signer"
 )
@@ -24,6 +26,10 @@ var ErrGradleAPKMissing = errors.New("Gradleビルド後にAPKファイルが見
 // ErrAssetConversionFailed はCONVERTフェーズで1つ以上のアセットの変換に
 // 失敗した場合のエラー。
 var ErrAssetConversionFailed = errors.New("アセットの変換に失敗しました")
+
+// ErrInsufficientDiskSpace はEXTRACTフェーズの展開に必要な容量が、一時ディレクトリの
+// ファイルシステムの空き容量を超える場合のエラー。
+var ErrInsufficientDiskSpace = errors.New("一時ディレクトリの空き容量が不足しています")
 
 // ErrTemplateUnavailable はテンプレートをキャッシュから解決できなかった場合
 // （オフラインモードで未取得の場合など）のエラー。
@@ -60,6 +66,8 @@ func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error)
 
 // executeExtract はEXTRACTフェーズを実行する: XP3アーカイブを展開し、
 // ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を抽出してから展開する。
+// 展開の前に、必要な容量が一時ディレクトリの空き容量に収まるかを確認する
+// （checkExtractSpace）。
 func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error) {
 	extractDir, err := b.newTempDir("mnemonic_extract_")
 	if err != nil {
@@ -67,33 +75,44 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 	}
 	a.extractDir = extractDir
 
-	suffix := strings.ToLower(filepath.Ext(b.config.InputPath))
+	archivePaths := []string{b.config.InputPath}
+	var embeddedSizes []int64
 
-	if suffix == ".exe" {
+	if strings.ToLower(filepath.Ext(b.config.InputPath)) == ".exe" {
 		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
 		if err != nil {
 			return a, err
 		}
 
-		xp3Files, err := extractor.ExtractAll(extractDir)
+		archivePaths, err = extractor.ExtractAll(extractDir)
 		if err != nil {
 			return a, err
 		}
 
-		for _, xp3File := range xp3Files {
-			archive, err := parser.NewXP3Archive(xp3File)
-			if err != nil {
-				return a, err
-			}
-			if err := archive.ExtractAll(extractDir); err != nil {
-				return a, err
-			}
-		}
-	} else {
-		archive, err := parser.NewXP3Archive(b.config.InputPath)
+		embeddedSizes, err = fileSizes(archivePaths)
 		if err != nil {
 			return a, err
 		}
+	}
+
+	// why not: アーカイブごとに容量を確認しない。展開結果はすべて同じextractDirに
+	// 並んで残るため、1件ずつ同じ空き容量と比べると合計の不足を見逃す。
+	archives := make([]*parser.XP3Archive, 0, len(archivePaths))
+	planned := make([]int64, 0, len(archivePaths))
+	for _, path := range archivePaths {
+		archive, err := parser.NewXP3Archive(path)
+		if err != nil {
+			return a, err
+		}
+		archives = append(archives, archive)
+		planned = append(planned, archive.PlannedOutputSize())
+	}
+
+	if err := b.checkExtractSpace(extractDir, requiredExtractSpace(planned, embeddedSizes)); err != nil {
+		return a, err
+	}
+
+	for _, archive := range archives {
 		if err := archive.ExtractAll(extractDir); err != nil {
 			return a, err
 		}
@@ -111,6 +130,96 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 	a.gameStructure = &structure
 
 	return a, nil
+}
+
+// extractFootprintCopies は、展開結果がRunの終了まで一時ディレクトリの
+// ファイルシステム上に同時に置かれる数。extractDir、そのcopyTreeによる複製で
+// あるconvertDir、convertDirをBUILDフェーズでprojectDirのassetsへ写した複製の
+// 3つで、いずれもRun終了時のcleanupTempDirsまで削除されない。3つのディレクトリは
+// どれもnewTempDirがos.MkdirTemp("", ...)で作るため、同じos.TempDir()の下、
+// つまり容量を確認するextractDirと同じファイルシステムに置かれる。
+//
+// why not: Gradleのビルド中間生成物とAPK、projectDirへ展開するテンプレートと
+// ダウンロードするSDL2のソースは数えない。前者の量はGradleとAndroid Gradle
+// Pluginの挙動で、後者の量はテンプレートとSDL2の版で決まり、展開するアーカイブ
+// からは導けないため。変換によるサイズの増減も変換前には分からないため数えない。
+const extractFootprintCopies = 3
+
+// requiredExtractSpace は、アーカイブごとの展開結果の見積もりplannedと、容量確認の
+// 時点で一時ディレクトリへ書き出し済みのファイルのサイズwrittenから、確認時点以降に
+// 必要な空き容量を返す。writtenは展開結果と同じくextractFootprintCopies個に
+// 複製されるが、1つ目は既に空き容量から差し引かれている。int64を超える場合は
+// math.MaxInt64を返す。
+func requiredExtractSpace(planned, written []int64) int64 {
+	writtenTotal := saturatingSum(written)
+	total := saturatingAdd(saturatingSum(planned), writtenTotal)
+	if total > math.MaxInt64/extractFootprintCopies {
+		return math.MaxInt64
+	}
+
+	return total*extractFootprintCopies - writtenTotal
+}
+
+// saturatingSum は非負の値valuesの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
+func saturatingSum(values []int64) int64 {
+	var total int64
+	for _, v := range values {
+		total = saturatingAdd(total, v)
+	}
+
+	return total
+}
+
+// saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
+func saturatingAdd(a, b int64) int64 {
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+
+	return a + b
+}
+
+// checkExtractSpace はdirを含むファイルシステムの空き容量がrequiredバイトに
+// 満たなければErrInsufficientDiskSpaceを返す。エラー文にはdirの親ディレクトリと、
+// 一時ディレクトリを変える方法を示す。
+//
+// why not: dir自体ではなく親ディレクトリを示す。dirはRunの終了時に削除される
+// 使い捨てのディレクトリで、利用者が変えられるのは、newTempDirがdirを作る
+// os.TempDir()（Unix系ではTMPDIR、WindowsではTMP、TEMP、USERPROFILEの順に
+// 最初に空でないもの）の方であるため。
+//
+// why not: 空き容量を取得できない場合はビルドを止めず、警告して続ける。確認は
+// 容量不足を展開前に知らせるためのもので、対応していないファイルシステムの
+// 利用者のビルドまで妨げる理由にはならない。
+func (b *BuildPipeline) checkExtractSpace(dir string, required int64) error {
+	free, err := b.freeSpace(dir)
+	if err != nil {
+		b.log().Warning(fmt.Sprintf("一時ディレクトリの空き容量を取得できないため、展開前の容量確認を省略します: %v", err))
+
+		return nil
+	}
+
+	if uint64(required) > free { //nolint:gosec // requiredは非負のサイズの和と積から求めた非負値
+		return fmt.Errorf("%w: 展開に必要な容量 %s が一時ディレクトリ %s の空き容量 %s を超えています。"+
+			"空き容量のあるディレクトリを環境変数TMPDIR（WindowsではTMP）に指定して再実行してください",
+			ErrInsufficientDiskSpace, fsutil.FormatSize(required), filepath.Dir(dir), fsutil.FormatSize(int64(min(free, math.MaxInt64))))
+	}
+
+	return nil
+}
+
+// fileSizes はpathsの各ファイルのサイズを返す。
+func fileSizes(paths []string) ([]int64, error) {
+	sizes := make([]int64, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("抽出したファイルの情報を取得できません: %w", err)
+		}
+		sizes = append(sizes, info.Size())
+	}
+
+	return sizes, nil
 }
 
 // executeConvert はCONVERTフェーズを実行する: 抽出されたアセットをAndroid

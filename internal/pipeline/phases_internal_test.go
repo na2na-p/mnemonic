@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 )
 
 // why not: t.Setenvはt.Parallel()を呼んだテストでは使えない
@@ -513,4 +516,175 @@ func TestBuildPipeline_ExecuteConvert_LogsConversionNotes(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, logger.messages("VERBOSE"), filepath.Join("data", "name.csv")+": 推定結果なし、shift_jis として復号")
+}
+
+func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
+	t.Parallel()
+
+	payload := bytes.Repeat([]byte{'s'}, 100)
+	archive := storedXP3Bytes("startup.tjs", payload)
+	exe := append([]byte("MZ-stub-"), archive...)
+	planned := uint64(len(payload))
+	embedded := uint64(len(archive))
+	secondArchive := storedXP3Bytes("second.tjs", payload)
+	twoArchivesExe := append(append([]byte("MZ-stub-"), archive...), secondArchive...)
+	twoArchivesRequired := 3*(2*planned+embedded+uint64(len(secondArchive))) - embedded - uint64(len(secondArchive))
+	errStatfs := errors.New("statfs failed")
+
+	fixedFree := func(free uint64) func(string) (uint64, error) {
+		return func(string) (uint64, error) { return free, nil }
+	}
+
+	tests := []struct {
+		name        string
+		inputName   string
+		input       []byte
+		freeSpace   func(string) (uint64, error)
+		wantErr     error
+		wantMessage string
+		wantFree    uint64
+		wantWarning string
+		wantFiles   []string
+	}{
+		{
+			name:      "正常系: 空き容量が展開結果3つ分ちょうどならXP3を展開する",
+			inputName: "data.xp3",
+			input:     archive,
+			freeSpace: fixedFree(3 * planned),
+			wantFiles: []string{"startup.tjs"},
+		},
+		{
+			name:        "異常系: 空き容量が展開結果3つ分に1バイト足りなければ何も展開せずにエラーを返す",
+			inputName:   "data.xp3",
+			input:       archive,
+			freeSpace:   fixedFree(3*planned - 1),
+			wantErr:     ErrInsufficientDiskSpace,
+			wantMessage: "展開に必要な容量 300 B が一時ディレクトリ ",
+			wantFree:    3*planned - 1,
+			wantFiles:   []string{},
+		},
+		{
+			name:      "正常系: EXEは埋め込みXP3の複製も含めた3つ分から書き出し済みの1つを除いた空き容量で展開する",
+			inputName: "game.exe",
+			input:     exe,
+			freeSpace: fixedFree(3*(planned+embedded) - embedded),
+			wantFiles: []string{"game_0.xp3", "startup.tjs"},
+		},
+		{
+			name:        "異常系: EXEで空き容量が1バイト足りなければ埋め込みXP3の書き出しだけで止めてエラーを返す",
+			inputName:   "game.exe",
+			input:       exe,
+			freeSpace:   fixedFree(3*(planned+embedded) - embedded - 1),
+			wantErr:     ErrInsufficientDiskSpace,
+			wantMessage: "展開に必要な容量",
+			wantFree:    3*(planned+embedded) - embedded - 1,
+			wantFiles:   []string{"game_0.xp3"},
+		},
+		{
+			name:      "正常系: EXEに複数のXP3が埋め込まれていれば全XP3の展開結果の合計で確認して展開する",
+			inputName: "game.exe",
+			input:     twoArchivesExe,
+			freeSpace: fixedFree(twoArchivesRequired),
+			wantFiles: []string{"game_0.xp3", "game_1.xp3", "startup.tjs", "second.tjs"},
+		},
+		{
+			name:        "異常系: EXEの各XP3単独なら収まっても合計が1バイト足りなければどのXP3も展開せずにエラーを返す",
+			inputName:   "game.exe",
+			input:       twoArchivesExe,
+			freeSpace:   fixedFree(twoArchivesRequired - 1),
+			wantErr:     ErrInsufficientDiskSpace,
+			wantMessage: "展開に必要な容量",
+			wantFree:    twoArchivesRequired - 1,
+			wantFiles:   []string{"game_0.xp3", "game_1.xp3"},
+		},
+		{
+			name:      "正常系: 空き容量が非常に大きくても比較できる",
+			inputName: "data.xp3",
+			input:     archive,
+			freeSpace: fixedFree(math.MaxUint64),
+			wantFiles: []string{"startup.tjs"},
+		},
+		{
+			name:        "正常系: 空き容量を取得できなければ警告して展開を続ける",
+			inputName:   "data.xp3",
+			input:       archive,
+			freeSpace:   func(string) (uint64, error) { return 0, errStatfs },
+			wantWarning: "一時ディレクトリの空き容量を取得できないため、展開前の容量確認を省略します: statfs failed",
+			wantFiles:   []string{"startup.tjs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			input := filepath.Join(dir, tt.inputName)
+			require.NoError(t, os.WriteFile(input, tt.input, 0o600))
+
+			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+			t.Cleanup(p.cleanupTempDirs)
+			logger := &recordingLogger{}
+			p.SetLogger(logger)
+			var queried []string
+			p.freeSpace = func(path string) (uint64, error) {
+				queried = append(queried, path)
+				return tt.freeSpace(path)
+			}
+
+			got, err := p.executeExtract(buildArtifacts{})
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Contains(t, err.Error(), tt.wantMessage)
+				assert.Contains(t, err.Error(), "一時ディレクトリ "+filepath.Dir(got.extractDir)+" の空き容量 "+fsutil.FormatSize(int64(tt.wantFree))+" を超えています")
+				assert.Contains(t, err.Error(), "空き容量のあるディレクトリを環境変数TMPDIR（WindowsではTMP）に指定して再実行してください")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []string{got.extractDir}, queried)
+			if tt.wantWarning != "" {
+				assert.Equal(t, []string{tt.wantWarning}, logger.messages("WARNING"))
+			} else {
+				assert.Empty(t, logger.messages("WARNING"))
+			}
+			entries, err := os.ReadDir(got.extractDir)
+			require.NoError(t, err)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			assert.ElementsMatch(t, tt.wantFiles, names)
+		})
+	}
+}
+
+func TestRequiredExtractSpace(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		planned []int64
+		written []int64
+		want    int64
+	}{
+		{"正常系: 書き出し済みが無ければ見積もりの3つ分", []int64{100}, nil, 300},
+		{"正常系: 書き出し済みの分は3つ分から既に使った1つを除く", []int64{100}, []int64{50}, 400},
+		{"正常系: 複数アーカイブの見積もりと書き出し済みはそれぞれ合計する", []int64{60, 40}, []int64{30, 20}, 400},
+		{"正常系: 3つ分がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64/3 + 1}, nil, math.MaxInt64},
+		{"正常系: 見積もりと書き出し済みの和がint64を2超える場合も最大値で飽和する", []int64{math.MaxInt64}, []int64{2}, math.MaxInt64},
+		{"正常系: 見積もりと書き出し済みの和がint64を大きく超える場合も最大値で飽和する", []int64{math.MaxInt64}, []int64{1000}, math.MaxInt64},
+		{"正常系: 複数アーカイブの見積もりの合計がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64, 2}, nil, math.MaxInt64},
+		{"正常系: 複数アーカイブの見積もりの合計が大きく超える場合も最大値で飽和する", []int64{math.MaxInt64 - 1, 1000}, nil, math.MaxInt64},
+		{"正常系: 書き出し済みファイルの合計がint64を超える場合は最大値で飽和する", []int64{1}, []int64{math.MaxInt64, 2}, math.MaxInt64},
+		{"正常系: 書き出し済みファイルの合計が大きく超える場合も最大値で飽和する", nil, []int64{math.MaxInt64 - 1, 1000}, math.MaxInt64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, requiredExtractSpace(tt.planned, tt.written))
+		})
+	}
 }

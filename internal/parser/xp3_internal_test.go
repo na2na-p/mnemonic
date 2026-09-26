@@ -305,3 +305,136 @@ func TestExtractEntry_ExistingOutputFile(t *testing.T) {
 		})
 	}
 }
+
+// plannedOutputSizeはパッケージ非公開ヘルパーであり、GiB級やint64上限近くの宣言
+// サイズを、実データを1バイトも書かずに索引だけで検証するため、ホワイトボックス
+// テストとする。
+func TestPlannedOutputSize(t *testing.T) {
+	t.Parallel()
+
+	const fileSize = 1000
+
+	stored := func(offset, size int64) XP3Segment {
+		return XP3Segment{Offset: offset, Size: size, OriginalSize: size}
+	}
+	compressed := func(size, originalSize int64) XP3Segment {
+		return XP3Segment{Offset: 0, Size: size, OriginalSize: originalSize, IsCompressed: true}
+	}
+	entry := func(segments ...XP3Segment) XP3FileEntry {
+		return XP3FileEntry{Name: "entry.bin", Segments: segments}
+	}
+
+	cases := []struct {
+		name     string
+		entries  []XP3FileEntry
+		fileSize int64
+		want     int64
+	}{
+		{"正常系: エントリが無ければ0", nil, fileSize, 0},
+		{"正常系: 非圧縮セグメントは宣言サイズを数える", []XP3FileEntry{entry(stored(100, 200))}, fileSize, 200},
+		{"正常系: 非圧縮セグメントがオフセット以降の残量を超える場合は残量へクランプする", []XP3FileEntry{entry(stored(100, 5000))}, fileSize, 900},
+		{"正常系: オフセットがファイル末尾より先の非圧縮セグメントは0", []XP3FileEntry{entry(stored(fileSize+10, 10))}, fileSize, 0},
+		{"正常系: 圧縮セグメントは宣言した解凍後サイズを数える", []XP3FileEntry{entry(compressed(100, 500))}, fileSize, 500},
+		{"正常系: 圧縮セグメントの解凍後サイズが0なら生データの1032倍を数える", []XP3FileEntry{entry(compressed(100, 0))}, fileSize, 100 * 1032},
+		{"正常系: 圧縮セグメントの解凍後サイズが0でも64MiBを上限にする", []XP3FileEntry{entry(compressed(1<<20, 0))}, 1 << 20, 64 << 20},
+		{"正常系: 圧縮セグメントの宣言した解凍後サイズが生データの1032倍を超えれば1032倍を数える", []XP3FileEntry{entry(compressed(100, 1<<20))}, fileSize, 100 * 1032},
+		{"正常系: 圧縮セグメントの解凍後サイズは1GiBを上限にする", []XP3FileEntry{entry(compressed(2<<20, 5<<30))}, 4 << 20, 1 << 30},
+		{"正常系: 生データが0バイトの圧縮セグメントは0", []XP3FileEntry{entry(compressed(0, 500))}, fileSize, 0},
+		{"正常系: オフセットがファイル末尾より先の圧縮セグメントは0", []XP3FileEntry{entry(XP3Segment{Offset: fileSize + 10, Size: 8, OriginalSize: 0, IsCompressed: true})}, fileSize, 0},
+		{"正常系: 末尾で途切れた圧縮セグメントは残量の1032倍を数える", []XP3FileEntry{entry(XP3Segment{Offset: fileSize - 10, Size: 500, OriginalSize: 0, IsCompressed: true})}, fileSize, 10 * 1032},
+		{"正常系: 4KiBのスクリプトと空の圧縮スクリプト1件", emptyScriptsProbe(1), 1 << 20, 4096 + 1*8*1032},
+		{"正常系: 4KiBのスクリプトと空の圧縮スクリプト10件", emptyScriptsProbe(10), 1 << 20, 4096 + 10*8*1032},
+		{"正常系: 4KiBのスクリプトと空の圧縮スクリプト100件でも1MiBに満たない", emptyScriptsProbe(100), 1 << 20, 4096 + 100*8*1032},
+		{"正常系: 圧縮セグメントの生データが解凍後サイズより大きければ生データを数える", []XP3FileEntry{entry(compressed(800, 1))}, fileSize, 800},
+		{"正常系: 圧縮フラグでも圧縮前後のサイズが等しいセグメントは非圧縮として残量へクランプする", []XP3FileEntry{entry(compressed(5000, 5000))}, fileSize, fileSize},
+		{"正常系: 同じ範囲を共有する複数エントリはエントリごとに数える", []XP3FileEntry{entry(stored(0, 400)), entry(stored(0, 400)), entry(stored(0, 400))}, fileSize, 1200},
+		{"正常系: 同じ範囲を指す複数の非圧縮セグメントもセグメントごとに数える", []XP3FileEntry{entry(stored(0, 400), stored(0, 400))}, fileSize, 800},
+		{"正常系: 1エントリの合計はアーカイブサイズと解凍上限1GiBの和を上限にする", []XP3FileEntry{entry(compressed(2<<20, 1<<30), compressed(2<<20, 1<<30), compressed(2<<20, 1<<30))}, 4 << 20, 4<<20 + 1<<30},
+		{"正常系: 1エントリ内の合計がint64を超える場合は最大値で飽和する", []XP3FileEntry{entry(stored(0, math.MaxInt64), stored(0, math.MaxInt64))}, math.MaxInt64 - 10, math.MaxInt64},
+		{"正常系: エントリの合計がint64を超える場合は最大値で飽和する", []XP3FileEntry{entry(stored(0, math.MaxInt64)), entry(stored(0, math.MaxInt64))}, math.MaxInt64 - 10, math.MaxInt64},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := plannedOutputSize(tc.entries, tc.fileSize)
+
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// emptyScriptsProbe は、4KiBのスクリプト1件（1500バイトへzlib圧縮）と、空の
+// スクリプトn件からなるエントリ列を返す。krkrrel（krdevui RelSettingsUnit.cpp）は
+// 圧縮対象の拡張子のファイルを空でもzlibで圧縮し（格納サイズ8バイト・解凍後
+// サイズ0の圧縮セグメントになる）、内容が同一のファイルは格納し直さず先の
+// セグメント情報を複写するため、空のスクリプトはすべて同じ8バイトを指す。
+// 見積もりはエントリごとに数えるため、範囲を共有していても別々でも同じ値になる。
+func emptyScriptsProbe(n int) []XP3FileEntry {
+	entries := []XP3FileEntry{{Name: "first.ks", Segments: []XP3Segment{{Offset: 0, Size: 1500, OriginalSize: 4096, IsCompressed: true}}}}
+	for i := range n {
+		entries = append(entries, XP3FileEntry{
+			Name:     "empty" + strconv.Itoa(i) + ".ks",
+			Segments: []XP3Segment{{Offset: 1500, Size: 8, OriginalSize: 0, IsCompressed: true}},
+		})
+	}
+
+	return entries
+}
+
+// maxDeflateRatioは物理的な上限であり、実際のzlibの膨張率がこれを超えないことを
+// 大きな膨張率を生むゼロ列の最大圧縮で確かめる。
+func TestMaxDeflateRatio(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		size  int
+		level int
+	}{
+		{"正常系: 16MiBのゼロ列を最大圧縮しても膨張率は上限以下", 16 << 20, zlib.BestCompression},
+		{"正常系: 16MiBのゼロ列を既定の圧縮レベルで圧縮しても膨張率は上限以下", 16 << 20, zlib.DefaultCompression},
+		{"正常系: 1MiBのゼロ列を最大圧縮しても膨張率は上限以下", 1 << 20, zlib.BestCompression},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var compressed bytes.Buffer
+			w, err := zlib.NewWriterLevel(&compressed, tc.level)
+			require.NoError(t, err)
+			_, err = w.Write(make([]byte, tc.size))
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+
+			assert.GreaterOrEqual(t, int64(compressed.Len())*maxDeflateRatio, int64(tc.size))
+		})
+	}
+}
+
+func TestSaturatingMul(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		a    int64
+		b    int64
+		want int64
+	}{
+		{"正常系: 0との積は0", 0, maxDeflateRatio, 0},
+		{"正常系: int64に収まる積はそのまま返す", 8, maxDeflateRatio, 8 * 1032},
+		{"正常系: 積がちょうどint64に収まる境界ではそのまま返す", math.MaxInt64 / maxDeflateRatio, maxDeflateRatio, math.MaxInt64 / maxDeflateRatio * maxDeflateRatio},
+		{"正常系: 積がint64を超える場合は最大値で飽和する", math.MaxInt64/maxDeflateRatio + 1, maxDeflateRatio, math.MaxInt64},
+		{"正常系: 最大値同士の積も最大値で飽和する", math.MaxInt64, math.MaxInt64, math.MaxInt64},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, saturatingMul(tc.a, tc.b))
+		})
+	}
+}

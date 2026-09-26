@@ -1,9 +1,9 @@
-package main
+package fsutil
 
 import "fmt"
 
-// formatSize はバイト数を人間が読みやすい形式に変換する。
-func formatSize(sizeBytes int64) string {
+// FormatSize はバイト数を1024単位のB/KB/MB/GBで表した文字列を返す。
+func FormatSize(sizeBytes int64) string {
 	const unit = 1024
 
 	switch {

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -238,7 +241,7 @@ func TestXP3Archive_ExtractAll(t *testing.T) {
 		archive, err := parser.NewXP3Archive(path)
 		require.NoError(t, err)
 
-		err = archive.ExtractAll(outputDir)
+		err = extractAllWithinPlan(t, archive, outputDir)
 
 		require.NoError(t, err)
 		assert.DirExists(t, outputDir)
@@ -274,7 +277,7 @@ func TestXP3Archive_ExtractAll_ZipSlipGuard(t *testing.T) {
 			require.NoError(t, err)
 
 			outputDir := filepath.Join(tmpDir, "output")
-			err = archive.ExtractAll(outputDir)
+			err = extractAllWithinPlan(t, archive, outputDir)
 			outsidePath := filepath.Join(filepath.Dir(outputDir), "evil.txt")
 			assert.NoFileExists(t, outsidePath)
 
@@ -331,7 +334,7 @@ func TestXP3Archive_ExtractAll_BackslashSeparatedNames(t *testing.T) {
 			require.NoError(t, err)
 
 			outputDir := filepath.Join(tmpDir, "output")
-			require.NoError(t, archive.ExtractAll(outputDir))
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 			extractedPath := filepath.Join(outputDir, tc.expectedPath)
 			assert.FileExists(t, extractedPath)
@@ -709,7 +712,7 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		assert.False(t, archive.IsEncrypted())
 
 		outputDir := filepath.Join(tmpDir, "out")
-		require.NoError(t, archive.ExtractAll(outputDir))
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 		extracted, err := os.ReadFile(filepath.Join(outputDir, "data", "script.ks")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
@@ -732,7 +735,7 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 
 		outputDir := filepath.Join(tmpDir, "out")
-		require.NoError(t, archive.ExtractAll(outputDir))
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 		got1, err := os.ReadFile(filepath.Join(outputDir, "scenario", "first.ks")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
@@ -907,7 +910,7 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 
 	// 展開してもパニックせず、（存在しないエントリの）ファイルも作られないこと。
 	outputDir := t.TempDir()
-	require.NoError(t, archive.ExtractAll(outputDir))
+	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 	assert.NoFileExists(t, filepath.Join(outputDir, "secret.dat"))
 }
 
@@ -963,7 +966,7 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 	// 展開してもmakesliceパニックせずに完了すること
 	// （size/originalSizeがint64安全域外のためゼロ値にフォールバックし、空データとして書き出される）。
 	outputDir := t.TempDir()
-	err = archive.ExtractAll(outputDir)
+	err = extractAllWithinPlan(t, archive, outputDir)
 	require.NoError(t, err)
 	assert.FileExists(t, filepath.Join(outputDir, "secret.dat"))
 }
@@ -1024,7 +1027,7 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		require.NoError(t, err)
 
 		outputDir := filepath.Join(tmpDir, "output")
-		require.NoError(t, archive.ExtractAll(outputDir))
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
@@ -1059,7 +1062,7 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		require.NoError(t, err)
 
 		outputDir := filepath.Join(tmpDir, "output")
-		require.NoError(t, archive.ExtractAll(outputDir))
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
@@ -1095,7 +1098,7 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 		require.NoError(t, err)
 
 		outputDir := filepath.Join(tmpDir, "output")
-		require.NoError(t, archive.ExtractAll(outputDir))
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 		actual, err := os.ReadFile(filepath.Join(outputDir, "test.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
@@ -1177,7 +1180,7 @@ func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
 	require.Equal(t, []string{"hostile.bin"}, archive.ListFiles())
 
 	outputDir := t.TempDir()
-	require.NoError(t, archive.ExtractAll(outputDir))
+	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 	extracted, err := os.ReadFile(filepath.Join(outputDir, "hostile.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 	require.NoError(t, err)
@@ -1322,7 +1325,7 @@ func TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes(t *test
 	require.NoError(t, err)
 
 	outputDir := t.TempDir()
-	require.NoError(t, archive.ExtractAll(outputDir))
+	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 	extracted, err := os.ReadFile(filepath.Join(outputDir, "raw_passthrough.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 	require.NoError(t, err)
@@ -1398,7 +1401,7 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	require.Equal(t, []string{"many_segments.bin"}, archive.ListFiles())
 
 	outputDir := t.TempDir()
-	require.NoError(t, archive.ExtractAll(outputDir))
+	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 
 	extracted, err := os.ReadFile(filepath.Join(outputDir, "many_segments.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 	require.NoError(t, err)
@@ -1817,7 +1820,7 @@ func TestNewXP3Archive_IndexLayouts(t *testing.T) {
 			assert.ElementsMatch(t, []string{"scenario/first.ks", "image/title.png"}, archive.ListFiles())
 
 			outputDir := filepath.Join(tmpDir, "out")
-			require.NoError(t, archive.ExtractAll(outputDir))
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
 			for name, want := range wantContents {
 				got, err := os.ReadFile(filepath.Join(outputDir, filepath.FromSlash(name))) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 				require.NoError(t, err)
@@ -2042,6 +2045,21 @@ func TestXP3EncryptionChecker_Check_CorruptIndex(t *testing.T) {
 	assert.Equal(t, parser.EncryptionNone, result.EncryptionType)
 }
 
+// zlibBestZeroStream はsizeバイトのゼロ列をzlib.BestCompressionで圧縮したバイト列を返す。
+// 圧縮前のゼロ列をsizeバイト一括で確保するため、数MiB程度のsizeにだけ使う。
+func zlibBestZeroStream(t *testing.T, size int) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w, err := zlib.NewWriterLevel(&buf, zlib.BestCompression)
+	require.NoError(t, err)
+	_, err = w.Write(make([]byte, size))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	return buf.Bytes()
+}
+
 // zlibZeroStream はsizeバイトのゼロ列をzlib圧縮したストリームを返す。
 //
 // why not: 圧縮前のゼロ列を一括で確保するとテスト自体がその分のメモリを使うため、
@@ -2203,7 +2221,7 @@ func TestXP3Archive_ExtractAll_SegmentDecompressionLimit(t *testing.T) {
 			require.NoError(t, err)
 
 			outputDir := filepath.Join(tmpDir, "out")
-			err = archive.ExtractAll(outputDir)
+			err = extractAllWithinPlan(t, archive, outputDir)
 
 			if tc.wantErr {
 				require.ErrorIs(t, err, parser.ErrInvalidXP3)
@@ -2247,4 +2265,145 @@ func TestNewXP3Archive_FileTableDecompression_AllocationBounded(t *testing.T) {
 
 	require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
 	require.Less(t, after.TotalAlloc-before.TotalAlloc, maxAllocDelta)
+}
+
+// extractAllWithinPlan はarchive.ExtractAllを実行し、outputDirへ書き出された
+// バイト数がarchive.PlannedOutputSize()以下であることを検証してから、ExtractAllの
+// 結果を返す。展開を伴う全テストをこの経路に通し、見積もりが展開の実際の
+// 書き出し量を下回らないことをフィクスチャ全体で確かめる。
+func extractAllWithinPlan(t *testing.T, archive *parser.XP3Archive, outputDir string) error {
+	t.Helper()
+
+	err := archive.ExtractAll(outputDir)
+	assert.LessOrEqual(t, dirFileBytes(t, outputDir), archive.PlannedOutputSize())
+
+	return err
+}
+
+// dirFileBytes はdir配下の全ファイルのバイト数の合計を返す。dirが存在しなければ0を返す。
+func dirFileBytes(t *testing.T, dir string) int64 {
+	t.Helper()
+
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+
+		return nil
+	})
+	if !errors.Is(err, fs.ErrNotExist) {
+		require.NoError(t, err)
+	}
+
+	return total
+}
+
+func TestXP3Archive_PlannedOutputSize(t *testing.T) {
+	t.Parallel()
+
+	notZlib := bytes.Repeat([]byte{'x'}, 200)
+	zeros := zlibBestZeroStream(t, 4<<20)
+	emptyZlib := compressZlib(t, nil)
+	emptyScripts := func(n int) func(t *testing.T) []byte {
+		return func(t *testing.T) []byte {
+			t.Helper()
+
+			entries := []xp3EntrySpec{{name: "first.ks", data: bytes.Repeat([]byte("*label\r\n"), 512), compressFlag: true}}
+			for i := range n {
+				entries = append(entries, xp3EntrySpec{name: fmt.Sprintf("empty%d.ks", i), data: []byte{}, compressFlag: true})
+			}
+
+			return buildXP3Archive(t, entries)
+		}
+	}
+
+	cases := []struct {
+		name        string
+		archive     func(t *testing.T) []byte
+		wantPlanned int64
+		wantWritten int64
+	}{
+		{
+			name:        "正常系: インデックスを持たないアーカイブは0",
+			archive:     func(*testing.T) []byte { return minimalXP3Bytes() },
+			wantPlanned: 0,
+			wantWritten: 0,
+		},
+		{
+			name: "正常系: 宣言サイズが正しいアーカイブは展開で書き出すバイト数と一致する",
+			archive: func(t *testing.T) []byte {
+				t.Helper()
+
+				return buildXP3Archive(t, []xp3EntrySpec{
+					{name: "scenario/first.ks", data: bytes.Repeat([]byte{'k'}, 300), compressFlag: true},
+					{name: "image/title.png", data: []byte("PNGDATA")},
+					{name: "bgm/op.ogg", segments: []xp3SegmentSpec{
+						{data: []byte("OggS-head")},
+						{data: bytes.Repeat([]byte{'o'}, 400), compressFlag: true},
+					}},
+				})
+			},
+			wantPlanned: 300 + 7 + 9 + 400,
+			wantWritten: 300 + 7 + 9 + 400,
+		},
+		{
+			name: "正常系: zlibとして解凍できない圧縮セグメントは生データを書き出すため生データの長さを見積もる",
+			archive: func(t *testing.T) []byte {
+				t.Helper()
+
+				return buildSingleCompressedSegmentArchive(t, notZlib, 1)
+			},
+			wantPlanned: int64(len(notZlib)),
+			wantWritten: int64(len(notZlib)),
+		},
+		{
+			name: "正常系: 解凍後サイズを0と宣言した高圧縮セグメントは生データの1032倍を見積もり、実際の書き出し量を下回らない",
+			archive: func(t *testing.T) []byte {
+				t.Helper()
+
+				return buildSingleCompressedSegmentArchive(t, zeros, 0)
+			},
+			wantPlanned: int64(len(zeros)) * 1032,
+			wantWritten: 4 << 20,
+		},
+		{
+			name:        "正常系: 4KiBのスクリプトと空の圧縮スクリプト1件",
+			archive:     emptyScripts(1),
+			wantPlanned: 4096 + 1*int64(len(emptyZlib))*1032,
+			wantWritten: 4096,
+		},
+		{
+			name:        "正常系: 4KiBのスクリプトと空の圧縮スクリプト100件",
+			archive:     emptyScripts(100),
+			wantPlanned: 4096 + 100*int64(len(emptyZlib))*1032,
+			wantWritten: 4096,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "planned.xp3")
+			writeFile(t, path, tc.archive(t))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantPlanned, archive.PlannedOutputSize())
+			outputDir := filepath.Join(tmpDir, "out")
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			assert.Equal(t, tc.wantWritten, dirFileBytes(t, outputDir))
+		})
+	}
 }
