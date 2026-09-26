@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"unicode/utf16"
 
@@ -182,6 +183,26 @@ func TestNewXP3Archive(t *testing.T) {
 			require.ErrorIs(t, err, parser.ErrInvalidXP3)
 		})
 	}
+
+	truncatedIndexOffsetCases := map[string][]byte{
+		"異常系: インデックスオフセットを持たない11バイトマジックのみのファイルはErrInvalidXP3": parser.XP3Magic,
+		"異常系: インデックスオフセットが途切れた18バイトのファイルはErrInvalidXP3": append(
+			bytes.Clone(parser.XP3Magic), 0x01, 0, 0, 0, 0, 0, 0,
+		),
+	}
+
+	for name, content := range truncatedIndexOffsetCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "truncated-offset.xp3")
+			writeFile(t, path, content)
+
+			_, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+		})
+	}
 }
 
 func TestXP3Archive_ListFiles(t *testing.T) {
@@ -199,37 +220,6 @@ func TestXP3Archive_ListFiles(t *testing.T) {
 		files := archive.ListFiles()
 
 		assert.Empty(t, files)
-	})
-
-	t.Run("正常系: インデックスオフセットを持たない11バイトマジックのみのファイルで空のファイル一覧を返す", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "magic-only.xp3")
-		writeFile(t, path, parser.XP3Magic)
-
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
-
-		assert.Empty(t, archive.ListFiles())
-	})
-
-	// why not: 11バイトちょうどのファイルではヘッダーバッファの容量（32バイト）に
-	// 隠れてオフセット読み出しが偶然成立するため、19バイト未満のガードを外しても
-	// 検出できない。マジックに7バイトだけ続く18バイトのファイルでは、ガードが無いと
-	// 同じ容量の余りからオフセット1が読まれ、ヘッダー自身をインデックスとして解釈した
-	// 巨大なサイズをreadFileTableが確保しようとしてpanicする。この検出は
-	// readFileTableの確保が無制限である間だけ成立するため、確保に上限を設ける際は
-	// 本ケースをガード違反を直接観測する形へ見直す必要がある。
-	t.Run("正常系: インデックスオフセットが途切れた18バイトのファイルで空のファイル一覧を返す", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "truncated-offset.xp3")
-		writeFile(t, path, append(append([]byte{}, parser.XP3Magic...), 0x01, 0, 0, 0, 0, 0, 0))
-
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
-
-		assert.Empty(t, archive.ListFiles())
 	})
 }
 
@@ -1341,4 +1331,164 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	// 分読まれうるが、budget導入後はエントリ全体でfileSizeを超えて読まれない。
 	assert.LessOrEqual(t, int64(len(extracted)), fileSize)
 	assert.Less(t, len(extracted), numSegments*segmentDeclaredSize)
+}
+
+const hugeDeclaredTableSize = uint64(1) << 40
+
+// buildXP3ArchiveWithHugeTableSize はインデックスオフセット19の直後に
+// flag、テーブルサイズとしてのhugeDeclaredTableSize、secondを置き、その後ろに
+// trailingを続けたXP3アーカイブを構築する。secondはバージョン1ではoriginal_size、
+// バージョン2ではtable_offsetとして解釈される。
+func buildXP3ArchiveWithHugeTableSize(flag byte, second uint64, trailing []byte) []byte {
+	const headerSize = 19 // 11(magic) + 8(info_offset)
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(headerSize))
+	buf.WriteByte(flag)
+	writeUint64(&buf, hugeDeclaredTableSize)
+	writeUint64(&buf, second)
+	buf.Write(trailing)
+
+	return buf.Bytes()
+}
+
+// buildUncompressedSingleEntryTable はnameを持つ1エントリ（segmレコード1件）だけの
+// 非圧縮ファイルテーブルを構築する。
+func buildUncompressedSingleEntryTable(name string) []byte {
+	nameUTF16 := utf16.Encode([]rune(name))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)                      // flags
+	writeUint64(&info, 0)                      // original_size
+	writeUint64(&info, 0)                      // size
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0) // flags
+	writeUint64(&segm, 0) // offset
+	writeUint64(&segm, 0) // size
+	writeUint64(&segm, 0) // original_size
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	return table.Bytes()
+}
+
+func TestXP3Archive_HugeDeclaredTableSize_BoundedByFileSize(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// magic(11) + info_offset(8) + flag(1) + 2つのuint64(16)
+		indexHeaderEnd = uint64(36)
+		trailingSize   = 8
+	)
+
+	// 全ゼロの8バイトはzlib解凍に失敗して生データとして扱われ、チャンク名の後に
+	// chunk_size（8バイト）を読み切れないためエントリにならない。宣言サイズが残量
+	// （8バイト）へクランプされて実際に読み取られる経路を通しつつ、期待値を
+	// 空のファイル一覧に固定できる。
+	trailing := make([]byte, trailingSize)
+
+	// ファイルテーブルは残量ちょうどの長さのため、宣言サイズを残量へクランプして
+	// 読み取らなければ（読み飛ばすと）このエントリはListFilesに現れない。
+	entryTable := buildUncompressedSingleEntryTable("clamped.txt")
+
+	cases := map[string]struct {
+		content   []byte
+		wantLen   int
+		wantFiles []string
+	}{
+		"異常系: バージョン1のcompressed_sizeが1TiBを宣言し残量が無くても空のファイル一覧を返す": {
+			content: buildXP3ArchiveWithHugeTableSize(0x00, hugeDeclaredTableSize, nil),
+			wantLen: int(indexHeaderEnd),
+		},
+		"異常系: バージョン2のtable_sizeが1TiBを宣言し残量が無くても空のファイル一覧を返す": {
+			content: buildXP3ArchiveWithHugeTableSize(0x80, indexHeaderEnd, nil),
+			wantLen: int(indexHeaderEnd),
+		},
+		"異常系: バージョン2のtable_offsetがファイル末尾より先を指しtable_sizeが1TiBを宣言しても空のファイル一覧を返す": {
+			content: buildXP3ArchiveWithHugeTableSize(0x80, 1000, nil),
+			wantLen: int(indexHeaderEnd),
+		},
+		"異常系: バージョン1のcompressed_sizeが1TiBを宣言しても残り8バイトだけ読んで空のファイル一覧を返す": {
+			content: buildXP3ArchiveWithHugeTableSize(0x00, hugeDeclaredTableSize, trailing),
+			wantLen: int(indexHeaderEnd) + trailingSize,
+		},
+		"異常系: バージョン2のtable_sizeが1TiBを宣言しても残り8バイトだけ読んで空のファイル一覧を返す": {
+			content: buildXP3ArchiveWithHugeTableSize(0x80, indexHeaderEnd, trailing),
+			wantLen: int(indexHeaderEnd) + trailingSize,
+		},
+		"正常系: バージョン1のcompressed_sizeが1TiBを宣言しても残量ぶんのファイルテーブルを読んでエントリを返す": {
+			content:   buildXP3ArchiveWithHugeTableSize(0x00, hugeDeclaredTableSize, entryTable),
+			wantLen:   int(indexHeaderEnd) + len(entryTable),
+			wantFiles: []string{"clamped.txt"},
+		},
+		"正常系: バージョン2のtable_sizeが1TiBを宣言しても残量ぶんのファイルテーブルを読んでエントリを返す": {
+			content:   buildXP3ArchiveWithHugeTableSize(0x80, indexHeaderEnd, entryTable),
+			wantLen:   int(indexHeaderEnd) + len(entryTable),
+			wantFiles: []string{"clamped.txt"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Len(t, tc.content, tc.wantLen)
+
+			path := filepath.Join(t.TempDir(), "huge-table.xp3")
+			writeFile(t, path, tc.content)
+
+			archive, err := parser.NewXP3Archive(path)
+
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+func TestXP3Archive_DeclaredTableSize_AllocationBoundedByFileSize(t *testing.T) {
+	// why not: t.Parallel()を呼ばない。TotalAllocはプロセス全体の累積確保量であり、
+	// 並列実行中の他テストの確保も加算される。t.Parallel()を呼ばないトップレベル
+	// テストは並列テストが再開する前に単独で実行されるため、計測区間に他テストの
+	// 確保が混ざらない（並列テストのサブテストにすると並列の兄弟と重なる）。
+
+	// why not: 1<<40のケースは上限が無いとOSにkillされるため、テストの失敗として
+	// 観測できない。256MiBなら上限が無くても確保は成功するため、確保量の差で上限の
+	// 存在を観測できる。
+	const (
+		declaredTableSize = uint64(1) << 28
+		maxAllocDelta     = uint64(16) << 20
+	)
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+	buf.WriteByte(0x00) // flag: バージョン1
+	writeUint64(&buf, declaredTableSize)
+	writeUint64(&buf, declaredTableSize)
+
+	path := filepath.Join(t.TempDir(), "declared-256mib.xp3")
+	writeFile(t, path, buf.Bytes())
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	archive, err := parser.NewXP3Archive(path)
+	require.NoError(t, err)
+	files := archive.ListFiles()
+
+	runtime.ReadMemStats(&after)
+
+	assert.Empty(t, files)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, maxAllocDelta)
 }

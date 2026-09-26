@@ -143,6 +143,9 @@ func (a *XP3Archive) parseArchive() error {
 	if len(header) < len(XP3Magic) || !validateXP3Magic(header) {
 		return fmt.Errorf("%w: %s", ErrInvalidXP3, a.archivePath)
 	}
+	if len(header) < 19 {
+		return fmt.Errorf("%w: インデックスオフセットが途切れています: %s", ErrInvalidXP3, a.archivePath)
+	}
 
 	a.parseFileIndex(f, header)
 
@@ -151,13 +154,9 @@ func (a *XP3Archive) parseArchive() error {
 
 // parseFileIndex はファイルインデックスをパースする。
 //
-// ヘッダーが19バイト未満（マジックの後にインデックスオフセットが続かない）の
-// 場合、パースエラーとはせず空のファイル一覧のまま処理を終える。
+// headerはマジックとインデックスオフセットを含む19バイト以上であることを
+// 前提とする（parseArchiveが保証する）。
 func (a *XP3Archive) parseFileIndex(f io.ReadSeeker, header []byte) {
-	if len(header) < 19 {
-		return
-	}
-
 	a.parseStandardIndex(f, header)
 }
 
@@ -247,8 +246,28 @@ func safeInt64(v uint64) (int64, bool) {
 	return int64(v), true //nolint:gosec // 直前のv > math.MaxInt64チェックによりオーバーフローしないことを保証済み
 }
 
-func (a *XP3Archive) readFileTable(f io.Reader, tableSize int64) {
-	if tableSize < 0 {
+// readFileTable は現在位置からtableSizeバイトのファイルテーブルを読み取り、
+// エントリをパースする。
+//
+// why not: tableSizeはアーカイブ由来の宣言値であり、そのまま確保すると細工された
+// アーカイブ1つで数GBを確保したり、makesliceの上限超過でpanicしたりする。
+// そのため現在位置以降の実際の残量へクランプしてから確保する。
+func (a *XP3Archive) readFileTable(f io.ReadSeeker, tableSize int64) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return
+	}
+	fileSize, err := streamSize(f)
+	if err != nil {
+		return
+	}
+	// streamSizeは末尾へシークするため、テーブル先頭へ戻してから読む。
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return
+	}
+
+	tableSize = min(tableSize, max(fileSize-offset, 0))
+	if tableSize <= 0 {
 		return
 	}
 
