@@ -1,6 +1,7 @@
 package tlg_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -14,7 +15,7 @@ import (
 
 // tlg5Header はTLG5形式のヘッダーバイト列を生成するテストヘルパー。
 func tlg5Header(colorDepth byte, width, height, blockHeight uint32) []byte {
-	header := append([]byte{}, tlg.TLG5Magic...)
+	header := bytes.Clone(tlg.TLG5Magic)
 	header = append(header, colorDepth)
 
 	buf := make([]byte, 4)

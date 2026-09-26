@@ -472,13 +472,11 @@ func TestReadTemplateMetadata(t *testing.T) {
 func TestInfo_CreationAndFieldAccess(t *testing.T) {
 	t.Parallel()
 
-	version := "1.0.0"
-	expires := 7
 	info := cache.Info{
 		Directory:             "/tmp/cache",
 		SizeBytes:             1024,
-		TemplateVersion:       &version,
-		TemplateExpiresInDays: &expires,
+		TemplateVersion:       new("1.0.0"),
+		TemplateExpiresInDays: new(7),
 	}
 
 	assert.Equal(t, "/tmp/cache", info.Directory)

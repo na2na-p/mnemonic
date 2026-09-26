@@ -134,8 +134,7 @@ func CheckDependency(info DependencyInfo) CheckResult {
 	case ctx.Err() != nil:
 		return notFoundResult(info, "コマンド '"+info.Command+"' がタイムアウトしました")
 	default:
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
+		if _, ok := errors.AsType[*exec.Error](err); ok {
 			return notFoundResult(info, "コマンド '"+info.Command+"' が見つかりません")
 		}
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -56,9 +57,7 @@ func newBuildCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			inputPath := args[0]
-			if output == "" {
-				output = strings.TrimSuffix(inputPath, filepath.Ext(inputPath)) + ".apk"
-			}
+			output = cmp.Or(output, strings.TrimSuffix(inputPath, filepath.Ext(inputPath))+".apk")
 
 			config := pipeline.NewConfig(inputPath, output)
 			config.PackageName = packageName

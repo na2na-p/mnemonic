@@ -109,13 +109,7 @@ func (d *ConsoleProgressDisplay) Update(current int, message string) {
 
 	// 呼び出し側がtotalを超える値や負値を渡しても panic せず表示上は 0-100% に
 	// 丸め込む（不正な入力値でクラッシュしないための防御的な実装）。
-	clamped := current
-	if clamped < 0 {
-		clamped = 0
-	}
-	if clamped > d.total {
-		clamped = d.total
-	}
+	clamped := min(max(current, 0), d.total)
 
 	percent := clamped * 100 / d.total
 	filled := progressBarWidth * clamped / d.total

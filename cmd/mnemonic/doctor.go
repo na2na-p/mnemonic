@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"text/tabwriter"
@@ -65,10 +66,7 @@ func printDependencyTable(w io.Writer, results []doctor.CheckResult) {
 			required = "必須"
 		}
 
-		version := r.Version
-		if version == "" {
-			version = "-"
-		}
+		version := cmp.Or(r.Version, "-")
 
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", status, r.Name, version, required, r.Message) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 	}

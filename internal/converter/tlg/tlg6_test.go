@@ -1,6 +1,7 @@
 package tlg_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 
 // tlg6Header はTLG6形式のヘッダーバイト列を生成するテストヘルパー。
 func tlg6Header(colors, dataFlags byte, width, height, xBlockCount, yBlockCount uint32) []byte {
-	header := append([]byte{}, tlg.TLG6Magic...)
+	header := bytes.Clone(tlg.TLG6Magic)
 	header = append(header, colors, dataFlags)
 
 	buf := make([]byte, 4)

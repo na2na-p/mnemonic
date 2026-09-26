@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -234,10 +235,7 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 		packageName = "com.krkr." + sanitized
 	}
 
-	appName := b.config.AppName
-	if appName == "" {
-		appName = baseName
-	}
+	appName := cmp.Or(b.config.AppName, baseName)
 
 	projectDir, err := b.newTempDir("mnemonic_project_")
 	if err != nil {

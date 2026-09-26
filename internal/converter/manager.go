@@ -137,10 +137,7 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	summary := ConversionSummary{Total: len(files)}
 
-	workers := m.MaxWorkers
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(m.MaxWorkers, 1)
 
 	tasksCh := make(chan FileTask)
 	resultsCh := make(chan ConversionResult, len(files))
@@ -151,11 +148,8 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 		completedCount int
 	)
 
-	wg.Add(workers)
 	for range workers {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for task := range tasksCh {
 				result := m.convertWithRetry(task.Source, task.Dest)
 
@@ -173,7 +167,7 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 
 				resultsCh <- result
 			}
-		}()
+		})
 	}
 
 	go func() {
@@ -377,9 +371,7 @@ func CalculateWorkers(availableMemoryMB *int) int {
 }
 
 func calculateWorkersFor(availableMemoryMB *int, cpuCount int) int {
-	if cpuCount < 1 {
-		cpuCount = 1
-	}
+	cpuCount = max(cpuCount, 1)
 
 	if availableMemoryMB != nil {
 		workers := *availableMemoryMB / MemoryPerWorkerMB

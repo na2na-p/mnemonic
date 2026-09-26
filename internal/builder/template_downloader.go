@@ -306,8 +306,7 @@ func checkGitHubStatus(resp *http.Response) error {
 // リクエストがサーバーへ到達すらしなかったエラー）をNetworkError系へ分類する。
 // errRetryableDownloadでもラップするため、downloadFileのリトライ判定対象になる。
 func classifyHTTPError(err error) error {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.Timeout() {
+	if urlErr, ok := errors.AsType[*url.Error](err); ok && urlErr.Timeout() {
 		return fmt.Errorf("%w: %w: リクエストがタイムアウトしました: %w", ErrNetwork, errRetryableDownload, err)
 	}
 

@@ -1,6 +1,7 @@
 package converter_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -100,7 +101,7 @@ func buildTLG5Fixture(width int, colorDepth byte) []byte {
 		a           = tlg5FixtureA
 	)
 
-	header := append([]byte{}, tlg5Magic...)
+	header := bytes.Clone(tlg5Magic)
 	header = append(header, colorDepth)
 
 	buf := make([]byte, 4)
@@ -171,7 +172,7 @@ func buildTLG5Fixture(width int, colorDepth byte) []byte {
 // ヘルパー（本体データは無い。TLG6は本PRの時点でヘッダー解析のみ実装のため
 // 十分）。
 func buildTLG6HeaderFixture(colors, dataFlags byte, width, height, xBlockCount, yBlockCount uint32) []byte {
-	header := append([]byte{}, tlg6Magic...)
+	header := bytes.Clone(tlg6Magic)
 	header = append(header, colors, dataFlags)
 
 	buf := make([]byte, 4)
@@ -264,7 +265,7 @@ func TestTLGImageDecoder_GetInfo(t *testing.T) {
 		t.Parallel()
 
 		inner := buildTLG5Fixture(2, 32)
-		sds := append([]byte{}, sdsMagic...)
+		sds := bytes.Clone(sdsMagic)
 		sizeBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(inner))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
 		sds = append(sds, sizeBuf...)
@@ -339,7 +340,7 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		// 生TLG5ファイルが同一の画像にデコードされることを検証する。
 		inner := buildTLG5Fixture(2, 32)
 
-		sds := append([]byte{}, sdsMagic...)
+		sds := bytes.Clone(sdsMagic)
 		sizeBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(inner))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
 		sds = append(sds, sizeBuf...)

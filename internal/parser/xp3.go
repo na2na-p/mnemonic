@@ -621,18 +621,9 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([
 		return nil, 0, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
 	}
 
-	remaining := fileSize - segment.Offset
-	if remaining < 0 {
-		remaining = 0
-	}
-	if remaining > budget {
-		remaining = budget
-	}
+	remaining := min(max(fileSize-segment.Offset, 0), budget)
 
-	readSize := segment.Size
-	if readSize > remaining {
-		readSize = remaining
-	}
+	readSize := min(segment.Size, remaining)
 
 	buf := make([]byte, readSize)
 	n, err := io.ReadFull(f, buf)

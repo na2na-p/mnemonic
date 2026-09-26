@@ -101,8 +101,7 @@ func generateDebugKeystoreFile(destPath string) error {
 	)
 
 	if err != nil || res.ExitCode != 0 {
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
+		if _, ok := errors.AsType[*exec.Error](err); ok {
 			return errors.New("keytoolコマンドが見つかりません。JDKをインストールしてください")
 		}
 		if ctx.Err() != nil {

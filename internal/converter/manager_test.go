@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -294,12 +295,9 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		defer mu.Unlock()
 		assert.GreaterOrEqual(t, len(calls), 3)
 
-		found := false
-		for _, c := range calls {
-			if c[0] == 3 && c[1] == 3 {
-				found = true
-			}
-		}
+		found := slices.ContainsFunc(calls, func(c [2]int) bool {
+			return c[0] == 3 && c[1] == 3
+		})
 		assert.True(t, found)
 	})
 
@@ -682,8 +680,7 @@ func TestCalculateWorkers(t *testing.T) {
 	t.Run("正常系: 極端に少ないメモリでも最小1", func(t *testing.T) {
 		t.Parallel()
 
-		mem := 1
-		workers := converter.CalculateWorkers(&mem)
+		workers := converter.CalculateWorkers(new(1))
 
 		assert.Equal(t, 1, workers)
 	})

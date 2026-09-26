@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -43,10 +44,7 @@ func newInfoCmd() *cobra.Command {
 func printGameInfoTable(w io.Writer, gi info.GameInfo) {
 	fmt.Fprintln(w, "Game Info") //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
-	encoding := gi.DetectedEncoding
-	if encoding == "" {
-		encoding = "N/A"
-	}
+	encoding := cmp.Or(gi.DetectedEncoding, "N/A")
 
 	fmt.Fprintf(w, "Engine: %s\n", gi.Engine)  //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 	fmt.Fprintf(w, "Encoding: %s\n", encoding) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要

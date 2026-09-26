@@ -65,9 +65,7 @@ func TestTemplateCache_GetCachedTemplate(t *testing.T) {
 		mockManager.EXPECT().GetCacheDir().Return(tmpDir, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 0)
-		version := "v1.0.0"
-
-		result, ok := c.GetCachedTemplate(&version)
+		result, ok := c.GetCachedTemplate(new("v1.0.0"))
 
 		require.True(t, ok)
 		assert.Equal(t, templateFile, result)
@@ -105,9 +103,7 @@ func TestTemplateCache_IsCacheValid(t *testing.T) {
 		mockManager.EXPECT().GetTemplateCachePath("v1.0.0").Return(cachePath, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 7)
-		version := "v1.0.0"
-
-		assert.True(t, c.IsCacheValid(&version))
+		assert.True(t, c.IsCacheValid(new("v1.0.0")))
 	})
 
 	t.Run("正常系: 期限切れのキャッシュは無効", func(t *testing.T) {
@@ -122,9 +118,7 @@ func TestTemplateCache_IsCacheValid(t *testing.T) {
 		mockManager.EXPECT().GetTemplateCachePath("v1.0.0").Return(cachePath, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 7)
-		version := "v1.0.0"
-
-		assert.False(t, c.IsCacheValid(&version))
+		assert.False(t, c.IsCacheValid(new("v1.0.0")))
 	})
 
 	t.Run("正常系: refreshDaysで期限を変更できる", func(t *testing.T) {

@@ -16,9 +16,9 @@ func TestCalculateWorkersFor(t *testing.T) {
 		cpuCount          int
 		expected          int
 	}{
-		"正常系: メモリベースの計算(2000MBなら4ワーカー)": {intPtr(2000), 8, 4},
-		"正常系: CPUコア数による制限":              {intPtr(10000), 2, 2},
-		"正常系: 最小ワーカー数は1":                {intPtr(100), 8, 1},
+		"正常系: メモリベースの計算(2000MBなら4ワーカー)": {new(2000), 8, 4},
+		"正常系: CPUコア数による制限":              {new(10000), 2, 2},
+		"正常系: 最小ワーカー数は1":                {new(100), 8, 1},
 		"正常系: メモリ指定なしはCPUコア数のみで決定":      {nil, 4, 4},
 		"異常系: CPUコア数が0以下でも最小1":          {nil, 0, 1},
 	}
@@ -32,5 +32,3 @@ func TestCalculateWorkersFor(t *testing.T) {
 		})
 	}
 }
-
-func intPtr(v int) *int { return &v }

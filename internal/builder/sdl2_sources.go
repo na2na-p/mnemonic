@@ -346,8 +346,7 @@ func (f *SDL2SourceFetcher) downloadJavaFile(filename string) ([]byte, error) {
 // （ボディ転送中のタイムアウトがErrSDL2SourceFetchNetworkに誤分類される）ため、
 // net.Error単体で検査して両方のフェーズのタイムアウトを一様に扱う。
 func classifySDL2FetchError(err error) error {
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return fmt.Errorf("%w: %w: SDL2ソースのダウンロードがタイムアウトしました: %w",
 			ErrSDL2SourceFetcher, ErrSDL2SourceFetchTimeout, err)
 	}

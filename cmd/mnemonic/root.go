@@ -109,8 +109,7 @@ func runWithRoot(root *cobra.Command, args []string, stdin io.Reader, stdout, st
 		return int(apperr.ExitSuccess)
 	}
 
-	var exitErr *cliExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return int(exitErr.code)
 	}
 

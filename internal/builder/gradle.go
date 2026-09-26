@@ -3,6 +3,7 @@
 package builder
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -265,9 +266,7 @@ func capitalize(s string) string {
 // タイムアウトした場合はErrGradleTimeout、
 // ビルドが非ゼロ終了コードで終わった場合はErrGradleBuildFailedを返す。
 func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
-	if buildType == "" {
-		buildType = "release"
-	}
+	buildType = cmp.Or(buildType, "release")
 
 	task := "assemble" + capitalize(buildType)
 
@@ -307,9 +306,7 @@ func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 // 回帰）。標準名チェックのみに戻すとGradleビルド自体は成功しているのに
 // nilが返り、パイプラインが誤って失敗扱いになる。
 func (b *GradleBuilder) GetAPKPath(buildType string) *string {
-	if buildType == "" {
-		buildType = "release"
-	}
+	buildType = cmp.Or(buildType, "release")
 
 	apkDir := filepath.Join(b.projectPath, "app", "build", "outputs", "apk", buildType)
 

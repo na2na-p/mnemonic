@@ -19,7 +19,7 @@ func TestExecCommandRunner_Run(t *testing.T) {
 
 		runner := signer.NewExecCommandRunner()
 
-		result, err := runner.Run(context.Background(), []string{"echo", "-n", "ok"})
+		result, err := runner.Run(t.Context(), []string{"echo", "-n", "ok"})
 
 		require.NoError(t, err)
 		assert.Equal(t, 0, result.ExitCode)
@@ -31,7 +31,7 @@ func TestExecCommandRunner_Run(t *testing.T) {
 
 		runner := signer.NewExecCommandRunner()
 
-		result, err := runner.Run(context.Background(), []string{"sh", "-c", "echo fail 1>&2; exit 3"})
+		result, err := runner.Run(t.Context(), []string{"sh", "-c", "echo fail 1>&2; exit 3"})
 
 		require.NoError(t, err)
 		assert.Equal(t, 3, result.ExitCode)
@@ -43,7 +43,7 @@ func TestExecCommandRunner_Run(t *testing.T) {
 
 		runner := signer.NewExecCommandRunner()
 
-		_, err := runner.Run(context.Background(), nil)
+		_, err := runner.Run(t.Context(), nil)
 
 		assert.Error(t, err)
 	})
@@ -53,7 +53,7 @@ func TestExecCommandRunner_Run(t *testing.T) {
 
 		runner := signer.NewExecCommandRunner()
 
-		_, err := runner.Run(context.Background(), []string{"mnemonic-signer-nonexistent-command-xyz"})
+		_, err := runner.Run(t.Context(), []string{"mnemonic-signer-nonexistent-command-xyz"})
 
 		assert.Error(t, err)
 	})
