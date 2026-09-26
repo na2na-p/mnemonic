@@ -156,7 +156,7 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 	}
 
 	b.log().Info(fmt.Sprintf(
-		"アセット変換: 成功 %d件 / 失敗 %d件 / スキップ %d件",
+		"アセット変換: 成功 %d 件 / 失敗 %d 件 / スキップ %d 件",
 		summary.Success, summary.Failed, summary.Skipped,
 	))
 	logConversionNotes(b.log(), a.extractDir, summary.Results)
@@ -458,20 +458,22 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 // newTemplatePreparer はprojectDirのテンプレートを準備するTemplatePreparerを返す。
 // SDL2ソースキャッシュの復元・保存の失敗はパイプラインのLoggerへ警告として報告する。
 func (b *BuildPipeline) newTemplatePreparer(projectDir string) *builder.TemplatePreparer {
-	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
+	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache(b.log()))
 	preparer.Warn = b.log().Warning
 
 	return preparer
 }
 
 // newSDL2SourceCache はSDL2ソースキャッシュを返す。キャッシュディレクトリを
-// 解決できない場合はnilを返す。
+// 解決できない場合は原因をloggerへ警告してnilを返す。
 //
 // why not: キャッシュは最適化に過ぎないため、キャッシュディレクトリの解決に
 // 失敗しても、ソースをダウンロードできるビルドまで失敗させない。
-func newSDL2SourceCache() *builder.SDL2SourceCache {
+func newSDL2SourceCache(logger Logger) *builder.SDL2SourceCache {
 	dir, err := cache.Dir()
 	if err != nil {
+		logger.Warning(fmt.Sprintf("キャッシュディレクトリを解決できないため、SDL2ソースのキャッシュを使わずに続行します: %v", err))
+
 		return nil
 	}
 

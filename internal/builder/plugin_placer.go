@@ -23,8 +23,12 @@ func newPluginPlacer(projectDir string) *pluginPlacer {
 // System.loadLibraryで読み込み可能になる。スクリプト変換時にlibプレフィックス
 // 付きのフルファイル名を指定するため、libプレフィックス付きのファイルのみ
 // 配置すれば良い。pluginsInfoがnilの場合は何も行わない（TemplatePreparer.Prepare
-// のdocコメント参照）。プラグインファイルが見つからない場合はスキップする
-// （ベストエフォートとしてエラーを握りつぶす）。
+// のdocコメント参照）。
+//
+// why not（見つからない・読めないプラグインを飛ばさない理由）: PluginFetcherが
+// 返すpluginsInfoは、書き込んだか存在を確認したファイルのパスだけを持つため、
+// 配置時点で開けないのは想定外の状態である。飛ばすとそのプラグインを欠いたAPKが
+// 何の報告もなくできあがるので、パスを添えたエラーでビルドを止める。
 func (p *pluginPlacer) Place(pluginsInfo *PluginsInfo) error {
 	if pluginsInfo == nil {
 		return nil
@@ -39,10 +43,6 @@ func (p *pluginPlacer) Place(pluginsInfo *PluginsInfo) error {
 		}
 
 		for _, srcPath := range pluginsInfo.GetAllPathsForABI(abi) {
-			if _, err := os.Stat(srcPath); err != nil {
-				continue
-			}
-
 			destPath := filepath.Join(abiDir, filepath.Base(srcPath))
 			if err := copyFile(srcPath, destPath); err != nil {
 				return fmt.Errorf("%w: プラグインのコピーに失敗しました: %s: %w", ErrTemplatePreparer, srcPath, err)
