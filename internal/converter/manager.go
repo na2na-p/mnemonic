@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +124,9 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 
 // ConvertFiles は複数ファイルを並列変換し、サマリーを返す。
 //
+// 同じDestを持つタスクが2件以上ある場合、それらはいずれも変換せず、
+// ErrDestinationCollisionを恒久的な失敗としてラップしたStatusFailedの結果とする。
+//
 // why not: Goではerrgroup.WithContextは最初のエラーで打ち切る挙動になるが、
 // convertWithRetry内で既に全ての失敗を捕捉しStatusFailedのConversionResultへ変換している
 // ため「エラーで打ち切る」概念がそもそも無い。そのため、MaxWorkers個の
@@ -133,6 +137,8 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	summary := ConversionSummary{Total: len(files)}
 
 	workers := max(m.MaxWorkers, 1)
+
+	collisions := destinationCollisions(files)
 
 	tasksCh := make(chan FileTask)
 	resultsCh := make(chan ConversionResult, len(files))
@@ -146,7 +152,12 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	for range workers {
 		wg.Go(func() {
 			for task := range tasksCh {
-				result := m.convertWithRetry(task.Source, task.Dest)
+				var result ConversionResult
+				if err, collided := collisions[task.Dest]; collided {
+					result = ConversionResult{SourcePath: task.Source, Status: StatusFailed, Message: err.Error()}
+				} else {
+					result = m.convertWithRetry(task.Source, task.Dest)
+				}
 
 				// why: ロック解放後にコールバックを呼ぶと、複数のgoroutineが
 				// completedCountの読み取り値をまたいで並行にコールバックを
@@ -193,6 +204,37 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	}
 
 	return summary
+}
+
+// destinationCollisions は2件以上のタスクが共有するDestごとに、共有する全ての
+// 変換元をパス順に列挙したエラーを返す。
+//
+// why not: 重複したタスクのうち先勝ち/後勝ちで片方だけ変換すると、どちらの素材が
+// APKに入るかが完了順や列挙順に依存し再現しない。そのため重複した全タスクを失敗とする。
+//
+// why not: Destは大文字小文字を同一視せず、文字列の完全一致で比較する。大文字小文字
+// だけが異なる出力先は、区別しないFS（macOS既定のAPFS等）では同一ファイルになり本検査
+// では検出できない。しかし区別するFSでは別ファイルであり、畳み込むと誤検出するため
+// 文字列一致に留める。
+func destinationCollisions(files []FileTask) map[string]error {
+	sourcesByDest := make(map[string][]string, len(files))
+	for _, f := range files {
+		sourcesByDest[f.Dest] = append(sourcesByDest[f.Dest], f.Source)
+	}
+
+	collisions := make(map[string]error)
+	for dest, sources := range sourcesByDest {
+		if len(sources) < 2 {
+			continue
+		}
+
+		slices.Sort(sources)
+		collisions[dest] = permanentError(
+			fmt.Errorf("%w: %s ← %s", ErrDestinationCollision, dest, strings.Join(sources, ", ")),
+		)
+	}
+
+	return collisions
 }
 
 // convertWithRetry はリトライ付きで単一ファイルを変換する。

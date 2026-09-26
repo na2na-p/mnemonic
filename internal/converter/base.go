@@ -19,6 +19,10 @@ var (
 	// ErrPermanentFailure は同じ入力を再試行しても解消しない変換失敗を表す。
 	// Converterはこれを%wでラップしたerrを返し、呼び出し側にリトライ不要を伝える。
 	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
+	// ErrDestinationCollision は複数の変換元が同じ出力先へ変換される場合のエラー。
+	// ConversionManagerはこれをErrPermanentFailureでラップし、該当する変換元を
+	// いずれも変換しない。
+	ErrDestinationCollision = errors.New("出力先が重複しています")
 )
 
 // ConversionStatus は変換ステータスを表す。
@@ -35,7 +39,8 @@ const (
 //
 // Converter.Convertがerr=nilで返す結果のStatusはStatusSuccessかStatusSkippedに
 // 限られる。StatusFailedはConversionManagerが組み立てる失敗の要約にだけ現れ、
-// DestPathは空文字列となる。そのMessageはConvertのerrの文言、または
+// DestPathは空文字列となる。そのMessageはConvertのerrの文言、出力先が重複した
+// 場合のErrDestinationCollisionを含むエラーの文言、または
 // RetryConfig.MaxAttemptsが0以下で一度も変換を試みなかった場合の
 // 「変換に失敗しました」となる。
 type ConversionResult struct {

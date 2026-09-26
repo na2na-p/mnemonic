@@ -166,8 +166,11 @@ func TestConvertMidiFileListWith(t *testing.T) {
 		wantFailed []string
 		// wantMessage は失敗した各ファイルのパスに続く「: 」の直後に現れるべき文言の先頭部分。
 		wantMessage string
-		wantRemoved []string
-		wantKept    []string
+		// wantCollision は出力先の重複として報告されるべき「出力先 ← 変換元, …」を
+		// dir相対パスで並べたもの（先頭が出力先、以降が変換元のパス順）。
+		wantCollision []string
+		wantRemoved   []string
+		wantKept      []string
 	}{
 		{
 			name:        "正常系: 変換に成功したMIDIファイルは削除し待機しない",
@@ -205,6 +208,15 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			wantFailed:  []string{"ending.midi", "opening.mid"},
 			wantMessage: transientMessage,
 			wantKept:    []string{"opening.mid", "ending.midi"},
+		},
+		{
+			name:          "異常系: 同じ.oggへ変換される.midと.midiはいずれも変換せず重複した変換元を全て報告する",
+			sources:       []string{"bgm/foo.midi", "bgm/foo.mid"},
+			wantRenders:   0,
+			wantFailed:    []string{"bgm/foo.mid", "bgm/foo.midi"},
+			wantMessage:   "再試行しても解消しない変換失敗です: 出力先が重複しています: ",
+			wantCollision: []string{"bgm/foo.ogg", "bgm/foo.mid", "bgm/foo.midi"},
+			wantKept:      []string{"bgm/foo.mid", "bgm/foo.midi"},
 		},
 	}
 
@@ -255,6 +267,14 @@ func TestConvertMidiFileListWith(t *testing.T) {
 					index := strings.Index(msg, entry)
 					assert.Greater(t, index, lastIndex, "失敗はパス順に並ぶ: %s", rel)
 					lastIndex = index
+				}
+
+				if len(tt.wantCollision) > 0 {
+					collided := make([]string, 0, len(tt.wantCollision)-1)
+					for _, rel := range tt.wantCollision[1:] {
+						collided = append(collided, abs(rel))
+					}
+					assert.Contains(t, msg, abs(tt.wantCollision[0])+" ← "+strings.Join(collided, ", "))
 				}
 			}
 
