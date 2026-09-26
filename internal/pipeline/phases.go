@@ -21,106 +21,104 @@ var ErrGradleAPKMissing = errors.New("Gradleビルド後にAPKファイルが見
 
 // executeAnalyze はANALYZEフェーズを実行する: 入力ファイルの形式を確認し、
 // 必要に応じて暗号化チェックを行う。
-func (b *BuildPipeline) executeAnalyze() error {
+func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error) {
 	suffix := strings.ToLower(filepath.Ext(b.config.InputPath))
 
 	switch suffix {
 	case ".exe":
 		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
 		if err != nil {
-			return err
+			return a, err
 		}
 
 		xp3List, err := extractor.FindEmbeddedXP3()
 		if err != nil {
-			return err
+			return a, err
 		}
 		if len(xp3List) == 0 {
-			return fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
+			return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
 		}
 	case ".xp3":
 		checker := parser.NewXP3EncryptionChecker(b.config.InputPath)
 		if err := checker.RaiseIfEncrypted(); err != nil {
-			return err
+			return a, err
 		}
 	}
 
-	return nil
+	return a, nil
 }
 
 // executeExtract はEXTRACTフェーズを実行する: XP3アーカイブを展開し、
 // ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を抽出してから展開する。
-func (b *BuildPipeline) executeExtract() error {
-	extractDir, err := os.MkdirTemp("", "mnemonic_extract_")
+func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error) {
+	extractDir, err := b.newTempDir("mnemonic_extract_")
 	if err != nil {
-		return fmt.Errorf("一時ディレクトリの作成に失敗しました: %w", err)
+		return a, err
 	}
-	b.tempDirs = append(b.tempDirs, extractDir)
-	b.extractDir = extractDir
+	a.extractDir = extractDir
 
 	suffix := strings.ToLower(filepath.Ext(b.config.InputPath))
 
 	if suffix == ".exe" {
 		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
 		if err != nil {
-			return err
+			return a, err
 		}
 
 		xp3Files, err := extractor.ExtractAll(extractDir)
 		if err != nil {
-			return err
+			return a, err
 		}
 
 		for _, xp3File := range xp3Files {
 			archive, err := parser.NewXP3Archive(xp3File)
 			if err != nil {
-				return err
+				return a, err
 			}
 			if err := archive.ExtractAll(extractDir); err != nil {
-				return err
+				return a, err
 			}
 		}
 	} else {
 		archive, err := parser.NewXP3Archive(b.config.InputPath)
 		if err != nil {
-			return err
+			return a, err
 		}
 		if err := archive.ExtractAll(extractDir); err != nil {
-			return err
+			return a, err
 		}
 	}
 
 	detector, err := parser.NewGameDetector(extractDir)
 	if err != nil {
-		return err
+		return a, err
 	}
 
 	structure, err := detector.Detect()
 	if err != nil {
-		return err
+		return a, err
 	}
-	b.gameStructure = &structure
+	a.gameStructure = &structure
 
-	return nil
+	return a, nil
 }
 
 // executeConvert はCONVERTフェーズを実行する: 抽出されたアセットをAndroid
 // 互換形式に変換する。まず全ファイルをコピーし（ゲームコアファイルを含む）、
 // その後変換対象ファイルを変換（上書き）する。
-func (b *BuildPipeline) executeConvert() error {
-	if b.extractDir == "" {
-		return errors.New("抽出フェーズが完了していません")
+func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error) {
+	if a.extractDir == "" {
+		return a, errors.New("抽出フェーズが完了していません")
 	}
 
-	convertDir, err := os.MkdirTemp("", "mnemonic_convert_")
+	convertDir, err := b.newTempDir("mnemonic_convert_")
 	if err != nil {
-		return fmt.Errorf("一時ディレクトリの作成に失敗しました: %w", err)
+		return a, err
 	}
-	b.tempDirs = append(b.tempDirs, convertDir)
-	b.convertDir = convertDir
+	a.convertDir = convertDir
 
-	if err := copyTree(b.extractDir, b.convertDir); err != nil {
-		return err
+	if err := copyTree(a.extractDir, a.convertDir); err != nil {
+		return a, err
 	}
 
 	converters := []converter.Converter{
@@ -142,12 +140,12 @@ func (b *BuildPipeline) executeConvert() error {
 	// として明示的に報告する（「エラーはerrorとして呼び出し元へ伝播する」
 	// という他フェーズと同じ契約に沿うほうが、黙って空の変換結果を返すより
 	// 安全なため）。
-	summary, err := manager.ConvertDirectory(b.extractDir, b.convertDir, true)
+	summary, err := manager.ConvertDirectory(a.extractDir, a.convertDir, true)
 	if err != nil {
-		return fmt.Errorf("アセット変換に失敗しました: %w", err)
+		return a, fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
-	return b.finalizeConvertedTree(b.convertDir, summary, b.newMidiConverter())
+	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter())
 }
 
 // finalizeConvertedTree はアセット変換済みのdirectoryへ後処理を順に適用する。
@@ -210,30 +208,29 @@ func (b *BuildPipeline) finalizeConvertedTree(
 
 // executeBuild はBUILDフェーズを実行する: Gradleビルドを使用してAPKを
 // 生成する。テンプレートを展開し、ゲームファイルをassetsに配置してビルドする。
-func (b *BuildPipeline) executeBuild() error {
-	if b.convertDir == "" {
-		return errors.New("変換フェーズが完了していません")
+func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
+	if a.convertDir == "" {
+		return a, errors.New("変換フェーズが完了していません")
 	}
 
-	projectDir, err := os.MkdirTemp("", "mnemonic_project_")
+	projectDir, err := b.newTempDir("mnemonic_project_")
 	if err != nil {
-		return fmt.Errorf("一時ディレクトリの作成に失敗しました: %w", err)
+		return a, err
 	}
-	b.tempDirs = append(b.tempDirs, projectDir)
-	b.projectDir = projectDir
+	a.projectDir = projectDir
 
 	templatePath, err := b.resolveTemplate()
 	if err != nil {
-		return err
+		return a, err
 	}
 
 	if err := extractTemplateZip(templatePath, projectDir); err != nil {
-		return err
+		return a, err
 	}
 
 	baseName := strings.TrimSuffix(filepath.Base(b.config.InputPath), filepath.Ext(b.config.InputPath))
-	if b.gameStructure != nil && b.gameStructure.Title != "" {
-		baseName = b.gameStructure.Title
+	if a.gameStructure != nil && a.gameStructure.Title != "" {
+		baseName = a.gameStructure.Title
 	}
 
 	packageName := b.config.PackageName
@@ -250,28 +247,28 @@ func (b *BuildPipeline) executeBuild() error {
 	plugins := b.fetchPlugins()
 
 	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
-	if err := preparer.Prepare(packageName, appName, b.convertDir, b.findGameIcon(), plugins); err != nil {
-		return err
+	if err := preparer.Prepare(packageName, appName, a.convertDir, b.findGameIcon(a.extractDir), plugins); err != nil {
+		return a, err
 	}
 
 	gradleTimeout := time.Duration(b.config.GradleTimeoutSeconds) * time.Second
 
 	gradleBuilder, err := builder.NewGradleBuilder(projectDir, gradleTimeout, nil)
 	if err != nil {
-		return err
+		return a, err
 	}
 
 	result, err := gradleBuilder.Build("release")
 	if err != nil {
-		return err
+		return a, err
 	}
 	if !result.Success || result.APKPath == nil {
-		return fmt.Errorf("%w: %s", ErrGradleAPKMissing, result.OutputLog)
+		return a, fmt.Errorf("%w: %s", ErrGradleAPKMissing, result.OutputLog)
 	}
 
-	b.unsignedAPK = *result.APKPath
+	a.unsignedAPK = *result.APKPath
 
-	return nil
+	return a, nil
 }
 
 // newSDL2SourceCache はSDL2ソースキャッシュを返す。キャッシュディレクトリを
@@ -325,40 +322,40 @@ func (b *BuildPipeline) resolveTemplate() (string, error) {
 
 // executeSign はSIGNフェーズを実行する: ビルドされたAPKにzipalignを適用し、
 // キーストア指定時は署名鍵で、未指定時はデバッグ鍵で署名を行う。
-func (b *BuildPipeline) executeSign() error {
-	if b.unsignedAPK == "" {
-		return errors.New("ビルドフェーズが完了していません")
+func (b *BuildPipeline) executeSign(a buildArtifacts) (buildArtifacts, error) {
+	if a.unsignedAPK == "" {
+		return a, errors.New("ビルドフェーズが完了していません")
 	}
 
 	outputPath := b.config.OutputPath
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
-		return fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
+		return a, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
 	zipaligner := signer.NewDefaultZipalignRunner(nil)
 	alignedAPK := withSuffix(outputPath, ".aligned.apk")
 
-	if _, err := zipaligner.Align(b.unsignedAPK, alignedAPK); err != nil {
-		return err
+	if _, err := zipaligner.Align(a.unsignedAPK, alignedAPK); err != nil {
+		return a, err
 	}
 
 	keystoreConfig, err := b.resolveKeystoreConfig()
 	if err != nil {
-		return err
+		return a, err
 	}
 
 	if err := copyFile(alignedAPK, outputPath); err != nil {
-		return fmt.Errorf("署名前APKのコピーに失敗しました: %w", err)
+		return a, fmt.Errorf("署名前APKのコピーに失敗しました: %w", err)
 	}
 
 	apkSigner := signer.NewDefaultApkSignerRunner(nil)
 	if _, err := apkSigner.Sign(outputPath, keystoreConfig); err != nil {
-		return err
+		return a, err
 	}
 
 	_ = os.Remove(alignedAPK)
 
-	return nil
+	return a, nil
 }
 
 // resolveKeystoreConfig は署名に使うキーストア設定を決定する。

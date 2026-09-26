@@ -28,12 +28,11 @@ func TestBuildPipeline_FindGameIcon_FallsBackToExeExtraction(t *testing.T) {
 
 		p := newTestPipeline(t)
 		extractDir := t.TempDir()
-		p.extractDir = extractDir
 
 		extractedIcon := filepath.Join(extractDir, "extracted_icon.png")
 		require.NoError(t, os.WriteFile(extractedIcon, []byte("\x89PNG\r\n\x1a\n"), 0o600))
 
-		result := p.findGameIconUsing(fakeIconExtractor{path: extractedIcon})
+		result := p.findGameIconUsing(extractDir, fakeIconExtractor{path: extractedIcon})
 
 		assert.Equal(t, extractedIcon, result)
 	})
@@ -43,9 +42,8 @@ func TestBuildPipeline_FindGameIcon_FallsBackToExeExtraction(t *testing.T) {
 
 		p := newTestPipeline(t)
 		extractDir := t.TempDir()
-		p.extractDir = extractDir
 
-		result := p.findGameIconUsing(fakeIconExtractor{err: errors.New("抽出失敗")})
+		result := p.findGameIconUsing(extractDir, fakeIconExtractor{err: errors.New("抽出失敗")})
 
 		assert.Empty(t, result)
 	})
@@ -55,13 +53,12 @@ func TestBuildPipeline_FindGameIcon_FallsBackToExeExtraction(t *testing.T) {
 
 		p := newTestPipeline(t)
 		extractDir := t.TempDir()
-		p.extractDir = extractDir
 		pngPath := filepath.Join(extractDir, "icon.png")
 		require.NoError(t, os.WriteFile(pngPath, []byte("\x89PNG\r\n\x1a\n"), 0o600))
 
 		// このエクストラクタが呼ばれた場合は必ずエラーになるため、
 		// 呼ばれていないことを間接的に検証する。
-		result := p.findGameIconUsing(fakeIconExtractor{err: errors.New("呼ばれてはいけない")})
+		result := p.findGameIconUsing(extractDir, fakeIconExtractor{err: errors.New("呼ばれてはいけない")})
 
 		assert.Equal(t, pngPath, result)
 	})
