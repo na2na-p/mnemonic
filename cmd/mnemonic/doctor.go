@@ -15,6 +15,8 @@ func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "依存ツールをチェックする",
+		Long: "ビルドに必要な依存ツールをチェックする。\n\n" +
+			"必須ツールが不足している場合は終了コード3で終了する。",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			results := doctor.CheckAllDependencies()
 
@@ -31,7 +33,7 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout())                       //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 				fmt.Fprintln(cmd.OutOrStdout(), "エラー: 必須ツールが不足しています") //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
-				return exitWith(apperr.ExitError)
+				return exitWith(apperr.ExitDependencyError)
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout())                     //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要

@@ -95,6 +95,8 @@ mnemonic build <input.exe> -o <output.apk>
 mnemonic doctor
 ```
 
+必須ツールが不足している場合は終了コード3で終了する。
+
 ### ゲーム構成の解析表示
 
 ```bash

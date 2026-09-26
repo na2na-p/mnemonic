@@ -28,13 +28,11 @@ func (e *cliExitError) Error() string { return "" }
 // exitWith はcodeがExitSuccessでない場合にcliExitErrorを返す
 // （codeがExitSuccessの場合はnil、すなわちコマンド成功を表す）。
 //
-// why not: 現状すべての呼び出し元はapperr.ExitErrorを渡しており、
-// build/doctor/cacheコマンドの全失敗経路を一律の終了コードとして扱っている
-// （テスト互換性のため意図的な単純化）。apperr.ExitInvalidInput/
-// ExitDependencyErrorというより詳細な終了コードは、将来呼び出し元ごとに
-// 使い分ける拡張余地として型を残す。
-//
-//nolint:unparam // 上記の理由によりcodeは現状ExitError固定だが、型はapperr.ExitCodeのまま残す
+// why not: build/info/cacheのRunE内の失敗経路は原因ごとに終了コードを分けず、
+// 一律apperr.ExitErrorとする。原因別の終了コードはCI等が機械的に分岐する価値が
+// ある場合にだけ導入する方針で、doctorだけは必須ツール不足を
+// apperr.ExitDependencyErrorで返し、「実行環境が未整備」を他の失敗と区別できる
+// ようにしている。
 func exitWith(code apperr.ExitCode) error {
 	if code == apperr.ExitSuccess {
 		return nil
