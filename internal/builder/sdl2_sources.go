@@ -187,8 +187,9 @@ func (c *SDL2SourceCache) Save(sourcesDir string) error {
 // 次の保存時に掃除する。parentDirはほかのキャッシュと共有するため、接頭辞が一致する
 // ものだけを消す。掃除に失敗しても今回の保存には影響しないため、エラーは返さない。
 // 同時に走る別のSaveが組み立て中の一時ディレクトリも消しうるが、ロックは設けない。
-// FetchはSaveの失敗を無視し、必須ファイルの欠けたキャッシュはIsValidが無効と判定して
-// 次回の取得で再ダウンロードされるため、この競合でビルドは失敗しない。
+// FetchはSaveの失敗を警告に留めてビルドを続け、必須ファイルの欠けたキャッシュは
+// IsValidが無効と判定して次回の取得で再ダウンロードされるため、この競合でビルドは
+// 失敗しない。
 func removeStaleSDL2CacheTempDirs(parentDir string) {
 	entries, err := os.ReadDir(parentDir)
 	if err != nil {
@@ -281,6 +282,14 @@ type SDL2SourceFetcher struct {
 	// （TemplateDownloader.APIBaseURLと同じ方針）。空文字列の場合は
 	// defaultSDL2BaseURLを使用する。
 	BaseURL string
+	// Warn はキャッシュの復元・保存の失敗など、ビルドを止めない失敗の報告先。
+	// nilの場合は報告しない。
+	//
+	// why not: 報告先にinternal/pipelineのLoggerは使えない。pipelineが本パッケージを
+	// importしているため、逆向きのimportは循環importになる。本パッケージ側に
+	// Warningだけを持つインターフェースを定義する手もあるが、必要な操作は1つだけ
+	// なので、型を増やさない関数型にする（呼び出し側はLogger.Warningのメソッド値を渡す）。
+	Warn func(message string)
 }
 
 // NewSDL2SourceFetcher はSDL2SourceFetcherを初期化する。
@@ -328,13 +337,16 @@ func (f *SDL2SourceFetcher) baseURL() string {
 
 // Fetch はSDL2 Javaソースをダウンロードまたはキャッシュから復元して配置する。
 // 有効なキャッシュの復元に失敗した場合はダウンロードへフォールバックする。
+// キャッシュの復元・保存の失敗はエラーにせずWarnへ報告する。
 func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	if f.Cache != nil && f.Cache.IsValid() {
 		// why not: キャッシュは最適化に過ぎないため、復元や保存の失敗で
 		// ソースを取得できるビルドまで失敗させるより、再ダウンロードを選ぶ。
-		if err := f.Cache.RestoreTo(destDir); err == nil {
+		err := f.Cache.RestoreTo(destDir)
+		if err == nil {
 			return nil
 		}
+		f.warn(fmt.Sprintf("SDL2 Javaソースをキャッシュから復元できなかったため再ダウンロードします: %v", err))
 	}
 
 	sdlAppDir := filepath.Join(destDir, "org", "libsdl", "app")
@@ -354,10 +366,18 @@ func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	}
 
 	if f.Cache != nil {
-		_ = f.Cache.Save(destDir)
+		if err := f.Cache.Save(destDir); err != nil {
+			f.warn(fmt.Sprintf("SDL2 Javaソースをキャッシュに保存できませんでしたが、ビルドは続けます: %v", err))
+		}
 	}
 
 	return nil
+}
+
+func (f *SDL2SourceFetcher) warn(message string) {
+	if f.Warn != nil {
+		f.Warn(message)
+	}
 }
 
 func (f *SDL2SourceFetcher) downloadJavaFile(filename string) ([]byte, error) {

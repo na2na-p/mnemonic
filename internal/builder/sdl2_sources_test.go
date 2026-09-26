@@ -5,7 +5,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -783,6 +785,147 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 
 		require.ErrorIs(t, err, builder.ErrSDL2SourceFetchNetwork)
 		assert.ErrorContains(t, err, "ダウンロードに失敗")
+	})
+}
+
+// warnRecorder はSDL2SourceFetcher.Warnへ渡した警告を記録する。
+type warnRecorder struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (r *warnRecorder) warn(message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.messages = append(r.messages, message)
+}
+
+func (r *warnRecorder) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return slices.Clone(r.messages)
+}
+
+func TestSDL2SourceFetcher_FetchWarn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// setup はbase配下にキャッシュを用意し、警告に含まれるべき文字列を返す
+		// （警告を期待しない場合は空）。
+		setup      func(t *testing.T, base string) (cache *builder.SDL2SourceCache, wantContains []string)
+		needNoRoot bool
+	}{
+		{
+			name: "正常系: キャッシュ保存に失敗した場合は保存エラーを1回警告する",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+				t.Helper()
+
+				cacheParent := filepath.Join(base, "cache-parent")
+				require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+
+				return builder.NewSDL2SourceCache(cacheParent), []string{"キャッシュ保存に失敗しました", cacheParent}
+			},
+		},
+		{
+			name: "正常系: 有効なキャッシュの復元に失敗した場合は復元エラーを1回警告して再ダウンロードする",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+				t.Helper()
+
+				cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+				writeValidSDL2Cache(t, cache)
+				cachedFile := filepath.Join(cache.CachePath(), "org", "libsdl", "app", "SDLActivity.java")
+				require.NoError(t, os.Chmod(cachedFile, 0o000))
+				t.Cleanup(func() {
+					require.NoError(t, os.Chmod(cachedFile, 0o600))
+				})
+
+				return cache, []string{"キャッシュ復元に失敗しました", cachedFile}
+			},
+			needNoRoot: true,
+		},
+		{
+			name: "正常系: ダウンロードしてキャッシュに保存できた場合は警告しない",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+				t.Helper()
+
+				return builder.NewSDL2SourceCache(filepath.Join(base, "cache")), nil
+			},
+		},
+		{
+			name: "正常系: 有効なキャッシュから復元できた場合は警告しない",
+			setup: func(t *testing.T, base string) (*builder.SDL2SourceCache, []string) {
+				t.Helper()
+
+				cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+				writeValidSDL2Cache(t, cache)
+
+				return cache, nil
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tc.needNoRoot && os.Geteuid() == 0 {
+				t.Skip("rootではパーミッションを除去しても読み込みを拒否できない")
+			}
+
+			base := t.TempDir()
+			cache, wantContains := tc.setup(t, base)
+
+			server := httptest.NewServer(sdl2FetcherHandler(t))
+			t.Cleanup(server.Close)
+
+			recorder := &warnRecorder{}
+			f := builder.NewSDL2SourceFetcher(0, cache)
+			f.BaseURL = server.URL
+			f.Warn = recorder.warn
+			destDir := filepath.Join(base, "dest")
+			require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+			require.NoError(t, f.Fetch(destDir))
+
+			for _, filename := range builder.SDL2RequiredFiles {
+				assert.FileExists(t, filepath.Join(destDir, "org", "libsdl", "app", filename))
+			}
+
+			warnings := recorder.recorded()
+			if len(wantContains) == 0 {
+				assert.Empty(t, warnings)
+				return
+			}
+
+			require.Len(t, warnings, 1)
+			for _, want := range wantContains {
+				assert.Equal(t, 1, strings.Count(warnings[0], want), "警告に%qを1回だけ含める: %s", want, warnings[0])
+			}
+		})
+	}
+
+	t.Run("正常系: Warn未設定ならキャッシュ保存に失敗してもpanicせずダウンロード結果を返す", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		cacheParent := filepath.Join(base, "cache-parent")
+		require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+
+		server := httptest.NewServer(sdl2FetcherHandler(t))
+		t.Cleanup(server.Close)
+
+		f := builder.NewSDL2SourceFetcher(0, builder.NewSDL2SourceCache(cacheParent))
+		f.BaseURL = server.URL
+		require.Nil(t, f.Warn)
+		destDir := filepath.Join(base, "dest")
+		require.NoError(t, os.MkdirAll(destDir, 0o750))
+
+		assert.NotPanics(t, func() {
+			assert.NoError(t, f.Fetch(destDir))
+		})
 	})
 }
 

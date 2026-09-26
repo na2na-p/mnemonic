@@ -296,10 +296,9 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 		return a, err
 	}
 
-	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
 	plugins := b.fetchPlugins()
 
-	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
+	preparer := b.newTemplatePreparer(projectDir)
 	if err := preparer.Prepare(packageName, appName, a.convertDir, b.findGameIcon(a.extractDir), plugins); err != nil {
 		return a, err
 	}
@@ -322,6 +321,15 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 	a.unsignedAPK = *result.APKPath
 
 	return a, nil
+}
+
+// newTemplatePreparer はprojectDirのテンプレートを準備するTemplatePreparerを返す。
+// SDL2ソースキャッシュの復元・保存の失敗はパイプラインのLoggerへ警告として報告する。
+func (b *BuildPipeline) newTemplatePreparer(projectDir string) *builder.TemplatePreparer {
+	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
+	preparer.Warn = b.log().Warning
+
+	return preparer
 }
 
 // newSDL2SourceCache はSDL2ソースキャッシュを返す。キャッシュディレクトリを

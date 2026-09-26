@@ -35,13 +35,16 @@ func (b *BuildPipeline) removePluginDirectory(directory string) error {
 }
 
 // fetchPlugins はkrkrsdl2プラグイン(extrans/wuvorbis)を取得する。
-// 取得に失敗してもビルドは継続する（呼び出し元はnilを「プラグインなし」
-// として扱う）。
+// 取得に失敗してもビルドは継続し、失敗を警告として報告する（呼び出し元は
+// nilを「プラグインなし」として扱う）。
 func (b *BuildPipeline) fetchPlugins() *builder.PluginsInfo {
-	fetcher := builder.NewPluginFetcher("", nil)
+	return fetchPluginsUsing(builder.NewPluginFetcher("", nil), b.log())
+}
 
+func fetchPluginsUsing(fetcher *builder.PluginFetcher, logger Logger) *builder.PluginsInfo {
 	info, err := fetcher.GetPlugins()
 	if err != nil {
+		logger.Warning(fmt.Sprintf("プラグインを取得できなかったためプラグイン無しでビルドを続けます: %v", err))
 		return nil
 	}
 

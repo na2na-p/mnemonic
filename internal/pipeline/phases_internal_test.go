@@ -238,3 +238,31 @@ func TestConversionFailureError(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildPipeline_NewTemplatePreparer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{name: "正常系: TemplatePreparerの警告をパイプラインのLoggerへWARNINGとして流す", message: "x"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			b := newTestPipeline(t)
+			logger := &recordingLogger{}
+			b.SetLogger(logger)
+
+			// why not: t.SetenvでHOMEを差し替えない（t.Parallelと併用できない）。構築は
+			// キャッシュのパスを組み立てるだけでファイルシステムに触れず、Warnの呼び出しも
+			// キャッシュを読み書きしないため、実キャッシュディレクトリは変化しない。
+			b.newTemplatePreparer(t.TempDir()).Warn(tc.message)
+
+			assert.Equal(t, []string{tc.message}, logger.messages("WARNING"))
+		})
+	}
+}
