@@ -95,6 +95,62 @@ func TestDependencies_ContainsOptionalTools(t *testing.T) {
 	assert.Equal(t, "--version", dep.VersionFlag)
 	assert.False(t, dep.Required)
 	assert.Contains(t, dep.Note, "MIDI")
+	// 表示する下限バージョンがconverterの判定に使う値とずれないことを固定する。
+	assert.Equal(t, converter.DynamicSampleLoadingMinVersion()+" 以上ならメモリ使用量を抑えたレンダリングを行います", dep.FoundNote)
+}
+
+// TestCheckDependency_FoundNote はツールが見つかった場合に限り、FoundNoteが
+// 利用者向けメッセージとして表示されることを検証する。
+func TestCheckDependency_FoundNote(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go command not found in PATH")
+	}
+
+	tests := []struct {
+		name        string
+		command     string
+		postCheck   func() (bool, string)
+		wantFound   bool
+		wantMessage string
+	}{
+		{
+			name:        "正常系: 見つかった場合はFoundNoteがメッセージになる",
+			command:     "go",
+			wantFound:   true,
+			wantMessage: "見つかった場合の補足",
+		},
+		{
+			name:        "異常系: 見つからない場合はFoundNoteを表示せず理由のみになる",
+			command:     "nonexistent_command_xyz123",
+			wantFound:   false,
+			wantMessage: "コマンド 'nonexistent_command_xyz123' が見つかりません",
+		},
+		{
+			name:        "異常系: 追加検査に失敗した場合はFoundNoteを表示せず理由のみになる",
+			command:     "go",
+			postCheck:   func() (bool, string) { return false, "追加検査の失敗理由" },
+			wantFound:   false,
+			wantMessage: "追加検査の失敗理由",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			info := doctor.DependencyInfo{
+				Name: "Test", Command: tt.command, VersionFlag: "version", Required: false,
+				FoundNote: "見つかった場合の補足", PostCheck: tt.postCheck,
+			}
+
+			result := doctor.CheckDependency(info)
+
+			assert.Equal(t, tt.wantFound, result.Found)
+			assert.Equal(t, tt.wantMessage, result.Message)
+		})
+	}
 }
 
 // TestCheckDependency_NoteIsSurfacedWhenMissing は条件付き依存が見つからない

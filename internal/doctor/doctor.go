@@ -37,6 +37,9 @@ type DependencyInfo struct {
 	// Note はRequired=falseのツールが必要になる条件の説明。
 	// 空文字列の場合、条件付きの説明を持たないことを表す。
 	Note string
+	// FoundNote はツールが見つかった場合にMessageとして表示する補足。
+	// 空文字列の場合、補足を持たないことを表す。
+	FoundNote string
 	// PostCheck はコマンド検出後に行う追加検査。okがfalseの場合、そのツールは
 	// 「見つかったが使えない」状態として扱う（reasonに理由を入れる）。
 	// nilの場合、追加検査を行わない。
@@ -59,9 +62,13 @@ var Dependencies = []DependencyInfo{
 	// だが、含まないゲームでは不要なためRequired=trueにはしない。必須にすると
 	// MIDI資産を持たないゲームのビルドまでインストールを強制してしまう。
 	// 代わりにNoteで条件を伝え、未インストール時に利用者が判断できるようにする。
+	//
+	// why not: FoundNoteの下限バージョンを文面へ直書きしない。converterの判定と
+	// ずれても誰も気付けないため、converter側をSSOTとして参照する。
 	{
 		Name: "FluidSynth", Command: "fluidsynth", VersionFlag: "--version", Required: false,
 		Note:      "MIDIアセット(.mid/.midi)を含むゲームのビルドには必須です（サウンドフォントも併せて必要）",
+		FoundNote: converter.DynamicSampleLoadingMinVersion() + " 以上ならメモリ使用量を抑えたレンダリングを行います",
 		PostCheck: checkDefaultSoundfont,
 	},
 }
@@ -163,6 +170,7 @@ func foundResult(info DependencyInfo, version string) CheckResult {
 		Required: info.Required,
 		Found:    true,
 		Version:  version,
+		Message:  info.FoundNote,
 	}
 }
 
