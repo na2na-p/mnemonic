@@ -3,6 +3,7 @@ package signer_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,5 +56,19 @@ func TestExecCommandRunner_Run(t *testing.T) {
 		_, err := runner.Run(context.Background(), []string{"mnemonic-signer-nonexistent-command-xyz"})
 
 		assert.Error(t, err)
+	})
+
+	t.Run("異常系: コンテキスト期限超過で強制終了された場合はerror", func(t *testing.T) {
+		t.Parallel()
+
+		runner := signer.NewExecCommandRunner()
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+
+		_, err := runner.Run(ctx, []string{"sleep", "5"})
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.ErrorContains(t, err, "コマンドの実行に失敗しました")
 	})
 }

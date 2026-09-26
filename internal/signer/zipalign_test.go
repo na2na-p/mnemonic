@@ -6,6 +6,7 @@ package signer_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -130,6 +131,28 @@ func TestDefaultZipalignRunner_Align(t *testing.T) {
 		_, err := r.Align(input, filepath.Join(dir, "output.apk"))
 
 		assert.ErrorIs(t, err, signer.ErrZipalignFailed)
+	})
+
+	t.Run("異常系: コンテキスト期限超過をErrZipalignFailedに包んで伝播する", func(t *testing.T) {
+		dir := t.TempDir()
+		input := filepath.Join(dir, "input.apk")
+		require.NoError(t, os.WriteFile(input, []byte("unaligned"), 0o600))
+
+		androidHome := writeFakeTool(t, "zipalign")
+		t.Setenv("ANDROID_HOME", androidHome)
+
+		ctrl := gomock.NewController(t)
+		runner := NewMockCommandRunner(ctrl)
+		runner.EXPECT().
+			Run(gomock.Any(), gomock.Any()).
+			Return(signer.RunResult{}, fmt.Errorf("コマンドの実行に失敗しました: %w", context.DeadlineExceeded))
+
+		r := signer.NewDefaultZipalignRunner(runner)
+
+		_, err := r.Align(input, filepath.Join(dir, "output.apk"))
+
+		require.ErrorIs(t, err, signer.ErrZipalignFailed)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 }
 
