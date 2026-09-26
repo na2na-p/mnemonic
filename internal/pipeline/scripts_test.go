@@ -1,12 +1,19 @@
 package pipeline
 
 import (
+	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/na2na-p/mnemonic/internal/converter"
 )
 
 // TestBuildPipeline_AdjustScripts はScriptAdjuster自体は別途
@@ -67,6 +74,59 @@ func TestBuildPipeline_AdjustScripts(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(content), `libwuvorbis.so`)
 	})
+
+	t.Run("異常系: UTF-8として読めないスクリプトがあればエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		p := newTestPipeline(t)
+		dir := t.TempDir()
+		scenarioDir := filepath.Join(dir, "scenario")
+		require.NoError(t, os.MkdirAll(scenarioDir, 0o750))
+		sjisKS := filepath.Join(scenarioDir, "sjis.ks")
+		// why: Shift_JISの「あ」(0x82 0xa0)はUTF-8として不正なバイト列になる。
+		require.NoError(t, os.WriteFile(sjisKS, []byte{0x82, 0xa0}, 0o600))
+
+		err := p.adjustScripts(dir)
+
+		require.ErrorIs(t, err, converter.ErrScriptNotUTF8)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Equal(t, 1, strings.Count(err.Error(), sjisKS), "パスはエラー文中に1回だけ現れる: %s", err)
+	})
+}
+
+// TestBuildPipeline_UTF16ScriptConversion はBOM付きUTF-16LEのスクリプトが
+// 文字コード変換を経てスクリプト調整まで通ることを、CONVERTフェーズと同じ
+// ConvertDirectory→adjustScriptsの順で検証する。
+func TestBuildPipeline_UTF16ScriptConversion(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPipeline(t)
+	extractDir := t.TempDir()
+	convertDir := t.TempDir()
+
+	const text = "[playbgm storage=\"bgm.mid\"]\r\n吉里吉里のUTF-16スクリプトです。\r\n"
+	units := append([]uint16{0xfeff}, utf16.Encode([]rune(text))...)
+	utf16LE := make([]byte, 0, len(units)*2)
+	for _, u := range units {
+		utf16LE = binary.LittleEndian.AppendUint16(utf16LE, u)
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(extractDir, "scenario"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(extractDir, "scenario", "first.ks"), utf16LE, 0o600))
+
+	manager := converter.NewConversionManager([]converter.Converter{converter.NewEncodingConverter("", "")}, nil, 1, nil)
+	summary, err := manager.ConvertDirectory(extractDir, convertDir, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, summary.Success, "UTF-16スクリプトが変換対象として処理される: %+v", summary.Results)
+
+	require.NoError(t, p.adjustScripts(convertDir))
+
+	content, err := os.ReadFile(filepath.Join(convertDir, "scenario", "first.ks")) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}), "UTF-8 BOMで始まる")
+	assert.True(t, utf8.Valid(content))
+	assert.Contains(t, string(content), `storage="bgm.ogg"`)
+	assert.NotContains(t, string(content), ".mid")
+	assert.Contains(t, string(content), "吉里吉里のUTF-16スクリプトです。")
 }
 
 // TestBuildPipeline_AdjustScripts_SkipVideo は--skip-video時にスクリプト

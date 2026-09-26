@@ -151,7 +151,7 @@ func (r *sleepRecorder) sleep(d time.Duration) {
 func TestConvertMidiFileListWith(t *testing.T) {
 	t.Parallel()
 
-	const transientMessage = "FFmpeg変換に失敗しました: ffmpeg exited with 1"
+	const transientMessage = "最大リトライ回数超過: FFmpeg変換に失敗しました: ffmpeg exited with 1"
 
 	tests := []struct {
 		name string
@@ -163,7 +163,8 @@ func TestConvertMidiFileListWith(t *testing.T) {
 		wantRenders int32
 		wantSleeps  []time.Duration
 		// wantFailed はエラーメッセージに現れるべきdir相対パスを、現れる順に並べたもの。
-		wantFailed  []string
+		wantFailed []string
+		// wantMessage は失敗した各ファイルのパスに続く「: 」の直後に現れるべき文言の先頭部分。
 		wantMessage string
 		wantRemoved []string
 		wantKept    []string
@@ -175,7 +176,7 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			wantRemoved: []string{"bgm/sinone.mid"},
 		},
 		{
-			name:        "異常系: 一時的な失敗は3回試行したうえで変換器のメッセージで1件だけ報告する",
+			name:        "異常系: 一時的な失敗は3回試行したうえで最大リトライ回数超過として1件だけ報告する",
 			sources:     []string{"opening.mid"},
 			ffmpegErr:   errors.New("ffmpeg exited with 1"),
 			wantRenders: 3,
@@ -185,12 +186,12 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			wantKept:    []string{"opening.mid"},
 		},
 		{
-			name:        "異常系: 列挙後に消えた変換元は恒久的な失敗として再試行しない",
+			name:        "異常系: 列挙後に消えた変換元は恒久的な失敗として再試行せず接頭辞なしで報告する",
 			sources:     []string{"opening.mid"},
 			vanished:    []string{"opening.mid"},
 			wantRenders: 0,
 			wantFailed:  []string{"opening.mid"},
-			wantMessage: "変換元ファイルが見つかりません",
+			wantMessage: "再試行しても解消しない変換失敗です: 変換元ファイルが見つかりません: ",
 		},
 		{
 			// why: 2件seedするのは「最初の失敗でbreakせず全件試す」という仕様と
@@ -245,11 +246,10 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			} else {
 				require.ErrorIs(t, err, ErrMidiConversionFailed)
 				msg := err.Error()
-				assert.Contains(t, msg, tt.wantMessage)
-				assert.NotContains(t, msg, "最大リトライ回数超過")
 
 				lastIndex := -1
 				for _, rel := range tt.wantFailed {
+					assert.Contains(t, msg, abs(rel)+": "+tt.wantMessage)
 					entry := abs(rel) + ": "
 					assert.Equal(t, 1, strings.Count(msg, entry), "失敗は1ファイルにつき1件だけ報告する: %s", rel)
 					index := strings.Index(msg, entry)

@@ -17,21 +17,36 @@ import (
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/encoding/traditionalchinese"
+	"golang.org/x/text/encoding/unicode"
 
 	"github.com/na2na-p/mnemonic/internal/charset"
 )
 
-// ErrUnsupportedEncoding はencodingByNameが未対応のエンコーディング名を受け取った場合のエラー。
+// ErrUnsupportedEncoding は未対応のエンコーディング名（変換先として指定したUTF-16を含む）を
+// 受け取った場合のエラー。
 var ErrUnsupportedEncoding = errors.New("サポートされていないエンコーディングです")
 
 // ErrEncodingFileNotFound はEncodingDetectorの検出対象ファイルが存在しない場合のエラー。
 var ErrEncodingFileNotFound = errors.New("ファイルが見つかりません")
 
+// ErrEncodingConversionFailed はEncodingConverter.Convertが変換元の内容を
+// 目的のエンコーディングへ変換できなかった場合のエラー。原因のエラーを%wで保持する。
+var ErrEncodingConversionFailed = errors.New("エンコーディング変換に失敗しました")
+
 // utf8BOM はUTF-8のバイトオーダーマーク。
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
+// utf16LEBOM / utf16BEBOM はUTF-16のバイトオーダーマーク。utf32LEBOMはutf16LEBOMと
+// 先頭2バイトが一致するため、UTF-16LEと取り違えないよう区別に使う。
+var (
+	utf16LEBOM = []byte{0xff, 0xfe}
+	utf16BEBOM = []byte{0xfe, 0xff}
+	utf32LEBOM = []byte{0xff, 0xfe, 0x00, 0x00}
+)
+
 // SupportedEncodings はEncodingConverterが変換元として認識するエンコーディング名の一覧。
-var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big5", "cp949"}
+// utf-16le/utf-16beは変換元としてのみ受け付け、変換先には指定できない。
+var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big5", "cp949", "utf-16le", "utf-16be"}
 
 // encodingAliases はchardetが返すエンコーディング名とSupportedEncodingsの対応マッピング。
 //
@@ -48,6 +63,11 @@ var encodingAliases = map[string]string{
 	"utf8":      "utf-8",
 	"utf-8-sig": "utf-8",
 	"ascii":     "utf-8",
+	"utf16le":   "utf-16le",
+	"utf16be":   "utf-16be",
+	// "utf-16"はバイト順を名前に持たないが、復号器はBOMがあればBOMのバイト順に従う。
+	"utf-16": "utf-16le",
+	"utf16":  "utf-16le",
 }
 
 // normalizeEncoding はエンコーディング名を正規化する。
@@ -102,14 +122,20 @@ func (d *EncodingDetector) Detect(filePath string) (EncodingDetectionResult, err
 }
 
 // DetectBytes はバイトデータの文字コードを検出する。
+//
+// UTF-16はBOMで始まる場合に限り"utf-16le"/"utf-16be"として検出する。
 func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 	if len(data) == 0 {
 		return EncodingDetectionResult{Encoding: "", Confidence: 0.0, IsSupported: false}
 	}
 
+	if enc := utf16EncodingByBOM(data); enc != "" {
+		return EncodingDetectionResult{Encoding: enc, Confidence: 1.0, IsSupported: true}
+	}
+
 	// why not: 純ASCIIをchardetの推定名のまま扱うと、ASCIIのみの.ini/.txt/.csv/.ksが
 	// SupportedEncodingsに含まれないエンコーディング名として検出され、本来SKIPPED
-	// （.ksならBOM付与のSUCCESS）が適切なケースでConvertがFAILEDを返してしまう。
+	// （.ksならBOM付与のSUCCESS）が適切なケースでConvertがエンコーディング変換失敗のエラーを返してしまう。
 	// そのためASCIIはUTF-8のサブセットとして"utf-8"（対応済み）に確定させる。
 	if charset.IsASCII(data) {
 		return EncodingDetectionResult{Encoding: "utf-8", Confidence: 1.0, IsSupported: true}
@@ -152,6 +178,12 @@ func (d *EncodingDetector) IsTextFile(filePath string) (bool, error) {
 		return true, nil
 	}
 
+	// UTF-16のテキストはASCII文字の上位バイトとしてNULを含むため、NULによる
+	// バイナリ判定より先に判定する。
+	if utf16EncodingByBOM(data) != "" {
+		return true, nil
+	}
+
 	if bytes.Contains(data, []byte{0x00}) {
 		return false, nil
 	}
@@ -159,6 +191,25 @@ func (d *EncodingDetector) IsTextFile(filePath string) (bool, error) {
 	result := d.DetectBytes(data)
 
 	return result.Encoding != "", nil
+}
+
+// utf16EncodingByBOM はdataがUTF-16のBOMで始まる場合にそのエンコーディング名
+// （"utf-16le"または"utf-16be"）を、それ以外の場合は空文字列を返す。
+//
+// why not: BOMだけで判定し、BOM無しのUTF-16を推定するヒューリスティックは使わない。
+// NULを多く含むバイナリをUTF-16テキストと誤検出するリスクがあり、吉里吉里の
+// UTF-16スクリプトはBOM付きで保存するのが慣例のため。
+func utf16EncodingByBOM(data []byte) string {
+	switch {
+	case bytes.HasPrefix(data, utf32LEBOM):
+		return ""
+	case bytes.HasPrefix(data, utf16LEBOM):
+		return "utf-16le"
+	case bytes.HasPrefix(data, utf16BEBOM):
+		return "utf-16be"
+	default:
+		return ""
+	}
 }
 
 // EncodingConverter はテキストファイルの文字コードを変換するConverter。
@@ -231,24 +282,26 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 
 // Convert はsourceの文字コードを変換し、destへ出力する。
 //
-// 既知の失敗（ファイル未存在・デコード/エンコード失敗）は
-// ConversionResult{Status: StatusFailed}として返し、errは常にnilとなる
-// （呼び出し元がConversionResultのStatusで失敗を判定できるようにするため）。
+// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、デコード/
+// エンコードに失敗した場合（変換先にUTF-16を指定した場合を含む）は
+// ErrEncodingConversionFailedを、いずれもErrPermanentFailureでラップして返す。
+// 読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象とする。
+//
+// errがnilのとき、Statusは変換元が変換先と同じエンコーディングで、UTF-8 BOMが
+// 無く、吉里吉里スクリプト(.ks/.tjs/.asd)でもない場合に限りStatusSkippedとなり、
+// それ以外はStatusSuccessとなる。既にUTF-8の吉里吉里スクリプトもUTF-8 BOMを
+// 付与して書き出すためStatusSuccessとなる。変換先がUTF-8のとき、UTF-8 BOMは
+// 吉里吉里スクリプトと、拡張子によらず変換元がUTF-16のファイルに付与する。
 func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, error) {
-	if _, err := os.Stat(source); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
-			Permanent:  true,
-		}, nil
+	if err := ensureSourceExists(source); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	bytesBefore := getFileSize(source)
 
 	data, err := os.ReadFile(source) //nolint:gosec // 存在確認済みの変換元ファイルを読む用途のため妥当
 	if err != nil {
-		return ConversionResult{}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
 	}
 
 	sourceEncoding := c.resolveSourceEncoding(data)
@@ -275,27 +328,26 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 
 	resultBytes, convErr := convertEncoding(data, sourceEncoding, c.targetEncoding)
 	if convErr != nil {
-		return ConversionResult{
-			SourcePath:  source,
-			Status:      StatusFailed,
-			Message:     fmt.Sprintf("エンコーディング変換に失敗しました: %v", convErr),
-			BytesBefore: bytesBefore,
-			Permanent:   true,
-		}, nil
+		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %w", ErrEncodingConversionFailed, convErr))
 	}
 
 	// 吉里吉里スクリプトファイル(.ks/.tjs/.asd)はUTF-8 BOMが無いとShift_JISとして
 	// 誤解釈されるため、変換先がUTF-8の場合はBOMを付与する。
-	if isKirikiriScript && targetNormalized == "utf_8" {
+	//
+	// why not: UTF-16由来のファイルは拡張子によらずBOM無しにしない。元のUTF-16
+	// ファイルはBOMで自己記述していたため、BOM無しUTF-8にすると読み手の既定
+	// エンコーディング（forkごとに異なりうる）に依存する。BOMを保てばどの既定でも
+	// UTF-8として読まれる。
+	if (isKirikiriScript || isUTF16Encoding(sourceEncoding)) && targetNormalized == "utf_8" {
 		resultBytes = append(append([]byte{}, utf8BOM...), resultBytes...)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
 	if err := os.WriteFile(dest, resultBytes, 0o644); err != nil { //nolint:gosec // ビルド成果物の出力用途のため妥当な権限
-		return ConversionResult{}, fmt.Errorf("出力ファイルの書き込みに失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, fmt.Errorf("出力ファイルの書き込みに失敗しました: %w", err)
 	}
 
 	return ConversionResult{
@@ -310,8 +362,8 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 // ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 検出されたソース
 // エンコーディング)を返す。
 //
-// デコード/エンコード失敗はerrとして伝播する（Convertと異なり、このメソッドは
-// 失敗を捕捉せず呼び出し元へそのまま伝播させる設計のため）。
+// デコード/エンコード失敗はerrとして返す。Convertと異なり
+// ErrEncodingConversionFailed・ErrPermanentFailureでのラップは行わない。
 func (c *EncodingConverter) ConvertBytes(data []byte) ([]byte, string, error) {
 	sourceEncoding := c.resolveSourceEncoding(data)
 
@@ -370,9 +422,23 @@ func decodeToUTF8(data []byte, sourceEncoding string) ([]byte, error) {
 	return enc.NewDecoder().Bytes(data)
 }
 
+// isUTF16Encoding はエンコーディング名encが（別名の正規化後に）utf-16le/utf-16beかを返す。
+func isUTF16Encoding(enc string) bool {
+	normalized := normalizeEncoding(enc)
+
+	return normalized == "utf-16le" || normalized == "utf-16be"
+}
+
 func encodeFromUTF8(data []byte, targetEncoding string) ([]byte, error) {
 	if normalizeEncoding(targetEncoding) == "utf-8" {
 		return data, nil
+	}
+
+	// why not: encodingByNameが復号用に返すUTF-16実装を符号化にも流用すると、
+	// 変換先UTF-16の出力を黙って受け付けてしまう。出力はUTF-8に揃えており
+	// UTF-16で書き出す用途は無いため、変換先としては未対応エラーにする。
+	if isUTF16Encoding(targetEncoding) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedEncoding, targetEncoding)
 	}
 
 	enc, err := encodingByName(targetEncoding)
@@ -388,6 +454,8 @@ func encodeFromUTF8(data []byte, targetEncoding string) ([]byte, error) {
 // why not: "gb2312"はx/text/encoding/simplifiedchineseに専用の実装が無いため、
 // バイト範囲が互換なGBK（GB2312のスーパーセット）で代替する。"cp949"はx/text側で
 // EUCKRという名称だが、Code Page 949そのものを指す実装であるためcp949に直接対応する。
+// UTF-16はUseBOMの復号器を返すため、先頭のBOMは復号時に取り除かれ、BOMがあれば
+// そのバイト順が名前のバイト順より優先される。
 func encodingByName(name string) (encoding.Encoding, error) {
 	switch normalizeEncoding(name) {
 	case "shift_jis":
@@ -400,6 +468,10 @@ func encodingByName(name string) (encoding.Encoding, error) {
 		return traditionalchinese.Big5, nil
 	case "cp949":
 		return korean.EUCKR, nil
+	case "utf-16le":
+		return unicode.UTF16(unicode.LittleEndian, unicode.UseBOM), nil
+	case "utf-16be":
+		return unicode.UTF16(unicode.BigEndian, unicode.UseBOM), nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedEncoding, name)
 	}

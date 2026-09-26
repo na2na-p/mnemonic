@@ -17,7 +17,7 @@ var (
 	// ErrSourceIsDirectory は変換元がディレクトリの場合のエラー。
 	ErrSourceIsDirectory = errors.New("変換元はファイルである必要があります")
 	// ErrPermanentFailure は同じ入力を再試行しても解消しない変換失敗を表す。
-	// errorを返すConverterはこれを%wでラップし、呼び出し側にリトライ不要を伝える。
+	// Converterはこれを%wでラップしたerrを返し、呼び出し側にリトライ不要を伝える。
 	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
 )
 
@@ -33,7 +33,11 @@ const (
 
 // ConversionResult は単一ファイルの変換結果を表す不変値。
 //
-// DestPathが空文字列の場合は変換失敗・スキップ時を表す。
+// Converter.Convertがerr=nilで返す結果のStatusはStatusSuccessかStatusSkippedに
+// 限られる。StatusFailedはConversionManagerが組み立てる失敗の要約にだけ現れ、
+// DestPathは空文字列となる。そのMessageはConvertのerrの文言、または
+// RetryConfig.MaxAttemptsが0以下で一度も変換を試みなかった場合の
+// 「変換に失敗しました」となる。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
@@ -41,9 +45,6 @@ type ConversionResult struct {
 	Message     string
 	BytesBefore int64
 	BytesAfter  int64
-
-	// Permanent は同じ入力を再試行しても結果が変わらない失敗。trueのとき呼び出し側はリトライしない。
-	Permanent bool
 }
 
 // CompressionRatio は圧縮率（BytesAfter / BytesBefore）を計算する。
@@ -70,11 +71,6 @@ func (r ConversionResult) IsSuccess() bool {
 //
 // ファイルが存在しない場合はErrSourceNotFound、ディレクトリの場合は
 // ErrSourceIsDirectoryを返す。
-//
-// why not: EncodingConverter/ScriptAdjuster/VideoConverterは自前の
-// 存在チェックでConversionResult{Status: StatusFailed}を返す設計のため、
-// ここでのerror伝播は使わない。ImageConverterのみこの関数を使い、errorを
-// 呼び出し元へ伝播させる。
 func validateSource(source string) error {
 	info, err := os.Stat(source)
 	if err != nil {
@@ -82,6 +78,20 @@ func validateSource(source string) error {
 	}
 	if info.IsDir() {
 		return fmt.Errorf("%w: %s", ErrSourceIsDirectory, source)
+	}
+
+	return nil
+}
+
+// ensureSourceExists はsourceをos.Statで確認できない場合、ErrSourceNotFoundを
+// 恒久的な失敗としてラップしたエラーを返す。
+//
+// why not: validateSourceは使わない。validateSourceはディレクトリも拒否するが、
+// Encoding/Script/Video/Midiの各Converterはディレクトリをこの時点では弾かず、
+// 後続の読み込みや外部コマンドの失敗（再試行対象）として扱う。
+func ensureSourceExists(source string) error {
+	if _, err := os.Stat(source); err != nil {
+		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
 	}
 
 	return nil

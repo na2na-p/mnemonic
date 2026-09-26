@@ -3,6 +3,7 @@ package converter
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,19 @@ import (
 var (
 	MuseScoreSoundfontPath = "/usr/share/sounds/sf3/MuseScore_General.sf3"
 	FluidR3SoundfontPath   = "/usr/share/sounds/sf2/FluidR3_GM.sf2"
+)
+
+// MidiConverter.Convertの失敗を表すセンチネルエラー群。
+var (
+	// ErrSoundfontNotFound はMidiConverterに設定されたサウンドフォントが存在しない場合のエラー。
+	ErrSoundfontNotFound = errors.New("サウンドフォントが見つかりません")
+	// ErrFluidsynthFailed はFluidSynthによるMIDIからWAVへのレンダリングが失敗した場合のエラー。
+	// CommandRunnerが返したエラーを%wで保持する。
+	ErrFluidsynthFailed = errors.New("FluidSynth変換に失敗しました")
+	// ErrMidiFFmpegFailed はMidiConverterがFFmpegでWAVをOGGへ変換する処理が失敗した場合のエラー。
+	// CommandRunnerが返したエラーを%wで保持する。VideoConverterのffmpeg失敗はこのエラーではなく
+	// ErrVideoConversionFailedで表す。
+	ErrMidiFFmpegFailed = errors.New("FFmpeg変換に失敗しました")
 )
 
 // GetDefaultSoundfontPath は利用可能なデフォルトサウンドフォントのパスを返す。
@@ -146,47 +160,36 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // に続けて
 // `ffmpeg -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> <dest>`
 //
+// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、
+// サウンドフォントが存在しない場合はErrSoundfontNotFoundを、いずれも
+// ErrPermanentFailureでラップして返す。FluidSynthの失敗はErrFluidsynthFailed、
+// FFmpegの失敗はErrMidiFFmpegFailed、出力先ディレクトリ・一時WAVの作成失敗は
+// OSのエラーを%wで保持して返し、いずれも再試行対象とする。errがnilのとき、
+// StatusはStatusSuccessとなる。
+//
 // why not: FluidSynth/FFmpegそれぞれの未インストールとタイムアウトを区別した
-// 専用メッセージを返すこともできるが、CommandRunner抽象化により両者とも
+// 専用のエラーを返すこともできるが、CommandRunner抽象化により両者とも
 // 単一のerr値に収束する（video.goのVideoConverter.Convertと同じ簡略化）。
 // 区別が必要になればCommandRunnerの実装側でセンチネルエラーを定義して
 // 呼び出し元に伝播させる。
 func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
-	if _, err := os.Stat(source); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
-			Permanent:  true,
-		}, nil
+	if err := ensureSourceExists(source); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	if _, err := os.Stat(c.soundfontPath); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("サウンドフォントが見つかりません: %s", c.soundfontPath),
-			Permanent:  true,
-		}, nil
+		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %s", ErrSoundfontNotFound, c.soundfontPath))
 	}
 
 	bytesBefore := getFileSize(source)
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("MIDI変換に失敗しました: %s", err),
-		}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}
 
 	tmpWav, err := os.CreateTemp("", "*.wav")
 	if err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("MIDI変換に失敗しました: %s", err),
-		}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("MIDI変換に失敗しました: %w", err)
 	}
 	tmpWavPath := tmpWav.Name()
 	_ = tmpWav.Close()
@@ -194,14 +197,14 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	// deferで無条件に削除する。
 	defer func() { _ = os.Remove(tmpWavPath) }()
 
-	if result := c.runFluidsynth(source, tmpWavPath); result != nil {
-		return *result, nil
+	if err := c.runFluidsynth(source, tmpWavPath); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	trimSeconds, hasTrim := c.silenceDetector.trimPoint(tmpWavPath)
 
-	if result := c.runFFmpeg(source, tmpWavPath, dest, trimSeconds, hasTrim); result != nil {
-		return *result, nil
+	if err := c.runFFmpeg(tmpWavPath, dest, trimSeconds, hasTrim); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	return ConversionResult{
@@ -214,8 +217,8 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 }
 
 // runFluidsynth はFluidSynthを実行してsourceをwavOutputへレンダリングする。
-// エラー時は*ConversionResultを、成功時はnilを返す。
-func (c *MidiConverter) runFluidsynth(source, wavOutput string) *ConversionResult {
+// 失敗時はErrFluidsynthFailedでラップしたエラーを返す。
+func (c *MidiConverter) runFluidsynth(source, wavOutput string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -229,11 +232,7 @@ func (c *MidiConverter) runFluidsynth(source, wavOutput string) *ConversionResul
 	}
 
 	if _, err := c.runner.Run(ctx, "fluidsynth", args...); err != nil {
-		return &ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("FluidSynth変換に失敗しました: %s", err),
-		}
+		return fmt.Errorf("%w: %w", ErrFluidsynthFailed, err)
 	}
 
 	return nil
@@ -241,9 +240,8 @@ func (c *MidiConverter) runFluidsynth(source, wavOutput string) *ConversionResul
 
 // runFFmpeg はFFmpegを実行してwavInputをoggOutputへ変換する。
 // hasTrimがtrueの場合、trimSeconds秒で出力を打ち切ることで末尾無音をトリムする。
-// エラー時は*ConversionResultを、成功時はnilを返す。sourceは失敗結果の
-// SourcePath（変換元のMIDIパス）にのみ使う。
-func (c *MidiConverter) runFFmpeg(source, wavInput, oggOutput string, trimSeconds float64, hasTrim bool) *ConversionResult {
+// 失敗時はErrMidiFFmpegFailedでラップしたエラーを返す。
+func (c *MidiConverter) runFFmpeg(wavInput, oggOutput string, trimSeconds float64, hasTrim bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -259,11 +257,7 @@ func (c *MidiConverter) runFFmpeg(source, wavInput, oggOutput string, trimSecond
 	args = append(args, oggOutput)
 
 	if _, err := c.runner.Run(ctx, "ffmpeg", args...); err != nil {
-		return &ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("FFmpeg変換に失敗しました: %s", err),
-		}
+		return fmt.Errorf("%w: %w", ErrMidiFFmpegFailed, err)
 	}
 
 	return nil

@@ -2,6 +2,7 @@ package converter
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,9 @@ import (
 	"strings"
 	"unicode/utf8"
 )
+
+// ErrScriptNotUTF8 はScriptAdjuster.Convertの変換元がUTF-8として妥当でない場合のエラー。
+var ErrScriptNotUTF8 = errors.New("UTF-8として読み込めませんでした")
 
 // RuleCategory はスクリプト調整ルールの用途を表すカテゴリ。
 type RuleCategory string
@@ -283,21 +287,19 @@ func (a *ScriptAdjuster) CanConvert(filePath string) bool {
 
 // Convert はスクリプトファイルに調整ルールを適用し、destへ出力する。
 //
-// 既知の失敗はConversionResult{Status: StatusFailed}へ変換するため、
-// errは常にnilを返す。
+// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、内容が
+// UTF-8として妥当でない場合はErrScriptNotUTF8を、いずれもErrPermanentFailureで
+// ラップして返す。読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象と
+// する。errがnilのとき、Statusは調整箇所が無ければStatusSkipped、それ以外は
+// StatusSuccessとなる。
 func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) {
-	if _, err := os.Stat(source); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
-			Permanent:  true,
-		}, nil
+	if err := ensureSourceExists(source); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	content, err := os.ReadFile(source) //nolint:gosec // 存在確認済みの変換元ファイルを読む用途のため妥当
 	if err != nil {
-		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
 	}
 
 	// 入力に既にBOMが付いていても二重付与しないよう、出力時に付与し直す
@@ -306,16 +308,9 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 
 	// why: Goのstring(content)はUTF-8を検証しないため、この検証を省略すると
 	// 不正なバイト列（例: Shift_JISのままのファイル）を含む内容がそのまま
-	// SUCCESSとして書き出されてしまう（文字化けの温存）。utf8.Validで
-	// Status: FAILEDとなる失敗パスを設ける。
+	// SUCCESSとして書き出されてしまう（文字化けの温存）。
 	if !utf8.Valid(content) {
-		return ConversionResult{
-			SourcePath:  source,
-			Status:      StatusFailed,
-			Message:     fmt.Sprintf("UTF-8として読み込めませんでした: %s", source),
-			BytesBefore: int64(len(content)),
-			Permanent:   true,
-		}, nil
+		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %s", ErrScriptNotUTF8, source))
 	}
 
 	bytesBefore := int64(len(content))
@@ -344,14 +339,14 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
 	// 吉里吉里(KiriKiriZ)はBOM無しUTF-8をShift_JISとして誤解釈するため、
 	// ScriptAdjusterが扱う.ks/.tjsは常にBOM付きUTF-8で書き出す。
 	adjustedBytes := append(append([]byte{}, utf8BOM...), []byte(adjusted)...)
 	if err := os.WriteFile(dest, adjustedBytes, 0o644); err != nil { //nolint:gosec // ビルド成果物の出力用途のため妥当な権限
-		return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("出力ファイルの書き込みに失敗しました: %w", err)
 	}
 
 	return ConversionResult{

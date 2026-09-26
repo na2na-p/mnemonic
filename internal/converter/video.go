@@ -25,6 +25,13 @@ var ErrVideoInfoUnavailable = errors.New("動画情報を取得できません")
 // ErrNoVideoStream はffprobe結果に動画ストリームが含まれない場合のエラー。
 var ErrNoVideoStream = errors.New("動画ストリームが見つかりません")
 
+// ErrVideoConversionFailed はVideoConverter.Convertがffmpeg変換・パススルー
+// コピー・出力の確定のいずれかに失敗した場合のエラー。原因のエラーを%wで保持する。
+var ErrVideoConversionFailed = errors.New("動画変換に失敗しました")
+
+// ErrEmptyOutput は変換処理が成功を返したにもかかわらず出力ファイルが0バイトの場合のエラー。
+var ErrEmptyOutput = errors.New("出力ファイルが0バイトです")
+
 // mpeg1videoCodecName / mp2CodecName / mpegPSFormatName はAndroid側ランタイム
 // (krkrsdl2 fork、pl_mpeg採用)が再生できる唯一の組み合わせ
 // (MPEG-PSコンテナ + mpeg1video + mp2)を表す定数。
@@ -169,23 +176,21 @@ func (c *VideoConverter) IsFFmpegAvailable() bool {
 // 入力が既にmpeg1video+mp2(MPEG-PSコンテナ)であれば再エンコードせずコピーする
 // (パススルー)。それ以外はffmpegで変換する。出力は一時ファイルへ書き込み、
 // サイズが0より大きいことを確認してからdestへrenameする(fail-loud)。
-// 変換元ファイルが存在しない・ffmpegが失敗する・出力が0バイトの場合は
-// StatusFailedのConversionResultを返す(err=nil、既知の失敗を自身で
-// ConversionResultへ変換する設計)。
+//
+// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFoundを
+// ErrPermanentFailureでラップして返す。ffmpeg変換・パススルーコピー・出力の
+// 確定(0バイト出力はErrEmptyOutput)の失敗はErrVideoConversionFailedで、
+// 出力先ディレクトリの作成失敗はOSのエラーを%wで保持して返し、いずれも
+// 再試行対象とする。errがnilのとき、StatusはStatusSuccessとなる。
 func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) {
-	if _, err := os.Stat(source); err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
-			Permanent:  true,
-		}, nil
+	if err := ensureSourceExists(source); err != nil {
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	bytesBefore := getFileSize(source)
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return ConversionResult{}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
 	// why not: destと同じディレクトリの一時ファイルへ書いてからrenameする。
@@ -205,20 +210,12 @@ func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) 
 	if convertErr != nil {
 		_ = os.Remove(tempDest)
 
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("動画変換に失敗しました: %s", convertErr),
-		}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("%w: %w", ErrVideoConversionFailed, convertErr)
 	}
 
 	bytesAfter, err := finalizeTempOutput(tempDest, dest)
 	if err != nil {
-		return ConversionResult{
-			SourcePath: source,
-			Status:     StatusFailed,
-			Message:    fmt.Sprintf("動画変換に失敗しました: %s", err),
-		}, nil
+		return ConversionResult{SourcePath: source}, fmt.Errorf("%w: %w", ErrVideoConversionFailed, err)
 	}
 
 	return ConversionResult{
@@ -322,7 +319,7 @@ func finalizeTempOutput(tempDest, dest string) (int64, error) {
 	if size == 0 {
 		_ = os.Remove(tempDest)
 
-		return 0, fmt.Errorf("出力ファイルが0バイトです: %s", tempDest)
+		return 0, fmt.Errorf("%w: %s", ErrEmptyOutput, tempDest)
 	}
 
 	if err := os.Rename(tempDest, dest); err != nil {

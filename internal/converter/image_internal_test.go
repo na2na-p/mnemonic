@@ -99,19 +99,19 @@ func TestImageConverter_decodeSource(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		skipAsRoot    bool
-		setup         func(t *testing.T, dir string) string
-		wantErr       error
-		wantPermanent bool
+		name        string
+		skipAsRoot  bool
+		setup       func(t *testing.T, dir string) string
+		wantErr     error
+		wantNoRetry bool
 	}{
 		{
 			name: "異常系: 存在しないTLGファイルは再試行対象のErrSourceNotFoundを返す",
 			setup: func(_ *testing.T, dir string) string {
 				return filepath.Join(dir, "x.tlg")
 			},
-			wantErr:       ErrSourceNotFound,
-			wantPermanent: false,
+			wantErr:     ErrSourceNotFound,
+			wantNoRetry: false,
 		},
 		{
 			name: "異常系: 読み込めないTLGファイルは権限不足以外なら再試行対象のErrSourceUnreadableを返す",
@@ -123,8 +123,8 @@ func TestImageConverter_decodeSource(t *testing.T) {
 
 				return path
 			},
-			wantErr:       ErrSourceUnreadable,
-			wantPermanent: false,
+			wantErr:     ErrSourceUnreadable,
+			wantNoRetry: false,
 		},
 		{
 			name:       "異常系: 読み取り権限の無いTLGファイルは再試行不要なErrSourceUnreadableを返す",
@@ -138,8 +138,8 @@ func TestImageConverter_decodeSource(t *testing.T) {
 
 				return path
 			},
-			wantErr:       ErrSourceUnreadable,
-			wantPermanent: true,
+			wantErr:     ErrSourceUnreadable,
+			wantNoRetry: true,
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestImageConverter_decodeSource(t *testing.T) {
 			require.Error(t, err)
 			assert.Nil(t, img)
 			require.ErrorIs(t, err, tt.wantErr)
-			if tt.wantPermanent {
+			if tt.wantNoRetry {
 				require.ErrorIs(t, err, ErrPermanentFailure)
 			} else {
 				require.NotErrorIs(t, err, ErrPermanentFailure)

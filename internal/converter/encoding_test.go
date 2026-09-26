@@ -22,7 +22,7 @@ func fixturesDir(t *testing.T) string {
 func TestSupportedEncodings(t *testing.T) {
 	t.Parallel()
 
-	for _, want := range []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big5", "cp949"} {
+	for _, want := range []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big5", "cp949", "utf-16le", "utf-16be"} {
 		assert.Contains(t, converter.SupportedEncodings, want)
 	}
 }
@@ -125,6 +125,34 @@ func TestEncodingDetector_DetectBytes(t *testing.T) {
 		assert.True(t, result.IsSupported)
 	})
 
+	bomCases := []struct {
+		name         string
+		data         []byte
+		wantEncoding string
+	}{
+		{
+			name:         "正常系: UTF-16LEのBOMで始まるバイト列はutf-16leとして検出される",
+			data:         encodeUTF16("吉里吉里スクリプト", false, true),
+			wantEncoding: "utf-16le",
+		},
+		{
+			name:         "正常系: UTF-16BEのBOMで始まるバイト列はutf-16beとして検出される",
+			data:         encodeUTF16("吉里吉里スクリプト", true, true),
+			wantEncoding: "utf-16be",
+		},
+	}
+
+	for _, tc := range bomCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := detector.DetectBytes(tc.data)
+
+			assert.Equal(t, tc.wantEncoding, result.Encoding)
+			assert.InDelta(t, 1.0, result.Confidence, 1e-9)
+			assert.True(t, result.IsSupported)
+		})
+	}
 }
 
 func TestEncodingDetector_IsTextFile(t *testing.T) {
@@ -169,6 +197,31 @@ func TestEncodingDetector_IsTextFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result)
 	})
+
+	utf16Cases := []struct {
+		name     string
+		data     []byte
+		expected bool
+	}{
+		{"正常系: BOM付きUTF-16LEはNULを含んでもテキストファイル", encodeUTF16("[playbgm storage=\"bgm.mid\"]", false, true), true},
+		{"正常系: BOM付きUTF-16BEはNULを含んでもテキストファイル", encodeUTF16("[playbgm storage=\"bgm.mid\"]", true, true), true},
+		{"正常系: BOM無しUTF-16LEはバイナリファイル", encodeUTF16("[playbgm storage=\"bgm.mid\"]", false, false), false},
+		{"正常系: UTF-32LEのBOMで始まるデータはUTF-16扱いせずバイナリファイル", []byte{0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00}, false},
+	}
+
+	for _, tc := range utf16Cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "script.ks")
+			writeFile(t, path, tc.data)
+
+			result, err := detector.IsTextFile(path)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
 }
 
 func TestNewEncodingConverter(t *testing.T) {
@@ -330,7 +383,7 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		t.Parallel()
 
 		// why: ASCII短絡が無いと自動検出がutf-8ではないエンコーディング名を返し
-		// FAILEDになってしまうことの回帰を防止する。
+		// エンコーディング変換失敗のエラーになってしまうことの回帰を防止する。
 		dir := t.TempDir()
 		source := filepath.Join(dir, "config.ini")
 		dest := filepath.Join(dir, "dest.ini")
@@ -381,19 +434,21 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		assert.Positive(t, result.BytesAfter)
 	})
 
-	t.Run("異常系: 存在しないファイルはFAILED", func(t *testing.T) {
+	t.Run("異常系: 存在しないファイルは再試行不要なエラー", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
+		source := filepath.Join(dir, "nonexistent.txt")
 		c := converter.NewEncodingConverter("", "")
-		result, err := c.Convert(filepath.Join(dir, "nonexistent.txt"), filepath.Join(dir, "dest.txt"))
+		result, err := c.Convert(source, filepath.Join(dir, "dest.txt"))
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.True(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "変換元ファイルが見つかりません: "+source)
+		assert.Equal(t, source, result.SourcePath)
 	})
 
-	t.Run("異常系: 未対応のソースエンコーディングは再試行不要なFAILED", func(t *testing.T) {
+	t.Run("異常系: 未対応のソースエンコーディングは再試行不要なエラー", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -402,13 +457,30 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		writeFile(t, source, []byte("plain ascii text"))
 
 		c := converter.NewEncodingConverter("", "unknown-encoding")
-		result, err := c.Convert(source, dest)
+		_, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "エンコーディング変換に失敗しました")
-		assert.True(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+		require.ErrorIs(t, err, converter.ErrUnsupportedEncoding)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "エンコーディング変換に失敗しました: ")
 		assert.NoFileExists(t, dest)
+	})
+
+	t.Run("異常系: 出力先の親がファイルでディレクトリを作れない場合は再試行対象のエラー", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		writeFile(t, source, []byte("plain ascii text"))
+		blocker := filepath.Join(dir, "blocker")
+		writeFile(t, blocker, []byte("not a directory"))
+
+		c := converter.NewEncodingConverter("", "shift_jis")
+		_, err := c.Convert(source, filepath.Join(blocker, "dest.txt"))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "出力先ディレクトリの作成に失敗しました")
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 
 	t.Run("正常系: 変換先ディレクトリが存在しない場合は作成する", func(t *testing.T) {
@@ -427,6 +499,72 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 		assert.FileExists(t, dest)
+	})
+}
+
+func TestEncodingConverter_Convert_UTF16(t *testing.T) {
+	t.Parallel()
+
+	const text = "[playbgm storage=\"bgm.mid\"]\r\n吉里吉里のUTF-16スクリプトです。"
+
+	tests := []struct {
+		name      string
+		fileName  string
+		bigEndian bool
+		want      []byte
+	}{
+		{
+			name:     "正常系: BOM付きUTF-16LEの.ksはUTF-8 BOM付きに変換される",
+			fileName: "first.ks",
+			want:     append([]byte{0xef, 0xbb, 0xbf}, text...),
+		},
+		{
+			name:      "正常系: BOM付きUTF-16BEの.tjsはUTF-8 BOM付きに変換される",
+			fileName:  "startup.tjs",
+			bigEndian: true,
+			want:      append([]byte{0xef, 0xbb, 0xbf}, text...),
+		},
+		{
+			name:     "正常系: BOM付きUTF-16LEの.txtもUTF-8 BOM付きに変換される",
+			fileName: "readme.txt",
+			want:     append([]byte{0xef, 0xbb, 0xbf}, text...),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, encodeUTF16(text, tt.bigEndian, true))
+
+			c := converter.NewEncodingConverter("", "")
+			require.True(t, c.CanConvert(source))
+
+			result, err := c.Convert(source, dest)
+
+			require.NoError(t, err)
+			assert.Equal(t, converter.StatusSuccess, result.Status)
+			assert.Equal(t, tt.want, readFile(t, dest))
+		})
+	}
+
+	t.Run("異常系: UTF-16は変換先としては受け付けない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		dest := filepath.Join(dir, "dest.txt")
+		writeFile(t, source, []byte("plain ascii text"))
+
+		c := converter.NewEncodingConverter("utf-16le", "utf-8")
+		_, err := c.Convert(source, dest)
+
+		require.ErrorIs(t, err, converter.ErrUnsupportedEncoding)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.NoFileExists(t, dest)
 	})
 }
 

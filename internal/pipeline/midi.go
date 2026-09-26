@@ -123,7 +123,7 @@ func findMidiFiles(directory string) ([]string, error) {
 //
 // why not: サウンドフォントの実在確認をここで行うのは、converter.
 // GetDefaultSoundfontPathがFluidR3のパスへ実在確認なしにフォールバックし、
-// MidiConverter.Convertが不在をファイル単位のStatusFailedとしてしか報告
+// MidiConverter.Convertが不在をファイル単位の失敗としてしか報告
 // しないため。全ファイルを試して初めて原因が判明するより、着手前に一度だけ
 // 検査して単一のエラーへまとめる方が原因を特定しやすい。
 func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error {

@@ -1,8 +1,10 @@
 package converter_test
 
 import (
+	"encoding/binary"
 	"os"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/text/encoding/japanese"
@@ -66,4 +68,28 @@ func writeEUCJP(t *testing.T, path, text string) {
 func assertFileUTF8Equals(t *testing.T, path, want string) {
 	t.Helper()
 	require.Equal(t, want, string(readFile(t, path)))
+}
+
+// encodeUTF16 はtextをUTF-16へ符号化する。bigEndianでバイト順を、withBOMでBOMの
+// 有無を指定する。
+//
+// why not: golang.org/x/text/encoding/unicodeのエンコーダは使わない。
+// 本番コードの復号に使う実装で期待値を作ると、実装の不具合がテストで打ち消される。
+func encodeUTF16(text string, bigEndian, withBOM bool) []byte {
+	var order binary.AppendByteOrder = binary.LittleEndian
+	if bigEndian {
+		order = binary.BigEndian
+	}
+
+	units := utf16.Encode([]rune(text))
+	if withBOM {
+		units = append([]uint16{0xfeff}, units...)
+	}
+
+	out := make([]byte, 0, len(units)*2)
+	for _, u := range units {
+		out = order.AppendUint16(out, u)
+	}
+
+	return out
 }

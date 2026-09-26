@@ -265,7 +265,7 @@ func TestScriptAdjuster_AddStartupDirective(t *testing.T) {
 func TestScriptAdjuster_Convert(t *testing.T) {
 	t.Parallel()
 
-	t.Run("異常系: Shift_JISのままの非UTF-8ファイルはFAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: Shift_JISのままの非UTF-8ファイルは再試行不要なエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		// why: string()への変換前にUTF-8妥当性を検証していないと、不正な
@@ -280,11 +280,76 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		adjuster := converter.NewScriptAdjuster(nil, true)
 		result, err := adjuster.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.True(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrScriptNotUTF8)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "UTF-8として読み込めませんでした: "+source)
+		assert.Equal(t, source, result.SourcePath)
 		assert.NoFileExists(t, dest)
 	})
+
+	ioFailureCases := []struct {
+		name        string
+		setup       func(t *testing.T, dir string) (source, dest string)
+		wantMessage string
+	}{
+		{
+			name: "異常系: 変換元を読み込めない場合は再試行対象のエラーを返す",
+			setup: func(t *testing.T, dir string) (string, string) {
+				t.Helper()
+
+				// why: os.Statは成功しos.ReadFileだけが失敗する変換元として、.ks名のディレクトリを使う。
+				source := filepath.Join(dir, "directory.ks")
+				mkdirAll(t, source)
+
+				return source, filepath.Join(dir, "output.ks")
+			},
+			wantMessage: "変換元ファイルの読み込みに失敗しました",
+		},
+		{
+			name: "異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す",
+			setup: func(t *testing.T, dir string) (string, string) {
+				t.Helper()
+
+				source := filepath.Join(dir, "test.ks")
+				writeFile(t, source, []byte("Plugins.link(\"test.dll\");\n"))
+				blocker := filepath.Join(dir, "blocker")
+				writeFile(t, blocker, []byte("not a directory"))
+
+				return source, filepath.Join(blocker, "output.ks")
+			},
+			wantMessage: "出力先ディレクトリの作成に失敗しました",
+		},
+		{
+			name: "異常系: 出力ファイルを書き込めない場合は再試行対象のエラーを返す",
+			setup: func(t *testing.T, dir string) (string, string) {
+				t.Helper()
+
+				source := filepath.Join(dir, "test.ks")
+				writeFile(t, source, []byte("Plugins.link(\"test.dll\");\n"))
+				dest := filepath.Join(dir, "output.ks")
+				mkdirAll(t, dest)
+
+				return source, dest
+			},
+			wantMessage: "出力ファイルの書き込みに失敗しました",
+		},
+	}
+
+	for _, tc := range ioFailureCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			source, dest := tc.setup(t, t.TempDir())
+
+			adjuster := converter.NewScriptAdjuster(nil, true)
+			result, err := adjuster.Convert(source, dest)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantMessage)
+			require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			assert.Equal(t, source, result.SourcePath)
+		})
+	}
 
 	t.Run("正常系: プラグイン呼び出しを含む.ksファイルを変換できる", func(t *testing.T) {
 		t.Parallel()
@@ -400,16 +465,17 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		assert.Greater(t, result.BytesAfter, result.BytesBefore)
 	})
 
-	t.Run("異常系: 存在しないファイルはFAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: 存在しないファイルは再試行不要なエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
+		source := filepath.Join(dir, "nonexistent.ks")
 		adjuster := converter.NewScriptAdjuster(nil, true)
-		result, err := adjuster.Convert(filepath.Join(dir, "nonexistent.ks"), filepath.Join(dir, "output.ks"))
+		_, err := adjuster.Convert(source, filepath.Join(dir, "output.ks"))
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.True(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "変換元ファイルが見つかりません: "+source)
 	})
 
 	t.Run("正常系: 変換先ディレクトリが存在しない場合は作成する", func(t *testing.T) {
