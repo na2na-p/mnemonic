@@ -132,7 +132,7 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 	}
 
 	converters := []converter.Converter{
-		converter.NewEncodingConverter("", ""),
+		converter.NewEncodingConverter("", b.config.SourceEncoding),
 		converter.NewImageConverter(),
 	}
 	if !b.config.SkipVideo {

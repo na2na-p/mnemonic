@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/na2na-p/mnemonic/internal/cache"
+	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
@@ -150,6 +151,11 @@ func (b *BuildPipeline) Validate() []string {
 		if err := validatePackageName(b.config.PackageName); err != nil {
 			errs = append(errs, err.Error())
 		}
+	}
+
+	if b.config.SourceEncoding != "" && !converter.IsSelectableSourceEncoding(b.config.SourceEncoding) {
+		errs = append(errs, fmt.Sprintf("--source-encoding に指定できない文字コード名です: %s（指定できる名前: %s）",
+			b.config.SourceEncoding, strings.Join(converter.SelectableSourceEncodings, ", ")))
 	}
 
 	if b.config.CleanCache && b.config.TemplateOffline {

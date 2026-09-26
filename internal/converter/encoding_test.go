@@ -32,6 +32,48 @@ func TestSupportedEncodings(t *testing.T) {
 	}
 }
 
+func TestSelectableSourceEncodings(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949"}, converter.SelectableSourceEncodings)
+}
+
+func TestIsSelectableSourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		enc  string
+		want bool
+	}{
+		{name: "正常系: shift_jisは指定できる", enc: "shift_jis", want: true},
+		{name: "正常系: 大文字とハイフン区切りのShift-JISも指定できる", enc: "Shift-JIS", want: true},
+		{name: "正常系: 別名sjisも指定できる", enc: "sjis", want: true},
+		{name: "正常系: Windowsのコードページ名cp932も指定できる", enc: "cp932", want: true},
+		{name: "正常系: Windowsのコードページ名windows-31jも指定できる", enc: "windows-31j", want: true},
+		{name: "正常系: euc-jpは指定できる", enc: "euc-jp", want: true},
+		{name: "正常系: utf-8は指定できる", enc: "utf-8", want: true},
+		{name: "正常系: 別名utf8も指定できる", enc: "utf8", want: true},
+		{name: "正常系: gb2312は指定できる", enc: "gb2312", want: true},
+		{name: "正常系: gb18030は指定できる", enc: "gb18030", want: true},
+		{name: "正常系: big5は指定できる", enc: "big5", want: true},
+		{name: "正常系: cp949は指定できる", enc: "cp949", want: true},
+		{name: "異常系: utf-16leは変換元としての指定を受け付けない", enc: "utf-16le", want: false},
+		{name: "異常系: utf-16beは変換元としての指定を受け付けない", enc: "utf-16be", want: false},
+		{name: "異常系: 別名utf-16も変換元としての指定を受け付けない", enc: "utf-16", want: false},
+		{name: "異常系: 空文字列は指定できない", enc: "", want: false},
+		{name: "異常系: 未知の名前は指定できない", enc: "klingon", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, converter.IsSelectableSourceEncoding(tt.enc))
+		})
+	}
+}
+
 func TestEncodingDetector_Detect(t *testing.T) {
 	t.Parallel()
 
@@ -442,6 +484,23 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		assertFileUTF8Equals(t, dest, text)
 	})
 
+	t.Run("正常系: 自動検出ではutf-8と推定される半角カナだけのShift_JISも指定されたshift_jisで変換する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "config.ini")
+		dest := filepath.Join(dir, "dest.ini")
+		// Shift_JISの"title=ﾀｲ"。chardetはC0 B2を有効なUTF-8の並びと数え、utf-8と推定する。
+		writeFile(t, source, []byte("title=\xc0\xb2"))
+
+		c := converter.NewEncodingConverter("", "shift_jis")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		assertFileUTF8Equals(t, dest, "title=ﾀｲ")
+	})
+
 	t.Run("正常系: 変換前後のバイト数が記録される", func(t *testing.T) {
 		t.Parallel()
 
@@ -614,6 +673,83 @@ func TestEncodingConverter_Convert_UTF16(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
 		assert.NoFileExists(t, dest)
 	})
+}
+
+// TestEncodingConverter_Convert_ExplicitSourceWithBOM は、変換元エンコーディングを
+// 明示した場合でも、BOMで始まるデータはBOMが示すエンコーディングで復号することを検証する。
+func TestEncodingConverter_Convert_ExplicitSourceWithBOM(t *testing.T) {
+	t.Parallel()
+
+	const text = "title=名前"
+
+	bom := []byte{0xef, 0xbb, 0xbf}
+
+	tests := []struct {
+		name     string
+		fileName string
+		content  []byte
+		want     []byte
+		// wantUndecodable が真なら、変換は不正なUTF-8として失敗する。
+		wantUndecodable bool
+	}{
+		{
+			name:     "正常系: UTF-8 BOM付きのファイルはshift_jisの指定によらずUTF-8として読む",
+			fileName: "config.ini",
+			content:  append(append([]byte{}, bom...), text...),
+			want:     []byte(text),
+		},
+		{
+			name:     "正常系: UTF-16LE BOM付きのファイルはshift_jisの指定によらずUTF-16LEとして読む",
+			fileName: "config.ini",
+			content:  encodeUTF16(text, false, true),
+			want:     append(append([]byte{}, bom...), text...),
+		},
+		{
+			name:     "正常系: UTF-16BE BOM付きのファイルはshift_jisの指定によらずUTF-16BEとして読む",
+			fileName: "config.ini",
+			content:  encodeUTF16(text, true, true),
+			want:     append(append([]byte{}, bom...), text...),
+		},
+		{
+			name:     "正常系: BOM無しのUTF-8は指定どおりShift_JISとして読む",
+			fileName: "config.ini",
+			content:  []byte(text),
+			// UTF-8の"名前"(E5 90 8D E5 89 8D)をShift_JISとして読んだ結果。
+			want: []byte("title=蜷榊燕"),
+		},
+		{
+			name:            "異常系: UTF-8 BOMの後ろが不正なUTF-8ならShift_JISとして読み直さず失敗する",
+			fileName:        "config.ini",
+			content:         append(append([]byte{}, bom...), "title=\xc0\xb2"...),
+			wantUndecodable: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.content)
+
+			c := converter.NewEncodingConverter("", "shift_jis")
+			result, err := c.Convert(source, dest)
+
+			if tt.wantUndecodable {
+				require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+				require.ErrorContains(t, err, "不正なUTF-8バイト列です")
+				assert.NoFileExists(t, dest)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, converter.StatusSuccess, result.Status)
+			assert.Equal(t, tt.want, readFile(t, dest))
+		})
+	}
 }
 
 func TestEncodingConverter_Convert_SimpleCrypt(t *testing.T) {

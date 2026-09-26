@@ -89,6 +89,7 @@ Flags:
       --quality string              画像品質プリセット (default "high")
       --skip-video                  動画変換をスキップ
       --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス（未指定時は既定のシステムパスを探索）
+      --source-encoding string      テキストアセットの変換元文字コード（shift_jis, euc-jp, utf-8, gb2312, gb18030, big5, cp949、未指定時はファイルごとに自動検出）。指定すると、BOMで始まるファイルと吉里吉里のsimple crypt形式を除くすべてのテキストアセットを、BOM無しのUTF-8も含めてこの文字コードとして読む
       --template-offline            オフラインモード
       --template-refresh-days int   テンプレートキャッシュ期限（日） (default 7)
       --template-version string     テンプレートバージョン固定

@@ -38,6 +38,11 @@ type Config struct {
 	TemplateVersion      *string
 	TemplateRefreshDays  int
 	TemplateOffline      bool
+	// SourceEncoding はテキストアセットの変換元エンコーディング名。空文字列を
+	// 「未指定」のsentinelとして扱い、ファイルごとの自動検出に委ねる。指定時は
+	// BOMで始まるファイルと吉里吉里のsimple crypt形式を除くすべてのテキストアセットを
+	// この名前で復号する。
+	SourceEncoding string
 }
 
 // NewConfig はinputPath/outputPathを指定し、その他のフィールドをデフォルト値

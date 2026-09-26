@@ -772,6 +772,63 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 	}
 }
 
+// TestBuildPipeline_ExecuteConvert_SourceEncoding は、Config.SourceEncodingが
+// CONVERTフェーズの文字コード変換に変換元として渡ることを検証する。
+func TestBuildPipeline_ExecuteConvert_SourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	// Shift_JISの"title=ﾀｲ"。chardetはC0 B2を有効なUTF-8の並びと数え、utf-8と推定する。
+	const shiftJISConfig = "title=\xc0\xb2"
+
+	tests := []struct {
+		name           string
+		sourceEncoding string
+		wantFailed     bool
+		wantConverted  string
+	}{
+		{
+			name:           "正常系: shift_jisを指定するとutf-8と推定されるShift_JISもUTF-8に変換される",
+			sourceEncoding: "shift_jis",
+			wantConverted:  "title=ﾀｲ",
+		},
+		{
+			name:           "異常系: 未指定なら自動検出でutf-8として復号し変換に失敗する",
+			sourceEncoding: "",
+			wantFailed:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			extractDir := t.TempDir()
+			path := filepath.Join(extractDir, "data", "config.ini")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+			require.NoError(t, os.WriteFile(path, []byte(shiftJISConfig), 0o600))
+
+			p := newTestPipeline(t)
+			t.Cleanup(p.cleanupTempDirs)
+			p.config.SourceEncoding = tt.sourceEncoding
+
+			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+			if tt.wantFailed {
+				require.ErrorIs(t, err, ErrAssetConversionFailed)
+				require.ErrorContains(t, err, path)
+
+				return
+			}
+
+			require.NoError(t, err)
+
+			got, readErr := os.ReadFile(filepath.Join(a.convertDir, "data", "config.ini"))
+			require.NoError(t, readErr)
+			assert.Equal(t, tt.wantConverted, string(got))
+		})
+	}
+}
+
 func TestBuildPipeline_ExecuteConvert_ReturnsErrorWhenExtractPhaseNotDone(t *testing.T) {
 	t.Parallel()
 

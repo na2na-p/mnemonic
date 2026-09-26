@@ -271,6 +271,58 @@ func TestBuildCommand_CleanFlag(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_SourceEncodingFlag(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	tests := []struct {
+		name      string
+		extraArgs []string
+		want      string
+	}{
+		{
+			name:      "正常系: --source-encoding指定時はその名前がConfigへ渡る",
+			extraArgs: []string{"--source-encoding", "shift_jis"},
+			want:      "shift_jis",
+		},
+		{
+			name:      "正常系: --source-encoding未指定時は空文字列（自動検出に委ねる）",
+			extraArgs: nil,
+			want:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captured := withCapturingBuildPipeline(t, &stubBuildRunner{
+				runResult: pipeline.Result{Success: true, OutputPath: &outputFile},
+			})
+
+			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
+			result := invoke(t, args)
+
+			require.Equal(t, 0, result.exitCode)
+			assert.Equal(t, tt.want, captured.SourceEncoding)
+		})
+	}
+}
+
+// TestBuildCommand_InvalidSourceEncoding は既定のnewBuildPipelineを読み出すため
+// t.Parallel()を呼ばない（TestBuildCommand_MissingInputと同じ理由）。
+func TestBuildCommand_InvalidSourceEncoding(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+
+	result := invoke(t, []string{"build", inputFile, "-o", filepath.Join(dir, "output.apk"), "--source-encoding", "klingon"})
+
+	assert.Equal(t, int(apperr.ExitError), result.exitCode)
+	assert.Contains(t, result.stdout, "Error: --source-encoding に指定できない文字コード名です: klingon")
+	assert.NoFileExists(t, filepath.Join(dir, "output.apk"))
+}
+
 func TestBuildCommand_Success(t *testing.T) {
 	dir := t.TempDir()
 	inputFile := filepath.Join(dir, "game.exe")

@@ -81,6 +81,11 @@ var encodingAliases = map[string]string{
 	// "utf-16"はバイト順を名前に持たないが、復号器はBOMがあればBOMのバイト順に従う。
 	"utf-16": "utf-16le",
 	"utf16":  "utf-16le",
+	// why not: cp932をSupportedEncodingsへ別の名前として足さない。x/textの
+	// japanese.ShiftJISはCode Page 932（Windows-31J）として実装されており、
+	// 別の復号器を用意しても同じ変換の重複になるため、shift_jisの別名とする。
+	"cp932":       "shift_jis",
+	"windows-31j": "shift_jis",
 }
 
 // normalizeEncoding はエンコーディング名を正規化する。
@@ -91,6 +96,23 @@ func normalizeEncoding(enc string) string {
 	}
 
 	return strings.ToLower(enc)
+}
+
+// SelectableSourceEncodings は利用者が変換元として明示できるエンコーディング名の一覧。
+// SupportedEncodingsからUTF-16を除いたもの。
+//
+// why not: UTF-16は明示を受け付けない。BOM付きのファイルは明示によらずBOMで復号し
+// （explicitSourcePlanを参照）、EncodingDetector.IsTextFileはBOM無しでNULを含む
+// データをバイナリとみなすため、明示したUTF-16が適用されるのはNULを含まずUTF-16
+// テキストとは考えにくいファイルだけになる。それをUTF-16として読むと"title=ab"が
+// "楴汴㵥扡"のような別の文字の並びに化け、decodeToUTF8はUTF-16の復号結果に含まれる
+// U+FFFDも失敗にしないため、変換は成功として書き出される。
+var SelectableSourceEncodings = slices.DeleteFunc(slices.Clone(SupportedEncodings), isUTF16Encoding)
+
+// IsSelectableSourceEncoding はencがSelectableSourceEncodingsのいずれか（別名を含む）を
+// 指すかを返す。空文字列はfalseを返す。
+func IsSelectableSourceEncoding(enc string) bool {
+	return isSupportedEncoding(enc) && !isUTF16Encoding(enc)
 }
 
 // isSupportedEncoding はencがSupportedEncodingsに含まれるかを確認する。
@@ -497,7 +519,7 @@ func (p sourcePlan) decode(data []byte) ([]byte, string, error) {
 
 func (c *EncodingConverter) planSource(data []byte) sourcePlan {
 	if c.sourceEncoding != "" {
-		return singleSource(c.sourceEncoding)
+		return explicitSourcePlan(data, c.sourceEncoding)
 	}
 
 	detection := c.detector.DetectBytes(data)
@@ -573,6 +595,30 @@ func (c *EncodingConverter) planSource(data []byte) sourcePlan {
 	default:
 		return singleSource(detection.Encoding)
 	}
+}
+
+// explicitSourcePlan は変換元エンコーディングsourceEncodingが明示された場合の計画を返す。
+// dataがUTF-16またはUTF-8のBOMで始まる場合は、明示よりBOMが示すエンコーディングを優先する。
+//
+// why not: BOMで始まるファイルに明示されたエンコーディングを当てはめない。BOMはその
+// ファイル自身の文字コードを示しており、変換先のkrkrsdl2はFF FEをUTF-16LE、FE FFを
+// UTF-16BE、EF BB BFをUTF-8として既定のエンコーディングによらず読む（krkrsdl2
+// external/krkrz/base/TextStream.cpp:98-118, :181-193）。元の吉里吉里2もFF FEは
+// UTF-16LEとして読む（krkr2@dec49af kirikiri2/branches/2.32stable/kirikiri2/src/
+// core/base/TextStream.cpp:88-92）。明示を当てはめると、エンジンが正しく読める
+// ファイルを文字化けさせる（UTF-8 BOM付きの"title=名前"をShift_JISとして読むと
+// "title=蜷榊燕"になる）か、復号できずに失敗させる。UTF-8 BOMの後ろが不正なUTF-8
+// であれば、自動検出の場合と同じく明示されたエンコーディングで読み直さず失敗にする。
+func explicitSourcePlan(data []byte, sourceEncoding string) sourcePlan {
+	if enc := utf16EncodingByBOM(data); enc != "" {
+		return singleSource(enc)
+	}
+
+	if bytes.HasPrefix(data, utf8BOM) {
+		return singleSource("utf-8")
+	}
+
+	return singleSource(sourceEncoding)
 }
 
 // shiftJISFallback はShift_JISだけを候補とし、復号できなければfailureを示す計画を返す。

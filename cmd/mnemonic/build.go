@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
+	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/logger"
 	"github.com/na2na-p/mnemonic/internal/pipeline"
 )
@@ -50,6 +51,7 @@ func newBuildCmd() *cobra.Command {
 		templateVersion     string
 		templateRefreshDays int
 		templateOffline     bool
+		sourceEncoding      string
 	)
 
 	cmd := &cobra.Command{
@@ -83,6 +85,7 @@ func newBuildCmd() *cobra.Command {
 
 			config.TemplateRefreshDays = templateRefreshDays
 			config.TemplateOffline = templateOffline
+			config.SourceEncoding = sourceEncoding
 
 			var logWriter io.Writer
 			if logFile != "" {
@@ -162,6 +165,15 @@ func newBuildCmd() *cobra.Command {
 		&templateRefreshDays, "template-refresh-days", pipeline.DefaultTemplateRefreshDays, "テンプレートキャッシュ期限（日）",
 	)
 	cmd.Flags().BoolVar(&templateOffline, "template-offline", false, "オフラインモード")
+	// why not: ファイルごとの指定は受け付けない。ファイルと文字コードの対応を渡すには
+	// そのための入力形式が別途必要になるため、1つの名前をすべてのテキストアセットに
+	// 適用する。
+	cmd.Flags().StringVar(
+		&sourceEncoding, "source-encoding", "",
+		"テキストアセットの変換元文字コード（"+strings.Join(converter.SelectableSourceEncodings, ", ")+
+			"、未指定時はファイルごとに自動検出）。指定すると、BOMで始まるファイルと吉里吉里の"+
+			"simple crypt形式を除くすべてのテキストアセットを、BOM無しのUTF-8も含めてこの文字コードとして読む",
+	)
 
 	return cmd
 }
