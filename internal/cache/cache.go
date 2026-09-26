@@ -1,16 +1,34 @@
-// Package cache はテンプレートキャッシュディレクトリの解決と管理を提供する。
+// Package cache はキャッシュディレクトリ（テンプレート、SDL2ソース、デバッグ用署名鍵）の
+// 解決と管理を提供する。
 package cache
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
 )
 
-// DefaultMaxAgeDays はキャッシュ有効期限のデフォルト日数。
-const DefaultMaxAgeDays = 7
+// TemplateMetadataFilename はテンプレートキャッシュのメタデータファイル名。
+const TemplateMetadataFilename = "metadata.json"
+
+// TemplateMetadataTimeLayout はメタデータ内の日時フォーマット（UTC）。
+const TemplateMetadataTimeLayout = "2006-01-02T15:04:05Z"
+
+// TemplateMetadata はテンプレートキャッシュ1バージョンのメタデータ。
+type TemplateMetadata struct {
+	Version      string `json:"version"`
+	DownloadedAt string `json:"downloaded_at"`
+	ExpiresAt    string `json:"expires_at"`
+}
+
+// KeystoreDirName はデバッグ用署名鍵を置くキャッシュ配下のサブディレクトリ名。
+const KeystoreDirName = "keystore"
 
 // Info はキャッシュディレクトリの情報を表す。
 //
@@ -71,16 +89,39 @@ func TemplateCachePath(version string) (string, error) {
 	return filepath.Join(dir, "templates", version), nil
 }
 
-// ClearCacheDir はcacheDir配下を削除する。templateOnly=trueの場合はtemplatesのみ削除する。
-// cacheDirが存在しない場合もエラーにはならない（os.RemoveAllの仕様に準拠）。
+// ClearCacheDir はcacheDir配下のキャッシュを削除する。
+//
+// templateOnly=falseの場合はKeystoreDirNameという名前のエントリを除くcacheDir直下の
+// 全エントリを削除し、cacheDir自体は残す。templateOnly=trueの場合はtemplatesのみ
+// 削除する。cacheDirが存在しない場合もエラーにはならない。
 func ClearCacheDir(cacheDir string, templateOnly bool) error {
-	target := cacheDir
 	if templateOnly {
-		target = filepath.Join(cacheDir, "templates")
+		if err := os.RemoveAll(filepath.Join(cacheDir, "templates")); err != nil {
+			return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+		}
+
+		return nil
 	}
 
-	if err := os.RemoveAll(target); err != nil {
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
 		return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+	}
+
+	for _, entry := range entries {
+		// why not: 署名鍵まで消すと次回ビルドの署名鍵が変わり、既存APKへの上書き
+		// インストールができなくなる（詳細はpipeline.createDebugKeystore）。
+		if entry.Name() == KeystoreDirName {
+			continue
+		}
+
+		if err := os.RemoveAll(filepath.Join(cacheDir, entry.Name())); err != nil {
+			return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+		}
 	}
 
 	return nil
@@ -97,10 +138,7 @@ func InfoForDir(cacheDir string) (Info, error) {
 		return Info{}, fmt.Errorf("キャッシュサイズの計算に失敗しました: %w", err)
 	}
 
-	version, expiresInDays, err := latestTemplateInfo(filepath.Join(cacheDir, "templates"))
-	if err != nil {
-		return Info{}, err
-	}
+	version, expiresInDays := latestTemplateInfo(filepath.Join(cacheDir, "templates"))
 
 	return Info{
 		Directory:             cacheDir,
@@ -135,37 +173,77 @@ func dirSize(root string) (int64, error) {
 	return total, nil
 }
 
-// latestTemplateInfo はtemplateDir直下で最終更新日時が最も新しいエントリを
-// 最新テンプレートとみなし、そのバージョン名と残り有効日数を返す。
-func latestTemplateInfo(templateDir string) (*string, *int, error) {
+// ReadTemplateMetadata はversionDir直下のメタデータを読む。無い・壊れている場合はok=false。
+func ReadTemplateMetadata(versionDir string) (TemplateMetadata, bool) {
+	data, err := os.ReadFile(filepath.Join(versionDir, TemplateMetadataFilename)) //nolint:gosec // キャッシュディレクトリ配下の固定ファイル名を読む用途のため妥当
+	if err != nil {
+		return TemplateMetadata{}, false
+	}
+
+	var metadata TemplateMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return TemplateMetadata{}, false
+	}
+
+	return metadata, true
+}
+
+// latestTemplateInfo はtemplateDir直下のバージョンのうちdownloaded_atが最も新しいものを
+// 最新テンプレートとみなし、そのバージョン名とexpires_atまでの残り日数（切り上げ、
+// 下限0）を返す。有効なメタデータを持つバージョンが無い場合は両方nilを返す。
+//
+// why not: ディレクトリの更新日時はダウンロード日時と一致せず、有効期間も
+// --template-refresh-daysで変わるため、更新日時と固定日数からは求めない。
+// ビルド自身が書いたメタデータを読むことで、ビルドのキャッシュ判定と一致させる。
+// expires_atを解釈できない場合は、ビルドが無効なキャッシュとみなすのに合わせて0日とする。
+func latestTemplateInfo(templateDir string) (*string, *int) {
 	entries, err := os.ReadDir(templateDir)
 	if err != nil {
-		return nil, nil, nil //nolint:nilerr // templatesディレクトリ自体が無い場合は「テンプレート未取得」として扱う
-	}
-	if len(entries) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	var (
-		latestName string
-		latestMod  time.Time
+		latest       TemplateMetadata
+		latestName   string
+		latestLoaded time.Time
+		found        bool
 	)
 
 	for _, entry := range entries {
-		info, err := entry.Info()
+		if !entry.IsDir() {
+			continue
+		}
+
+		metadata, ok := ReadTemplateMetadata(filepath.Join(templateDir, entry.Name()))
+		if !ok {
+			continue
+		}
+
+		downloadedAt, err := time.Parse(TemplateMetadataTimeLayout, metadata.DownloadedAt)
 		if err != nil {
-			return nil, nil, fmt.Errorf("テンプレート情報の取得に失敗しました: %w", err)
+			continue
 		}
-		if latestName == "" || info.ModTime().After(latestMod) {
+
+		if !found || downloadedAt.After(latestLoaded) {
+			latest = metadata
 			latestName = entry.Name()
-			latestMod = info.ModTime()
+			latestLoaded = downloadedAt
+			found = true
 		}
 	}
 
-	expires := DefaultMaxAgeDays - int(time.Since(latestMod).Hours()/24)
-	if expires < 0 {
-		expires = 0
+	if !found {
+		return nil, nil
 	}
 
-	return &latestName, &expires, nil
+	return new(latestName), new(daysUntil(latest.ExpiresAt))
+}
+
+func daysUntil(expiresAt string) int {
+	expires, err := time.Parse(TemplateMetadataTimeLayout, expiresAt)
+	if err != nil {
+		return 0
+	}
+
+	return max(0, int(math.Ceil(time.Until(expires).Hours()/24)))
 }

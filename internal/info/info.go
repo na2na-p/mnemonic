@@ -35,9 +35,11 @@ type GameInfo struct {
 
 var (
 	scriptExtensions = []string{".ks", ".tjs"}
-	imageExtensions  = []string{".png", ".jpg", ".jpeg", ".bmp", ".gif"}
-	audioExtensions  = []string{".ogg", ".wav", ".mp3", ".flac", ".mid", ".midi"}
-	videoExtensions  = []string{".mp4", ".avi", ".wmv", ".mkv"}
+	// .tlgはKirikiriネイティブの画像形式で、ビルド時の変換対象そのものであるため、
+	// 一覧から外すとアセット量の集計が実態より少なく見える。
+	imageExtensions = []string{".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tlg"}
+	audioExtensions = []string{".ogg", ".wav", ".mp3", ".flac", ".mid", ".midi"}
+	videoExtensions = []string{".mp4", ".avi", ".wmv", ".mkv"}
 )
 
 // DetectEngine はエンジンを検出する（"kirikiri" / "rpgmaker" / "unknown"）。

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -144,9 +145,7 @@ func TestTemplateDownloader_Download(t *testing.T) {
 						t.Fatalf("unexpected path: %s", r.URL.Path)
 					}
 				})
-				version := tc.version
-
-				_, err := d.Download(&version)
+				_, err := d.Download(new(tc.version))
 
 				require.NotErrorIs(t, err, builder.ErrInvalidVersion)
 				require.NoError(t, err)
@@ -181,12 +180,38 @@ func TestTemplateDownloader_Download(t *testing.T) {
 
 				d := builder.NewTemplateDownloader(t.TempDir(), nil)
 				d.APIBaseURL = server.URL
-				version := tc.version
-
-				_, err := d.Download(&version)
+				_, err := d.Download(new(tc.version))
 
 				require.ErrorIs(t, err, builder.ErrInvalidVersion)
 				assert.Zero(t, requestCount)
+			})
+		}
+	})
+
+	t.Run("異常系: ダウンロード先ディレクトリ未指定ではHTTPリクエストを送らずErrTemplateDownloadDirUnset", func(t *testing.T) {
+		t.Parallel()
+
+		testCases := []struct {
+			name    string
+			version *string
+		}{
+			{name: "異常系: バージョン指定あり", version: new("template-2026.01.31")},
+			{name: "異常系: バージョン未指定（最新版の問い合わせも行わない）", version: nil},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				var requestCount atomic.Int32
+				d := newTestDownloader(t, "", func(_ http.ResponseWriter, _ *http.Request) {
+					requestCount.Add(1)
+				})
+
+				_, err := d.Download(tc.version)
+
+				require.ErrorIs(t, err, builder.ErrTemplateDownloadDirUnset)
+				assert.Zero(t, requestCount.Load())
 			})
 		}
 	})
@@ -217,9 +242,7 @@ func TestTemplateDownloader_Download(t *testing.T) {
 
 		d := builder.NewTemplateDownloader(cacheDir, server.Client())
 		d.APIBaseURL = server.URL
-		version := "template-2026.01.31"
-
-		result, err := d.Download(&version)
+		result, err := d.Download(new("template-2026.01.31"))
 
 		require.NoError(t, err)
 		assert.Equal(t, "android-template.zip", filepath.Base(result))
@@ -271,9 +294,7 @@ func TestTemplateDownloader_Download(t *testing.T) {
 		d := newTestDownloader(t, t.TempDir(), func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		})
-		version := "template-9999.99.99"
-
-		_, err := d.Download(&version)
+		_, err := d.Download(new("template-9999.99.99"))
 
 		assert.ErrorIs(t, err, builder.ErrTemplateNotFound)
 	})
@@ -287,9 +308,7 @@ func TestTemplateDownloader_Download(t *testing.T) {
 
 		d := builder.NewTemplateDownloader(t.TempDir(), client)
 		d.APIBaseURL = server.URL
-		version := "template-2026.01.31"
-
-		_, err := d.Download(&version)
+		_, err := d.Download(new("template-2026.01.31"))
 
 		assert.ErrorIs(t, err, builder.ErrNetwork)
 	})
@@ -322,9 +341,7 @@ func TestTemplateDownloader_IntegrityCheck(t *testing.T) {
 
 		d := builder.NewTemplateDownloader(cacheDir, server.Client())
 		d.APIBaseURL = server.URL
-		version := "template-2026.01.31"
-
-		result, err := d.Download(&version)
+		result, err := d.Download(new("template-2026.01.31"))
 
 		require.NoError(t, err)
 		info, err := os.Stat(result)
@@ -357,9 +374,7 @@ func TestTemplateDownloader_IntegrityCheck(t *testing.T) {
 
 		d := builder.NewTemplateDownloader(cacheDir, server.Client())
 		d.APIBaseURL = server.URL
-		version := "template-2026.01.31"
-
-		_, err := d.Download(&version)
+		_, err := d.Download(new("template-2026.01.31"))
 
 		assert.ErrorIs(t, err, builder.ErrFileIntegrity)
 	})
@@ -410,9 +425,7 @@ func TestTemplateDownloader_Download_RetriesOnTransientNetworkError(t *testing.T
 
 	d := builder.NewTemplateDownloader(cacheDir, server.Client())
 	d.APIBaseURL = server.URL
-	version := "template-2026.01.31"
-
-	result, err := d.Download(&version)
+	result, err := d.Download(new("template-2026.01.31"))
 
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, attempts, 2)
@@ -451,9 +464,7 @@ func TestTemplateDownloader_Download_DoesNotRetryOnHTTPServerError(t *testing.T)
 
 	d := builder.NewTemplateDownloader(cacheDir, server.Client())
 	d.APIBaseURL = server.URL
-	version := "template-2026.01.31"
-
-	_, err := d.Download(&version)
+	_, err := d.Download(new("template-2026.01.31"))
 
 	require.ErrorIs(t, err, builder.ErrNetwork)
 	assert.Equal(t, 1, downloadAttempts, "5xxは再試行対象外のため試行は1回のみのはず")

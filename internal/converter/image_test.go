@@ -1,6 +1,7 @@
 package converter_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"image"
 	"image/color"
@@ -100,7 +101,7 @@ func buildTLG5Fixture(width int, colorDepth byte) []byte {
 		a           = tlg5FixtureA
 	)
 
-	header := append([]byte{}, tlg5Magic...)
+	header := bytes.Clone(tlg5Magic)
 	header = append(header, colorDepth)
 
 	buf := make([]byte, 4)
@@ -171,7 +172,7 @@ func buildTLG5Fixture(width int, colorDepth byte) []byte {
 // ヘルパー（本体データは無い。TLG6は本PRの時点でヘッダー解析のみ実装のため
 // 十分）。
 func buildTLG6HeaderFixture(colors, dataFlags byte, width, height, xBlockCount, yBlockCount uint32) []byte {
-	header := append([]byte{}, tlg6Magic...)
+	header := bytes.Clone(tlg6Magic)
 	header = append(header, colors, dataFlags)
 
 	buf := make([]byte, 4)
@@ -264,7 +265,7 @@ func TestTLGImageDecoder_GetInfo(t *testing.T) {
 		t.Parallel()
 
 		inner := buildTLG5Fixture(2, 32)
-		sds := append([]byte{}, sdsMagic...)
+		sds := bytes.Clone(sdsMagic)
 		sizeBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(inner))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
 		sds = append(sds, sizeBuf...)
@@ -339,7 +340,7 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		// 生TLG5ファイルが同一の画像にデコードされることを検証する。
 		inner := buildTLG5Fixture(2, 32)
 
-		sds := append([]byte{}, sdsMagic...)
+		sds := bytes.Clone(sdsMagic)
 		sizeBuf := make([]byte, 4)
 		binary.LittleEndian.PutUint32(sizeBuf, uint32(len(inner))) //nolint:gosec // テストフィクスチャの小さいサイズのみを扱う
 		sds = append(sds, sizeBuf...)
@@ -656,7 +657,8 @@ func TestImageConverter_Convert(t *testing.T) {
 		_, err := c.Convert(source, dest)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrTLGDecodeNotImplemented)
+		require.ErrorIs(t, err, converter.ErrTLGDecodeNotImplemented)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 
 	t.Run("異常系: 存在しない変換元ファイルはエラーを返す", func(t *testing.T) {
@@ -667,7 +669,8 @@ func TestImageConverter_Convert(t *testing.T) {
 		_, err := c.Convert(filepath.Join(dir, "nonexistent.bmp"), filepath.Join(dir, "output.png"))
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 
 	t.Run("異常系: 変換元がディレクトリの場合エラーを返す", func(t *testing.T) {
@@ -678,7 +681,87 @@ func TestImageConverter_Convert(t *testing.T) {
 		_, err := c.Convert(dir, filepath.Join(dir, "output.png"))
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrSourceIsDirectory)
+		require.ErrorIs(t, err, converter.ErrSourceIsDirectory)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: TLG形式でないファイルは再試行不要なエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.tlg")
+		writeFile(t, source, []byte("not a tlg file"))
+
+		c := converter.NewImageConverter()
+		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: 壊れたBMPファイルは再試行不要なエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "broken.bmp")
+		writeFile(t, source, []byte("not a bmp file"))
+
+		c := converter.NewImageConverter()
+		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: サポートされていない拡張子は再試行不要なエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.gif")
+		writeFile(t, source, []byte("GIF89a"))
+
+		c := converter.NewImageConverter()
+		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, converter.ErrUnsupportedImageFormat)
+		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: 存在するTLGファイルを読み込めない場合は再試行対象のエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "unreadable.tlg")
+		writeFile(t, source, buildTLG5Fixture(2, 32))
+		require.NoError(t, os.Chmod(source, 0o000))
+
+		c := converter.NewImageConverter()
+		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
+
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.bmp")
+		writeBMPFixture(t, source, color.RGBA{R: 255, A: 255})
+		blocker := filepath.Join(dir, "blocker")
+		writeFile(t, blocker, []byte("file, not directory"))
+
+		c := converter.NewImageConverter()
+		_, err := c.Convert(source, filepath.Join(blocker, "output.png"))
+
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 }
 

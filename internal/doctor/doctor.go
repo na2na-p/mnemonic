@@ -11,6 +11,7 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/cmdrun"
 	"github.com/na2na-p/mnemonic/internal/converter"
+	"github.com/na2na-p/mnemonic/internal/signer"
 )
 
 // checkTimeout は依存ツールのバージョン確認コマンドのタイムアウト。
@@ -47,7 +48,10 @@ type DependencyInfo struct {
 // ここに列挙するのはAPKビルドパイプラインが実行時に呼び出す外部ツール。
 var Dependencies = []DependencyInfo{
 	{Name: "Java JDK", Command: "java", VersionFlag: "-version", Required: true},
-	{Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true},
+	{
+		Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true,
+		PostCheck: checkAndroidBuildTools,
+	},
 	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
 	// why not: FluidSynthはMIDIアセットを含むゲームのビルドでは必須
@@ -60,6 +64,23 @@ var Dependencies = []DependencyInfo{
 		Note:      "MIDIアセット(.mid/.midi)を含むゲームのビルドには必須です（サウンドフォントも併せて必要）",
 		PostCheck: checkDefaultSoundfont,
 	},
+}
+
+// checkAndroidBuildTools は署名フェーズが使うbuild-toolsのツールが見つかるかを検査する。
+//
+// why not: sdkmanagerの有無だけでは判定として不十分。sdkmanagerが示すのは
+// SDKのコマンドラインツールが入っていることまでで、build-toolsパッケージが
+// 導入済みであることは示さない。その状態でdoctorがOKと表示すると、署名
+// フェーズでzipalign / apksignerが見つからずビルドが失敗する。探索ロジックは
+// signer側をSSOTとして参照し、doctorが独自に持たない。
+func checkAndroidBuildTools() (bool, string) {
+	for _, tool := range []string{"zipalign", "apksigner"} {
+		if _, ok := signer.FindAndroidBuildTool(tool); !ok {
+			return false, "build-toolsに" + tool + "が見つかりません（ANDROID_HOME配下またはPATH）"
+		}
+	}
+
+	return true, ""
 }
 
 // checkDefaultSoundfont は既定のサウンドフォントが実在するかを検査する。
@@ -113,8 +134,7 @@ func CheckDependency(info DependencyInfo) CheckResult {
 	case ctx.Err() != nil:
 		return notFoundResult(info, "コマンド '"+info.Command+"' がタイムアウトしました")
 	default:
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
+		if _, ok := errors.AsType[*exec.Error](err); ok {
 			return notFoundResult(info, "コマンド '"+info.Command+"' が見つかりません")
 		}
 

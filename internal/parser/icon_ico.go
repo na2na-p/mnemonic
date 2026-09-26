@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"cmp"
 	"encoding/binary"
 	"errors"
 )
@@ -49,14 +50,8 @@ func parseGrpIconDir(data []byte) ([]grpIconEntry, error) {
 
 		// bWidth/bHeightは0の場合256を表す(ICO/CURフォーマット仕様の
 		// 慣例。1バイトで256を表現できないための特別扱い)。
-		width := int(e[0])
-		if width == 0 {
-			width = grpIconDimensionZero
-		}
-		height := int(e[1])
-		if height == 0 {
-			height = grpIconDimensionZero
-		}
+		width := cmp.Or(int(e[0]), grpIconDimensionZero)
+		height := cmp.Or(int(e[1]), grpIconDimensionZero)
 
 		id := binary.LittleEndian.Uint16(e[12:14])
 

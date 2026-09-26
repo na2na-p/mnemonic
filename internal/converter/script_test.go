@@ -282,6 +282,7 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.True(t, result.Permanent)
 		assert.NoFileExists(t, dest)
 	})
 
@@ -408,6 +409,7 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.True(t, result.Permanent)
 	})
 
 	t.Run("正常系: 変換先ディレクトリが存在しない場合は作成する", func(t *testing.T) {

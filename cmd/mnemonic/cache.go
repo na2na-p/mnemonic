@@ -33,8 +33,11 @@ func newCacheCleanCmd(cacheDir func() (string, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "キャッシュを削除する",
+		Long: `キャッシュディレクトリ配下のテンプレートやソースキャッシュ等をすべて削除する。
+デバッグ用署名鍵は削除せずに残すため、再ビルドしたAPKも以前のAPKへ上書きインストールできる。
+--template-only を指定した場合はテンプレートキャッシュのみを削除する。`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			target := "すべてのキャッシュ"
+			target := "署名鍵を除くすべてのキャッシュ"
 			if templateOnly {
 				target = "テンプレートキャッシュ"
 			}

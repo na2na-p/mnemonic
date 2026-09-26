@@ -390,6 +390,25 @@ func TestEncodingConverter_Convert(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.True(t, result.Permanent)
+	})
+
+	t.Run("異常系: 未対応のソースエンコーディングは再試行不要なFAILED", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		dest := filepath.Join(dir, "dest.txt")
+		writeFile(t, source, []byte("plain ascii text"))
+
+		c := converter.NewEncodingConverter("", "unknown-encoding")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Contains(t, result.Message, "エンコーディング変換に失敗しました")
+		assert.True(t, result.Permanent)
+		assert.NoFileExists(t, dest)
 	})
 
 	t.Run("正常系: 変換先ディレクトリが存在しない場合は作成する", func(t *testing.T) {

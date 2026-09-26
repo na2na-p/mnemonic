@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -23,6 +24,10 @@ import (
 // エラー戻り値として表現するため。EncodingConverter/ScriptAdjuster/
 // VideoConverterは全ての既知の失敗を自身でConversionResultへ変換している
 // ためerr=nilを返す（詳細は各Convertメソッドのdocコメントを参照）。
+//
+// 再試行しても解消しない失敗は、ConversionResult.Permanent=trueを返すか
+// ErrPermanentFailureをラップしたerrorを返す。ConversionManagerはそれらを
+// リトライしない。
 type Converter interface {
 	CanConvert(filePath string) bool
 	Convert(source, dest string) (ConversionResult, error)
@@ -132,10 +137,7 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 	summary := ConversionSummary{Total: len(files)}
 
-	workers := m.MaxWorkers
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(m.MaxWorkers, 1)
 
 	tasksCh := make(chan FileTask)
 	resultsCh := make(chan ConversionResult, len(files))
@@ -146,11 +148,8 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 		completedCount int
 	)
 
-	wg.Add(workers)
 	for range workers {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for task := range tasksCh {
 				result := m.convertWithRetry(task.Source, task.Dest)
 
@@ -168,7 +167,7 @@ func (m *ConversionManager) ConvertFiles(files []FileTask) ConversionSummary {
 
 				resultsCh <- result
 			}
-		}()
+		})
 	}
 
 	go func() {
@@ -221,12 +220,21 @@ func (m *ConversionManager) convertWithRetry(source, dest string) ConversionResu
 	for attempt := 0; attempt < m.RetryConfig.MaxAttempts; attempt++ {
 		result, err := conv.Convert(source, dest)
 
+		// why not: 決定的な失敗を再試行してもバックオフ分だけサマリーが遅れるだけなので、
+		// 恒久的な失敗は1回目で打ち切る。
+		if err != nil && errors.Is(err, ErrPermanentFailure) {
+			return ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error(), Permanent: true}
+		}
+		if err == nil && result.Status != StatusSuccess && result.Permanent {
+			return result
+		}
+
 		switch {
 		case err != nil:
 			lastErr = err
 			lastResult = ConversionResult{SourcePath: source, Status: StatusFailed, Message: err.Error()}
 			hasLastResult = true
-		case result.Status == StatusSuccess:
+		case result.Status == StatusSuccess, result.Status == StatusSkipped:
 			return result
 		default:
 			lastResult = result
@@ -363,9 +371,7 @@ func CalculateWorkers(availableMemoryMB *int) int {
 }
 
 func calculateWorkersFor(availableMemoryMB *int, cpuCount int) int {
-	if cpuCount < 1 {
-		cpuCount = 1
-	}
+	cpuCount = max(cpuCount, 1)
 
 	if availableMemoryMB != nil {
 		workers := *availableMemoryMB / MemoryPerWorkerMB

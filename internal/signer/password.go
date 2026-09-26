@@ -1,6 +1,7 @@
 package signer
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -35,9 +36,7 @@ type DefaultPasswordProvider struct {
 // パスワードが空の場合はErrPasswordEmpty、ユーザー割り込みでキャンセルされた
 // 場合はErrPasswordCancelled、それ以外の読み取り失敗はErrPasswordInputFailedを返す。
 func (p DefaultPasswordProvider) GetPassword(prompt string) (string, error) {
-	if prompt == "" {
-		prompt = defaultPasswordPrompt
-	}
+	prompt = cmp.Or(prompt, defaultPasswordPrompt)
 
 	read := p.readPassword
 	if read == nil {
@@ -72,9 +71,7 @@ func (p DefaultPasswordProvider) GetPassword(prompt string) (string, error) {
 // envVarが空文字列の場合はdefaultPasswordEnvVarを使用する。
 // 環境変数が未設定または空文字列の場合は空文字列とfalseを返す。
 func (p DefaultPasswordProvider) GetPasswordFromEnv(envVar string) (string, bool) {
-	if envVar == "" {
-		envVar = defaultPasswordEnvVar
-	}
+	envVar = cmp.Or(envVar, defaultPasswordEnvVar)
 
 	password := os.Getenv(envVar)
 	if password == "" {

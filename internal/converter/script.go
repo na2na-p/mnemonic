@@ -291,6 +291,7 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 
@@ -313,6 +314,7 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 			Status:      StatusFailed,
 			Message:     fmt.Sprintf("UTF-8として読み込めませんでした: %s", source),
 			BytesBefore: int64(len(content)),
+			Permanent:   true,
 		}, nil
 	}
 

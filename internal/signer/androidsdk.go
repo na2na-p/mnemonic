@@ -7,6 +7,13 @@ import (
 	"sort"
 )
 
+// FindAndroidBuildTool はビルドが実際に使うのと同じ探索順序でAndroid SDKの
+// build-toolsに含まれるtoolName（zipalign / apksigner等）を探す。
+// 見つからない場合は空文字列とfalseを返す。
+func FindAndroidBuildTool(toolName string) (string, bool) {
+	return findAndroidBuildTool(toolName)
+}
+
 // findAndroidBuildTool はANDROID_HOME配下のbuild-toolsディレクトリから
 // 最新バージョンのtoolNameを検索し、見つからない場合はシステムPATHから検索する。
 // 見つからない場合は空文字列とfalseを返す。

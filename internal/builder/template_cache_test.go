@@ -12,9 +12,8 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/na2na-p/mnemonic/internal/builder"
+	"github.com/na2na-p/mnemonic/internal/cache"
 )
-
-const metadataTimeLayout = "2006-01-02T15:04:05Z"
 
 func writeCacheMetadata(t *testing.T, cachePath string, version string, downloadedAt, expiresAt time.Time) {
 	t.Helper()
@@ -23,8 +22,8 @@ func writeCacheMetadata(t *testing.T, cachePath string, version string, download
 
 	metadata := map[string]string{
 		"version":       version,
-		"downloaded_at": downloadedAt.UTC().Format(metadataTimeLayout),
-		"expires_at":    expiresAt.UTC().Format(metadataTimeLayout),
+		"downloaded_at": downloadedAt.UTC().Format(cache.TemplateMetadataTimeLayout),
+		"expires_at":    expiresAt.UTC().Format(cache.TemplateMetadataTimeLayout),
 	}
 	data, err := json.Marshal(metadata)
 	require.NoError(t, err)
@@ -66,9 +65,7 @@ func TestTemplateCache_GetCachedTemplate(t *testing.T) {
 		mockManager.EXPECT().GetCacheDir().Return(tmpDir, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 0)
-		version := "v1.0.0"
-
-		result, ok := c.GetCachedTemplate(&version)
+		result, ok := c.GetCachedTemplate(new("v1.0.0"))
 
 		require.True(t, ok)
 		assert.Equal(t, templateFile, result)
@@ -106,9 +103,7 @@ func TestTemplateCache_IsCacheValid(t *testing.T) {
 		mockManager.EXPECT().GetTemplateCachePath("v1.0.0").Return(cachePath, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 7)
-		version := "v1.0.0"
-
-		assert.True(t, c.IsCacheValid(&version))
+		assert.True(t, c.IsCacheValid(new("v1.0.0")))
 	})
 
 	t.Run("正常系: 期限切れのキャッシュは無効", func(t *testing.T) {
@@ -123,9 +118,7 @@ func TestTemplateCache_IsCacheValid(t *testing.T) {
 		mockManager.EXPECT().GetTemplateCachePath("v1.0.0").Return(cachePath, nil).AnyTimes()
 
 		c := builder.NewTemplateCache(mockManager, 7)
-		version := "v1.0.0"
-
-		assert.False(t, c.IsCacheValid(&version))
+		assert.False(t, c.IsCacheValid(new("v1.0.0")))
 	})
 
 	t.Run("正常系: refreshDaysで期限を変更できる", func(t *testing.T) {
@@ -270,6 +263,83 @@ func TestTemplateCache_SaveTemplate(t *testing.T) {
 		assert.Equal(t, "v2.0.0", metadata["version"])
 		assert.NotEmpty(t, metadata["downloaded_at"])
 		assert.NotEmpty(t, metadata["expires_at"])
+	})
+
+	t.Run("正常系: 保存先と同じパスのテンプレートを渡しても内容が保たれメタデータが書かれる", func(t *testing.T) {
+		t.Parallel()
+
+		cachePath := filepath.Join(t.TempDir(), "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+
+		templateFile := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(templateFile, []byte("test content"), 0o600))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		result, err := c.SaveTemplate(templateFile, "template-2026.01.31")
+
+		require.NoError(t, err)
+		assert.Equal(t, templateFile, result)
+		content, err := os.ReadFile(templateFile) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "test content", string(content))
+		assert.FileExists(t, filepath.Join(cachePath, "metadata.json"))
+	})
+
+	t.Run("正常系: 保存先へのハードリンクを渡しても内容が保たれる", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		cachePath := filepath.Join(root, "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+		destination := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(destination, []byte("test content"), 0o600))
+		linked := filepath.Join(root, "other", "android-template.zip")
+		require.NoError(t, os.MkdirAll(filepath.Dir(linked), 0o750))
+		require.NoError(t, os.Link(destination, linked))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		_, err := c.SaveTemplate(linked, "template-2026.01.31")
+
+		require.NoError(t, err)
+		content, err := os.ReadFile(destination) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "test content", string(content))
+	})
+
+	t.Run("正常系: 既存の保存先と別内容のテンプレートは上書きされる", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		cachePath := filepath.Join(root, "cache", "templates", "template-2026.01.31")
+		require.NoError(t, os.MkdirAll(cachePath, 0o750))
+		destination := filepath.Join(cachePath, "android-template.zip")
+		require.NoError(t, os.WriteFile(destination, []byte("old"), 0o600))
+		downloaded := filepath.Join(root, "download", "android-template.zip")
+		require.NoError(t, os.MkdirAll(filepath.Dir(downloaded), 0o750))
+		require.NoError(t, os.WriteFile(downloaded, []byte("new"), 0o600))
+
+		ctrl := gomock.NewController(t)
+		mockManager := NewMockCacheManager(ctrl)
+		mockManager.EXPECT().GetTemplateCachePath("template-2026.01.31").Return(cachePath, nil).AnyTimes()
+
+		c := builder.NewTemplateCache(mockManager, 0)
+
+		_, err := c.SaveTemplate(downloaded, "template-2026.01.31")
+
+		require.NoError(t, err)
+		content, err := os.ReadFile(destination) //nolint:gosec // テストで作成した固定パス
+		require.NoError(t, err)
+		assert.Equal(t, "new", string(content))
 	})
 
 	t.Run("異常系: 指定されたテンプレートファイルが存在しない場合", func(t *testing.T) {

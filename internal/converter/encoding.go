@@ -2,10 +2,12 @@ package converter
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -65,13 +67,9 @@ func isSupportedEncoding(enc string) bool {
 	}
 
 	normalized := strings.ToLower(strings.ReplaceAll(normalizeEncoding(enc), "_", "-"))
-	for _, supported := range SupportedEncodings {
-		if normalized == strings.ToLower(strings.ReplaceAll(supported, "_", "-")) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(SupportedEncodings, func(supported string) bool {
+		return normalized == strings.ToLower(strings.ReplaceAll(supported, "_", "-"))
+	})
 }
 
 // EncodingDetectionResult は文字コード検出結果を表す不変値。
@@ -176,9 +174,7 @@ type EncodingConverter struct {
 // targetEncodingが空文字列の場合は"utf-8"を使用する。sourceEncodingが空文字列の
 // 場合は自動検出を行う。
 func NewEncodingConverter(targetEncoding, sourceEncoding string) *EncodingConverter {
-	if targetEncoding == "" {
-		targetEncoding = "utf-8"
-	}
+	targetEncoding = cmp.Or(targetEncoding, "utf-8")
 
 	return &EncodingConverter{
 		targetEncoding: targetEncoding,
@@ -244,6 +240,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 
@@ -283,6 +280,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 			Status:      StatusFailed,
 			Message:     fmt.Sprintf("エンコーディング変換に失敗しました: %v", convErr),
 			BytesBefore: bytesBefore,
+			Permanent:   true,
 		}, nil
 	}
 

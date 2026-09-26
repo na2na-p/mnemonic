@@ -178,6 +178,7 @@ func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) 
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 

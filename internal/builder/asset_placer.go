@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -50,13 +51,11 @@ func (p *AssetPlacer) assetsDir() string {
 // パターンの照合には十分である（internal/parser/fnmatch.goのような完全な
 // fnmatch.translate相当の再実装は、この用途では過剰なため採用しない）。
 func matchesAnyPattern(name string, patterns []string) bool {
-	for _, pattern := range patterns {
-		if ok, err := filepath.Match(pattern, name); err == nil && ok {
-			return true
-		}
-	}
+	return slices.ContainsFunc(patterns, func(pattern string) bool {
+		ok, err := filepath.Match(pattern, name)
 
-	return false
+		return err == nil && ok
+	})
 }
 
 // PlaceAssets はsourceDir配下のファイルをAndroidプロジェクトのassetsディレクトリへ配置する。

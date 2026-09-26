@@ -194,6 +194,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Equal(t, source, result.SourcePath)
 		assert.Contains(t, result.Message, "見つかりません")
+		assert.True(t, result.Permanent)
 	})
 
 	t.Run("異常系: サウンドフォントが存在しない場合FAILEDを返す", func(t *testing.T) {
@@ -210,6 +211,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Contains(t, result.Message, "サウンドフォント")
+		assert.True(t, result.Permanent)
 	})
 
 	t.Run("正常系: MIDI変換が成功する(末尾無音なし)", func(t *testing.T) {
@@ -375,6 +377,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Contains(t, result.Message, "FluidSynth")
+		assert.False(t, result.Permanent)
 	})
 
 	t.Run("異常系: FFmpegがエラーを返す場合FAILEDを返す", func(t *testing.T) {
@@ -406,6 +409,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
 		assert.Contains(t, result.Message, "FFmpeg")
+		assert.False(t, result.Permanent)
 	})
 
 	t.Run("正常系: 出力先の親ディレクトリが存在しない場合作成する", func(t *testing.T) {

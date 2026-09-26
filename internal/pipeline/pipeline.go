@@ -26,12 +26,7 @@ import (
 type BuildPipeline struct {
 	config Config
 
-	tempDirs      []string
-	extractDir    string
-	convertDir    string
-	projectDir    string
-	unsignedAPK   string
-	gameStructure *parser.GameStructure
+	tempDirs []string
 
 	// executePhase は個別フェーズの実行を担う関数。既定値はb.runPhase
 	// （実際のフェーズ処理）。Run()が担うオーケストレーション（進捗コールバック
@@ -39,7 +34,7 @@ type BuildPipeline struct {
 	// を個々のフェーズ実装の詳細から切り離してテストするため、構造体フィールドと
 	// して差し替え可能にする（internal/converter.ConversionManager.SleepFuncと
 	// 同じ設計方針）。
-	executePhase func(Phase) error
+	executePhase func(Phase, buildArtifacts) (buildArtifacts, error)
 
 	// keystorePath/keystoreValid/keystoreGenerateはデバッグ用キーストアの
 	// 永続化（internal/pipeline/keystore.go）をkeytool実行から切り離して
@@ -47,6 +42,20 @@ type BuildPipeline struct {
 	keystorePath     func() (string, error)
 	keystoreValid    func(path string) bool
 	keystoreGenerate func(path string) error
+}
+
+// buildArtifacts はフェーズ間で引き渡すビルド成果物。値として次のフェーズへ渡す。
+//
+// why not: パイプラインの可変フィールドで受け渡すと、フェーズ間のデータの流れが
+// 暗黙の状態変更に隠れ、Runの呼び出しをまたいで状態が残り、テストはフィールドを
+// 直接書き換える必要がある。値で渡すことで流れが引数と戻り値に現れ、各フェーズを
+// 引数だけでテストできる。
+type buildArtifacts struct {
+	extractDir    string
+	convertDir    string
+	projectDir    string
+	unsignedAPK   string
+	gameStructure *parser.GameStructure
 }
 
 // NewBuildPipeline はconfigをもとにBuildPipelineを初期化する。
@@ -108,6 +117,8 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 
 	statistics := map[string]any{}
 
+	var artifacts buildArtifacts
+
 	for _, phase := range AllPhases() {
 		phaseStart := time.Now()
 
@@ -118,7 +129,8 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 			})
 		}
 
-		if err := b.executePhase(phase); err != nil {
+		next, err := b.executePhase(phase, artifacts)
+		if err != nil {
 			return Result{
 				Success:         false,
 				OutputPath:      nil,
@@ -127,6 +139,7 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 				Statistics:      statistics,
 			}
 		}
+		artifacts = next
 
 		phasesCompleted = append(phasesCompleted, phase)
 		statistics[string(phase)+"_time_seconds"] = round2(time.Since(phaseStart).Seconds())
@@ -162,20 +175,32 @@ func (b *BuildPipeline) cleanupTempDirs() {
 	b.tempDirs = nil
 }
 
+// newTempDir はprefixで一時ディレクトリを作成し、Run終了時のcleanupTempDirsで
+// 削除されるよう登録する。
+func (b *BuildPipeline) newTempDir(prefix string) (string, error) {
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return "", fmt.Errorf("一時ディレクトリの作成に失敗しました: %w", err)
+	}
+	b.tempDirs = append(b.tempDirs, dir)
+
+	return dir, nil
+}
+
 // runPhase は個別フェーズを実行する（executePhaseの既定実装）。
-func (b *BuildPipeline) runPhase(phase Phase) error {
+func (b *BuildPipeline) runPhase(phase Phase, a buildArtifacts) (buildArtifacts, error) {
 	switch phase {
 	case PhaseAnalyze:
-		return b.executeAnalyze()
+		return b.executeAnalyze(a)
 	case PhaseExtract:
-		return b.executeExtract()
+		return b.executeExtract(a)
 	case PhaseConvert:
-		return b.executeConvert()
+		return b.executeConvert(a)
 	case PhaseBuild:
-		return b.executeBuild()
+		return b.executeBuild(a)
 	case PhaseSign:
-		return b.executeSign()
+		return b.executeSign(a)
 	default:
-		return fmt.Errorf("未知のフェーズです: %s", phase)
+		return a, fmt.Errorf("未知のフェーズです: %s", phase)
 	}
 }

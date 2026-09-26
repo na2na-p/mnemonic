@@ -175,6 +175,19 @@ func TestAnalyzeGame_CountsMidiFilesAsAudio(t *testing.T) {
 	assert.Contains(t, result.Audio.Extensions, ".midi")
 }
 
+func TestAnalyzeGame_CountsTLGImages(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "a.tlg"))
+	touch(t, filepath.Join(dir, "b.png"))
+
+	result := info.AnalyzeGame(dir)
+
+	assert.Equal(t, 2, result.Images.Count)
+	assert.Contains(t, result.Images.Extensions, ".tlg")
+}
+
 func TestAnalyzeGame_RPGMaker(t *testing.T) {
 	t.Parallel()
 

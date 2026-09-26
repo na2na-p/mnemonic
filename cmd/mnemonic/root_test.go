@@ -269,7 +269,20 @@ func TestDoctorCommand_Runs(t *testing.T) {
 
 	result := invoke(t, []string{"doctor"})
 
-	assert.Contains(t, []int{0, 1}, result.exitCode)
+	assert.Contains(t, []int{int(apperr.ExitSuccess), int(apperr.ExitDependencyError)}, result.exitCode)
+}
+
+// why not: t.Parallel()を呼ばない。t.SetenvはPATH・ANDROID_HOMEというプロセス
+// 全体の環境変数を書き換えるため、並列実行中の他テストのツール検出結果まで
+// 変えてしまう（testingパッケージもt.Parallel()との併用を禁止している）。
+func TestDoctorCommand_MissingRequiredToolExitsWithDependencyError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("ANDROID_HOME", t.TempDir())
+
+	result := invoke(t, []string{"doctor"})
+
+	assert.Equal(t, int(apperr.ExitDependencyError), result.exitCode)
+	assert.Contains(t, result.stdout, "必須ツールが不足しています")
 }
 
 func TestDoctorCommand_ShowsTable(t *testing.T) {

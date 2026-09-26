@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -72,9 +73,7 @@ func NewMidiConverter(
 	if sampleRate <= 0 {
 		sampleRate = 44100
 	}
-	if audioCodec == "" {
-		audioCodec = "libvorbis"
-	}
+	audioCodec = cmp.Or(audioCodec, "libvorbis")
 	if audioQuality <= 0 {
 		audioQuality = 4
 	}
@@ -158,6 +157,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("変換元ファイルが見つかりません: %s", source),
+			Permanent:  true,
 		}, nil
 	}
 
@@ -166,6 +166,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("サウンドフォントが見つかりません: %s", c.soundfontPath),
+			Permanent:  true,
 		}, nil
 	}
 

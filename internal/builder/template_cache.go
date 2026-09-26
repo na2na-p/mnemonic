@@ -15,13 +15,6 @@ import (
 // ErrTemplateCache はテンプレートキャッシュ操作に関する基本エラー。
 var ErrTemplateCache = errors.New("テンプレートキャッシュの操作に失敗しました")
 
-// metadataTimeLayout はメタデータJSON内の日時フォーマット
-// （常にUTC、末尾Z表記）。
-const metadataTimeLayout = "2006-01-02T15:04:05Z"
-
-// metadataFilename はメタデータファイル名。
-const metadataFilename = "metadata.json"
-
 // defaultRefreshDays はキャッシュのデフォルト有効期間（日）。
 const defaultRefreshDays = 7
 
@@ -54,13 +47,6 @@ func (defaultCacheManager) GetTemplateCachePath(version string) (string, error) 
 	return cache.TemplateCachePath(version)
 }
 
-// templateMetadata はテンプレートキャッシュのメタデータ。
-type templateMetadata struct {
-	Version      string `json:"version"`
-	DownloadedAt string `json:"downloaded_at"`
-	ExpiresAt    string `json:"expires_at"`
-}
-
 // TemplateCache はCacheManagerを利用してkrkrsdl2テンプレートのキャッシュを管理する。
 type TemplateCache struct {
 	cacheManager CacheManager
@@ -83,31 +69,21 @@ func (c *TemplateCache) metadataPath(version string) (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(cachePath, metadataFilename), nil
+	return filepath.Join(cachePath, cache.TemplateMetadataFilename), nil
 }
 
 // readMetadata はversionのメタデータファイルを読み込む。
 // ファイルが存在しない、またはパース不能な場合はok=falseを返す。
-func (c *TemplateCache) readMetadata(version string) (templateMetadata, bool) {
-	path, err := c.metadataPath(version)
+func (c *TemplateCache) readMetadata(version string) (cache.TemplateMetadata, bool) {
+	cachePath, err := c.cacheManager.GetTemplateCachePath(version)
 	if err != nil {
-		return templateMetadata{}, false
+		return cache.TemplateMetadata{}, false
 	}
 
-	data, err := os.ReadFile(path) //nolint:gosec // キャッシュディレクトリ配下の固定ファイル名を読む用途のため妥当
-	if err != nil {
-		return templateMetadata{}, false
-	}
-
-	var metadata templateMetadata
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return templateMetadata{}, false
-	}
-
-	return metadata, true
+	return cache.ReadTemplateMetadata(cachePath)
 }
 
-func (c *TemplateCache) writeMetadata(version string, metadata templateMetadata) error {
+func (c *TemplateCache) writeMetadata(version string, metadata cache.TemplateMetadata) error {
 	path, err := c.metadataPath(version)
 	if err != nil {
 		return err
@@ -217,7 +193,7 @@ func (c *TemplateCache) IsCacheValid(version *string) bool {
 		return false
 	}
 
-	expiresAt, err := time.Parse(metadataTimeLayout, metadata.ExpiresAt)
+	expiresAt, err := time.Parse(cache.TemplateMetadataTimeLayout, metadata.ExpiresAt)
 	if err != nil {
 		return false
 	}
@@ -245,7 +221,7 @@ func (c *TemplateCache) GetCachedVersion() (string, bool) {
 			continue
 		}
 
-		downloadedAt, err := time.Parse(metadataTimeLayout, metadata.DownloadedAt)
+		downloadedAt, err := time.Parse(cache.TemplateMetadataTimeLayout, metadata.DownloadedAt)
 		if err != nil {
 			continue
 		}
@@ -263,7 +239,8 @@ func (c *TemplateCache) GetCachedVersion() (string, bool) {
 // SaveTemplate はテンプレートをキャッシュに保存する。
 // templatePathが存在しない場合はos.ErrNotExistを満たすerrorを返す。
 func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, error) {
-	if _, err := os.Stat(templatePath); err != nil {
+	srcInfo, err := os.Stat(templatePath)
+	if err != nil {
 		return "", err
 	}
 
@@ -277,17 +254,27 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	}
 
 	destination := filepath.Join(cachePath, filepath.Base(templatePath))
-	if err := copyFile(templatePath, destination); err != nil {
+
+	alreadyInPlace, err := isSameFile(srcInfo, destination)
+	if err != nil {
 		return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
+	}
+
+	// why not: copyFileは読み出し前に保存先をO_TRUNCで開くため、同一ファイルへの
+	// コピーは内容を消してしまう。既に保存先にある場合はメタデータの更新だけ行う。
+	if !alreadyInPlace {
+		if err := copyFile(templatePath, destination); err != nil {
+			return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
+		}
 	}
 
 	now := time.Now().UTC()
 	expiresAt := now.AddDate(0, 0, c.refreshDays)
 
-	metadata := templateMetadata{
+	metadata := cache.TemplateMetadata{
 		Version:      version,
-		DownloadedAt: now.Format(metadataTimeLayout),
-		ExpiresAt:    expiresAt.Format(metadataTimeLayout),
+		DownloadedAt: now.Format(cache.TemplateMetadataTimeLayout),
+		ExpiresAt:    expiresAt.Format(cache.TemplateMetadataTimeLayout),
 	}
 
 	if err := c.writeMetadata(version, metadata); err != nil {
@@ -295,4 +282,24 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 	}
 
 	return destination, nil
+}
+
+// isSameFile はsrcInfoのファイルとdstが同じファイル実体を指すかを返す。dstが存在
+// しない場合は同一になり得ないためfalseを返す。
+//
+// why not: パス文字列の正規化（Abs + EvalSymlinks）で比べると、ハードリンクや
+// 大文字小文字を区別しないファイルシステム上の表記違いを別ファイルと誤判定し、
+// コピーで内容を消してしまう。os.SameFileはデバイスとinodeで比べるため、
+// これらも同一と判定できる。
+func isSameFile(srcInfo os.FileInfo, dst string) (bool, error) {
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return os.SameFile(srcInfo, dstInfo), nil
 }

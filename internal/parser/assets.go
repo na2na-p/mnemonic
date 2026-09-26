@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -239,13 +240,9 @@ func (s *AssetScanner) Scan() (AssetManifest, error) {
 
 func (s *AssetScanner) shouldExclude(relSlash string) bool {
 	base := pathBase(relSlash)
-	for _, pattern := range s.config.Exclude {
-		if matchGlob(relSlash, pattern) || matchGlob(base, pattern) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(s.config.Exclude, func(pattern string) bool {
+		return matchGlob(relSlash, pattern) || matchGlob(base, pattern)
+	})
 }
 
 // conversionRuleOverride はconversion_rules設定から上書きアクションを決定する。

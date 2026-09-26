@@ -43,11 +43,11 @@ func writeTestWAV(t *testing.T, path string, audibleSeconds, silentSeconds float
 	totalSamples := audibleSamples + silentSamples
 
 	var pcm bytes.Buffer
-	for i := 0; i < audibleSamples; i++ {
+	for i := range audibleSamples {
 		v := int16(0.5 * 32767 * math.Sin(2*math.Pi*440*float64(i)/sampleRate))
 		require.NoError(t, binary.Write(&pcm, binary.LittleEndian, v))
 	}
-	for i := 0; i < silentSamples; i++ {
+	for range silentSamples {
 		require.NoError(t, binary.Write(&pcm, binary.LittleEndian, int16(0)))
 	}
 

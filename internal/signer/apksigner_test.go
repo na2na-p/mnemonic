@@ -44,12 +44,11 @@ func TestKeystoreConfig_KeyPasswordDefaultsToNil(t *testing.T) {
 // KeystoreConfigのStringメソッドのテスト。%v/%+vでの誤ったログ出力による
 // パスワード漏洩を防ぐため、fmt経由でも平文パスワードが現れないことをピン留めする。
 func TestKeystoreConfig_String_RedactsPasswords(t *testing.T) {
-	keyPassword := "key_pass_should_not_leak"
 	cfg := signer.KeystoreConfig{
 		KeystorePath:     "keystore.jks",
 		KeyAlias:         "my_alias",
 		KeystorePassword: "keystore_pass_should_not_leak",
-		KeyPassword:      &keyPassword,
+		KeyPassword:      new("key_pass_should_not_leak"),
 	}
 
 	cases := map[string]string{
@@ -90,12 +89,11 @@ func TestDefaultApkSignerRunner_Sign(t *testing.T) {
 		androidHome := writeFakeTool(t, "apksigner")
 		t.Setenv("ANDROID_HOME", androidHome)
 
-		keyPassword := "key_pass"
 		cfg := signer.KeystoreConfig{
 			KeystorePath:     keystore,
 			KeyAlias:         "my_alias",
 			KeystorePassword: "keystore_pass",
-			KeyPassword:      &keyPassword,
+			KeyPassword:      new("key_pass"),
 		}
 
 		ctrl := gomock.NewController(t)
