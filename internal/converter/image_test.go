@@ -17,6 +17,7 @@ import (
 	"golang.org/x/image/bmp"
 
 	"github.com/na2na-p/mnemonic/internal/converter"
+	"github.com/na2na-p/mnemonic/internal/converter/tlg"
 )
 
 // テストで用いる画像サイズ。CI時間短縮のため小さいサイズに揃える。
@@ -169,24 +170,46 @@ func buildTLG5Fixture(width int, colorDepth byte) []byte {
 	return result
 }
 
-// buildTLG6HeaderFixture はTLG6ヘッダーのみを持つバイト列を生成するテスト
-// ヘルパー（本体データは無い。TLG6は本PRの時点でヘッダー解析のみ実装のため
-// 十分）。
-func buildTLG6HeaderFixture(colors, dataFlags byte, width, height, xBlockCount, yBlockCount uint32) []byte {
+// buildTLG6HeaderFixture はTLG6ヘッダー（マジック + 色数・データフラグ・
+// カラータイプ・外部ゴロムテーブル各1バイト + width・height・max_bit_length
+// 各4バイト）だけを持ち、本体データを欠いたバイト列を生成するテストヘルパー。
+func buildTLG6HeaderFixture(colors byte, width, height uint32) []byte {
 	header := bytes.Clone(tlg6Magic)
-	header = append(header, colors, dataFlags)
-
-	buf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(buf, width)
-	header = append(header, buf...)
-	binary.LittleEndian.PutUint32(buf, height)
-	header = append(header, buf...)
-	binary.LittleEndian.PutUint32(buf, xBlockCount)
-	header = append(header, buf...)
-	binary.LittleEndian.PutUint32(buf, yBlockCount)
-	header = append(header, buf...)
+	header = append(header, colors, 0, 0, 0)
+	header = binary.LittleEndian.AppendUint32(header, width)
+	header = binary.LittleEndian.AppendUint32(header, height)
+	header = binary.LittleEndian.AppendUint32(header, 0)
 
 	return header
+}
+
+// tlg6FixturePath はtlgパッケージのテストデータにあるTLG6フィクスチャ
+// （krkrz参照エンコーダで生成したもの。tlg/testdata/README.md参照）のパス。
+func tlg6FixturePath(name string) string {
+	return filepath.Join("tlg", "testdata", name)
+}
+
+// copyTLG6Fixture はTLG6フィクスチャをdestへ複製するテストヘルパー。
+func copyTLG6Fixture(t *testing.T, name, dest string) {
+	t.Helper()
+
+	data, err := os.ReadFile(tlg6FixturePath(name + ".tlg"))
+	require.NoError(t, err)
+	writeFile(t, dest, data)
+}
+
+// loadTLG6ExpectedPNG はTLG6フィクスチャの期待画素（参照デコーダの出力）を読む。
+func loadTLG6ExpectedPNG(t *testing.T, name string) image.Image {
+	t.Helper()
+
+	f, err := os.Open(tlg6FixturePath(name + ".png"))
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	img, err := png.Decode(f)
+	require.NoError(t, err)
+
+	return img
 }
 
 func TestTLGImageDecoder_IsTLGFile(t *testing.T) {
@@ -245,12 +268,12 @@ func TestTLGImageDecoder_GetInfo(t *testing.T) {
 		assert.False(t, info.HasAlpha)
 	})
 
-	t.Run("正常系: TLG6ファイルのメタ情報を取得できる（本体デコード未実装でも成功する）", func(t *testing.T) {
+	t.Run("正常系: TLG6ファイルのメタ情報をヘッダーだけから取得できる", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		path := filepath.Join(dir, "test.tlg")
-		writeFile(t, path, buildTLG6HeaderFixture(32, 0, 8, 4, 1, 1))
+		writeFile(t, path, buildTLG6HeaderFixture(4, 8, 4))
 
 		decoder := converter.NewTLGImageDecoder()
 		info, err := decoder.GetInfo(path)
@@ -369,18 +392,37 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		}
 	})
 
-	t.Run("異常系: TLG6ファイルはErrTLGDecodeNotImplementedを返す", func(t *testing.T) {
+	t.Run("正常系: TLG6ファイルを参照デコーダと同じ画素へデコードできる", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "test.tlg")
+		copyTLG6Fixture(t, "rgba_allfilters_61x29", path)
+
+		decoder := converter.NewTLGImageDecoder()
+		img, err := decoder.Decode(path)
+
+		require.NoError(t, err)
+		expected := loadTLG6ExpectedPNG(t, "rgba_allfilters_61x29")
+		require.Equal(t, expected.Bounds(), img.Bounds())
+		for y := range img.Bounds().Dy() {
+			for x := range img.Bounds().Dx() {
+				assert.Equal(t, color.NRGBAModel.Convert(expected.At(x, y)), color.NRGBAModel.Convert(img.At(x, y)), "pixel (%d,%d)", x, y)
+			}
+		}
+	})
+
+	t.Run("異常系: 本体データを欠いたTLG6ファイルはErrTLG6DataTooShortを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		path := filepath.Join(dir, "test.tlg")
-		writeFile(t, path, buildTLG6HeaderFixture(32, 0, 8, 4, 1, 1))
+		writeFile(t, path, buildTLG6HeaderFixture(4, 8, 4))
 
 		decoder := converter.NewTLGImageDecoder()
 		_, err := decoder.Decode(path)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrTLGDecodeNotImplemented)
+		assert.ErrorIs(t, err, tlg.ErrTLG6DataTooShort)
 	})
 
 	t.Run("異常系: 存在しないファイルはErrSourceNotFoundを返す", func(t *testing.T) {
@@ -646,19 +688,48 @@ func TestImageConverter_Convert(t *testing.T) {
 		assert.FileExists(t, dest)
 	})
 
-	t.Run("異常系: TLG6ファイルは未実装エラーを返す", func(t *testing.T) {
+	t.Run("正常系: TLG6ファイルをPNGへ変換できる", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		source := filepath.Join(dir, "test.tlg")
-		writeFile(t, source, buildTLG6HeaderFixture(32, 0, 8, 4, 1, 1))
+		copyTLG6Fixture(t, "rgb_allfilters_noise_61x29", source)
+		dest := filepath.Join(dir, "output.png")
+
+		c := converter.NewImageConverter()
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+
+		f, err := os.Open(dest) //nolint:gosec // テスト用の一時ファイル
+		require.NoError(t, err)
+		defer func() { _ = f.Close() }()
+		img, err := png.Decode(f)
+		require.NoError(t, err)
+
+		expected := loadTLG6ExpectedPNG(t, "rgb_allfilters_noise_61x29")
+		require.Equal(t, expected.Bounds(), img.Bounds())
+		for y := range img.Bounds().Dy() {
+			for x := range img.Bounds().Dx() {
+				assert.Equal(t, color.NRGBAModel.Convert(expected.At(x, y)), color.NRGBAModel.Convert(img.At(x, y)), "pixel (%d,%d)", x, y)
+			}
+		}
+	})
+
+	t.Run("異常系: 本体データを欠いたTLG6ファイルは再試行不要なエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "test.tlg")
+		writeFile(t, source, buildTLG6HeaderFixture(4, 8, 4))
 		dest := filepath.Join(dir, "output.png")
 
 		c := converter.NewImageConverter()
 		_, err := c.Convert(source, dest)
 
 		require.Error(t, err)
-		require.ErrorIs(t, err, converter.ErrTLGDecodeNotImplemented)
+		require.ErrorIs(t, err, tlg.ErrTLG6DataTooShort)
 		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 

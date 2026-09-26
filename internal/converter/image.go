@@ -18,14 +18,6 @@ import (
 	"github.com/na2na-p/mnemonic/internal/converter/tlg"
 )
 
-// ErrTLGDecodeNotImplemented はTLG画像のデコードが未実装であることを示す
-// センチネルエラー。
-//
-// why not: TLG6の本体デコード実装はスコープ外であり、ヘッダのマジックバイト
-// 判定とヘッダ解析のみ実装する。TLG5は実装済みのため、このエラーはTLG6形式の
-// ファイルに対してのみ返る。
-var ErrTLGDecodeNotImplemented = errors.New("TLGデコードは未実装です")
-
 // ErrUnsupportedImageFormat はstdlib/x-imageで対応していない画像拡張子を
 // 指定した場合のエラー。
 var ErrUnsupportedImageFormat = errors.New("サポートされていない画像形式です")
@@ -59,8 +51,7 @@ type TLGInfo struct {
 }
 
 // TLGImageDecoder はTLG形式の画像ファイルを読み込み、image.Imageへ変換する。
-// TLG5およびTLG6形式に対応（TLG6は本体デコード未実装）。SDSコンテナ形式も
-// サポートする。
+// TLG5およびTLG6形式に対応し、SDSコンテナ形式もサポートする。
 type TLGImageDecoder struct {
 	tlg5Decoder *tlg.TLG5Decoder
 	tlg6Decoder *tlg.TLG6Decoder
@@ -135,11 +126,7 @@ func readTLGSource(filePath string) ([]byte, error) {
 	return unwrapSDS(data), nil
 }
 
-// GetInfo はTLG画像のメタ情報を取得する。
-//
-// why not: TLG6のヘッダ解析は実装済みのTLG6Decoder.ParseHeaderで完結するため、
-// GetInfoはTLG5/TLG6のいずれでもErrTLGDecodeNotImplementedを返さない
-// （decode()本体のみが未実装であるため）。
+// GetInfo はTLG画像のメタ情報をヘッダーだけから取得する。
 func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 	data, err := readTLGSource(filePath)
 	if err != nil {
@@ -167,7 +154,6 @@ func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 }
 
 // Decode はTLG画像をデコードしてimage.Imageを返す。
-// TLG6形式の場合はErrTLGDecodeNotImplementedを返す（本体デコード未実装）。
 func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 	data, err := readTLGSource(filePath)
 	if err != nil {
@@ -183,17 +169,12 @@ func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 
 		return img, nil
 	case TLGVersionTLG6:
-		// why not: tlg6Decoder.Decode()はマジックバイトが有効な限り常に
-		// tlg.ErrTLG6NotImplemented（"TLG6デコードは未実装です"）を返す。
-		// これをErrTLGDecodeNotImplementedへさらに%wでラップすると
-		// 「TLGデコードは未実装です: TLG6デコードは未実装です」という
-		// 冗長な二重メッセージになるため、下位エラーの文言は引き継がず
-		// ErrTLGDecodeNotImplementedのみを返す。呼び出し自体は、将来
-		// tlg6Decoder.Decodeが実装された際にここを更新し忘れないための
-		// フックとして残す。
-		_, _ = d.tlg6Decoder.Decode(data)
+		img, decErr := d.tlg6Decoder.Decode(data)
+		if decErr != nil {
+			return nil, decErr
+		}
 
-		return nil, ErrTLGDecodeNotImplemented
+		return img, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
 	}
@@ -273,7 +254,7 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 //
 // 失敗はerrとして返す。変換元の検証(validateSource)の失敗のうち、変換元が
 // 存在しない・権限不足で確認できない・ディレクトリである場合と、デコードの失敗
-// （TLG未実装・未対応の拡張子を含む）はErrPermanentFailureでラップして返す。
+// （壊れたTLG・未対応の拡張子を含む）はErrPermanentFailureでラップして返す。
 // それ以外の理由で変換元を確認できない場合、TLGの読み込み失敗（権限不足を除く）・
 // TLG以外の変換元のオープン失敗・出力先の作成・PNGエンコードの失敗は再試行対象と
 // する。errがnilのとき、StatusはStatusSuccessとなる。

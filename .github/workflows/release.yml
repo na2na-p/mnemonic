@@ -71,6 +71,7 @@ jobs:
             -o "dist/${name}/${bin}" \
             ./cmd/mnemonic
           cp README.md "dist/${name}/"
+          cp THIRD_PARTY_NOTICES.md "dist/${name}/"
           if [ "${GOOS}" = "windows" ]; then
             (cd dist && zip -qr "${name}.zip" "${name}")
           else
