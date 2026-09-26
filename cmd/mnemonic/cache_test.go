@@ -7,10 +7,13 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCacheHelpCommand_ShowsSubcommands(t *testing.T) {
@@ -96,6 +99,25 @@ func TestCacheCleanCommand_CombinedOptions(t *testing.T) {
 			assert.Equal(t, 0, result.exitCode)
 		})
 	}
+}
+
+func TestCacheCleanCommand_KeepsKeystore(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	keystoreFile := filepath.Join(dir, "keystore", "debug.keystore")
+	require.NoError(t, os.MkdirAll(filepath.Dir(keystoreFile), 0o750))
+	require.NoError(t, os.WriteFile(keystoreFile, []byte("keystore"), 0o600))
+	templateFile := filepath.Join(dir, "templates", "1.0.0", "template.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(templateFile), 0o750))
+	require.NoError(t, os.WriteFile(templateFile, []byte("template"), 0o600))
+
+	result := invokeWithCacheDir(t, []string{"cache", "clean", "--force"}, "", dir)
+
+	assert.Equal(t, 0, result.exitCode)
+	assert.FileExists(t, keystoreFile)
+	assert.NoDirExists(t, filepath.Join(dir, "templates"))
+	assert.Contains(t, result.stdout, "署名鍵を除く")
 }
 
 func TestCacheCleanCommand_HelpShowsOptions(t *testing.T) {

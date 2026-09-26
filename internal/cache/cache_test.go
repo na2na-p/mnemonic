@@ -128,7 +128,7 @@ func TestTemplateCachePath(t *testing.T) {
 func TestClearCacheDir(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: 全キャッシュをクリアする", func(t *testing.T) {
+	t.Run("正常系: 署名鍵を除く全キャッシュをクリアする", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -141,12 +141,41 @@ func TestClearCacheDir(t *testing.T) {
 		)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sdl2_sources"), 0o750))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "sdl2_sources", "x"), []byte("sdl2"), 0o600))
+		keystoreFile := filepath.Join(dir, "keystore", "debug.keystore")
+		require.NoError(t, os.MkdirAll(filepath.Dir(keystoreFile), 0o750))
+		require.NoError(t, os.WriteFile(keystoreFile, []byte("keystore"), 0o600))
 
 		err := cache.ClearCacheDir(dir, false)
 
 		require.NoError(t, err)
-		_, statErr := os.Stat(dir)
-		assert.True(t, os.IsNotExist(statErr))
+		assert.NoFileExists(t, filepath.Join(dir, "test.txt"))
+		assert.NoDirExists(t, filepath.Join(dir, "templates"))
+		assert.NoDirExists(t, filepath.Join(dir, "sdl2_sources"))
+		content, readErr := os.ReadFile(keystoreFile)
+		require.NoError(t, readErr)
+		assert.Equal(t, "keystore", string(content))
+		assert.DirExists(t, dir)
+	})
+
+	t.Run("正常系: 署名鍵が無い場合は他のエントリをすべて削除しディレクトリを残す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "test.txt"), []byte("test"), 0o600))
+		templateDir := filepath.Join(dir, "templates", "1.0.0")
+		require.NoError(t, os.MkdirAll(templateDir, 0o750))
+		require.NoError(
+			t,
+			os.WriteFile(filepath.Join(templateDir, "template.txt"), []byte("template"), 0o600),
+		)
+
+		err := cache.ClearCacheDir(dir, false)
+
+		require.NoError(t, err)
+		assert.DirExists(t, dir)
+		entries, readErr := os.ReadDir(dir)
+		require.NoError(t, readErr)
+		assert.Empty(t, entries)
 	})
 
 	t.Run("正常系: テンプレートのみクリアする", func(t *testing.T) {
@@ -164,6 +193,9 @@ func TestClearCacheDir(t *testing.T) {
 		sdl2SourceFile := filepath.Join(dir, "sdl2_sources", "x")
 		require.NoError(t, os.MkdirAll(filepath.Dir(sdl2SourceFile), 0o750))
 		require.NoError(t, os.WriteFile(sdl2SourceFile, []byte("sdl2"), 0o600))
+		keystoreFile := filepath.Join(dir, "keystore", "debug.keystore")
+		require.NoError(t, os.MkdirAll(filepath.Dir(keystoreFile), 0o750))
+		require.NoError(t, os.WriteFile(keystoreFile, []byte("keystore"), 0o600))
 
 		err := cache.ClearCacheDir(dir, true)
 
@@ -174,6 +206,7 @@ func TestClearCacheDir(t *testing.T) {
 		assert.True(t, os.IsNotExist(statErr))
 		_, statErr = os.Stat(sdl2SourceFile)
 		require.NoError(t, statErr)
+		assert.FileExists(t, keystoreFile)
 	})
 
 	t.Run("正常系: 存在しないディレクトリのクリアはエラーにならない", func(t *testing.T) {

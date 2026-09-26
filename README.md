@@ -105,7 +105,7 @@ mnemonic info <input>
 
 ```bash
 mnemonic cache info    # キャッシュ情報を表示
-mnemonic cache clean   # キャッシュを削除
+mnemonic cache clean   # キャッシュを削除（署名鍵は保持）
 ```
 
 各コマンドの詳細は `mnemonic <command> --help` で確認できる。

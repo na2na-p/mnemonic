@@ -1,8 +1,11 @@
-// Package cache はテンプレートキャッシュディレクトリの解決と管理を提供する。
+// Package cache はキャッシュディレクトリ（テンプレート、SDL2ソース、デバッグ用署名鍵）の
+// 解決と管理を提供する。
 package cache
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +14,9 @@ import (
 
 // DefaultMaxAgeDays はキャッシュ有効期限のデフォルト日数。
 const DefaultMaxAgeDays = 7
+
+// KeystoreDirName はデバッグ用署名鍵を置くキャッシュ配下のサブディレクトリ名。
+const KeystoreDirName = "keystore"
 
 // Info はキャッシュディレクトリの情報を表す。
 //
@@ -71,16 +77,39 @@ func TemplateCachePath(version string) (string, error) {
 	return filepath.Join(dir, "templates", version), nil
 }
 
-// ClearCacheDir はcacheDir配下を削除する。templateOnly=trueの場合はtemplatesのみ削除する。
-// cacheDirが存在しない場合もエラーにはならない（os.RemoveAllの仕様に準拠）。
+// ClearCacheDir はcacheDir配下のキャッシュを削除する。
+//
+// templateOnly=falseの場合はKeystoreDirNameという名前のエントリを除くcacheDir直下の
+// 全エントリを削除し、cacheDir自体は残す。templateOnly=trueの場合はtemplatesのみ
+// 削除する。cacheDirが存在しない場合もエラーにはならない。
 func ClearCacheDir(cacheDir string, templateOnly bool) error {
-	target := cacheDir
 	if templateOnly {
-		target = filepath.Join(cacheDir, "templates")
+		if err := os.RemoveAll(filepath.Join(cacheDir, "templates")); err != nil {
+			return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+		}
+
+		return nil
 	}
 
-	if err := os.RemoveAll(target); err != nil {
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
 		return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+	}
+
+	for _, entry := range entries {
+		// why not: 署名鍵まで消すと次回ビルドの署名鍵が変わり、既存APKへの上書き
+		// インストールができなくなる（詳細はpipeline.createDebugKeystore）。
+		if entry.Name() == KeystoreDirName {
+			continue
+		}
+
+		if err := os.RemoveAll(filepath.Join(cacheDir, entry.Name())); err != nil {
+			return fmt.Errorf("キャッシュの削除に失敗しました: %w", err)
+		}
 	}
 
 	return nil

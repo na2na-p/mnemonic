@@ -16,9 +16,6 @@ import (
 // debugKeystoreTimeout はkeytoolコマンドのタイムアウト。
 const debugKeystoreTimeout = 30 * time.Second
 
-// debugKeystoreDirName はデバッグ用キーストアを永続化するキャッシュディレクトリ配下のサブディレクトリ名。
-const debugKeystoreDirName = "keystore"
-
 // debugKeystoreFileName は永続化するデバッグ用キーストアのファイル名。
 const debugKeystoreFileName = "debug.keystore"
 
@@ -61,7 +58,7 @@ func resolveDebugKeystorePath() (string, error) {
 		return "", err
 	}
 
-	return filepath.Join(dir, debugKeystoreDirName, debugKeystoreFileName), nil
+	return filepath.Join(dir, cache.KeystoreDirName, debugKeystoreFileName), nil
 }
 
 // validateDebugKeystoreFile はkeytool -listでpathのキーストアが読み取り可能かを検証する。

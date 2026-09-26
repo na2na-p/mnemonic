@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/na2na-p/mnemonic/internal/cache"
 )
 
 // newKeystoreTestPipeline はkeytool実行を伴わないBuildPipelineを生成する。
@@ -129,6 +131,9 @@ func TestResolveDebugKeystorePath_ReturnsPathUnderCacheDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "debug.keystore", filepath.Base(path))
 	assert.Equal(t, "keystore", filepath.Base(filepath.Dir(path)))
+	cacheDir, err := cache.Dir()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cacheDir, cache.KeystoreDirName, "debug.keystore"), path)
 }
 
 // requireFunctionalKeytool はkeytoolコマンドが実際にJavaランタイムを解決できるかを
