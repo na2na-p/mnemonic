@@ -346,7 +346,7 @@ func (m *ConversionManager) sleep(seconds float64) {
 // ConvertDirectory はsourceDir配下の対応ファイルをdestDirへ変換し、サマリーを
 // 返す。recursive=trueの場合はサブディレクトリも再帰的に処理する。
 //
-// 結果のMessageに現れるsourceDir・destDir配下のパスは、relativeMessageに従い
+// 結果のMessageに現れるsourceDir・destDir配下のパスは、RelativeMessageに従い
 // それぞれのルートからの相対パスにする。SourcePath・DestPathは変更しない。
 //
 // why not: 絶対パスのまま返さない。internal/pipelineのCONVERTフェーズは実行の
@@ -363,13 +363,13 @@ func (m *ConversionManager) ConvertDirectory(sourceDir, destDir string, recursiv
 
 	summary := m.ConvertFiles(files)
 	for i := range summary.Results {
-		summary.Results[i].Message = relativeMessage(summary.Results[i].Message, sourceDir, destDir)
+		summary.Results[i].Message = RelativeMessage(summary.Results[i].Message, sourceDir, destDir)
 	}
 
 	return summary, nil
 }
 
-// relativeMessage はmessage中の、rootsのいずれかの配下を指すパスを、そのルート
+// RelativeMessage はmessage中の、rootsのいずれかの配下を指すパスを、そのルート
 // からの相対パスに置き換える。ルートが入れ子の場合は長い方のルートを使う。
 // 置き換えるのは文頭か空白の直後から始まるパスだけで、ルート自体を指すパスは
 // そのまま残す。
@@ -377,7 +377,7 @@ func (m *ConversionManager) ConvertDirectory(sourceDir, destDir string, recursiv
 // why not: 文中のどこに現れても置き換えはしない。ルートが/var/xのときの
 // /private/var/x/aのように、ルートを途中に含む別のパスまで切り詰めて、
 // 別のパスに書き換えてしまう。
-func relativeMessage(message string, roots ...string) string {
+func RelativeMessage(message string, roots ...string) string {
 	prefixes := make([]string, 0, len(roots))
 	for _, root := range roots {
 		prefix := filepath.Clean(root)

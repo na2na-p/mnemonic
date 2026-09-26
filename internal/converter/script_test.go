@@ -2,6 +2,8 @@ package converter_test
 
 import (
 	"bytes"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -282,7 +284,8 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 
 		require.ErrorIs(t, err, converter.ErrScriptNotUTF8)
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
-		assert.Contains(t, err.Error(), "UTF-8として読み込めませんでした: "+source)
+		assert.Contains(t, err.Error(), "UTF-8として読み込めませんでした")
+		assert.NotContains(t, err.Error(), source, "パスは呼び出し側が添えるためエラー文に含めない")
 		assert.Equal(t, source, result.SourcePath)
 		assert.NoFileExists(t, dest)
 	})
@@ -291,9 +294,11 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 		name        string
 		setup       func(t *testing.T, dir string) (source, dest string)
 		wantMessage string
+		// wantErr はnilでなければerrors.Isで一致すべきセンチネル。
+		wantErr error
 	}{
 		{
-			name: "異常系: 変換元を読み込めない場合は再試行対象のエラーを返す",
+			name: "異常系: 権限不足以外で変換元を読み込めない場合は再試行対象のErrSourceUnreadableを返す",
 			setup: func(t *testing.T, dir string) (string, string) {
 				t.Helper()
 
@@ -303,7 +308,8 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 
 				return source, filepath.Join(dir, "output.ks")
 			},
-			wantMessage: "変換元ファイルの読み込みに失敗しました",
+			wantMessage: "変換元ファイルを読み込めません",
+			wantErr:     converter.ErrSourceUnreadable,
 		},
 		{
 			name: "異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す",
@@ -345,11 +351,37 @@ func TestScriptAdjuster_Convert(t *testing.T) {
 			result, err := adjuster.Convert(source, dest)
 
 			require.Error(t, err)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			}
 			assert.Contains(t, err.Error(), tc.wantMessage)
 			require.NotErrorIs(t, err, converter.ErrPermanentFailure)
 			assert.Equal(t, source, result.SourcePath)
 		})
 	}
+
+	t.Run("異常系: 読み込み権限の無い変換元は再試行不要なErrSourceUnreadableを返す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "locked.ks")
+		writeFile(t, source, []byte("Plugins.link(\"test.dll\");\n"))
+		require.NoError(t, os.Chmod(source, 0o000))
+		dest := filepath.Join(dir, "output.ks")
+
+		adjuster := converter.NewScriptAdjuster(nil, true)
+		result, err := adjuster.Convert(source, dest)
+
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.Equal(t, source, result.SourcePath)
+		assert.NoFileExists(t, dest)
+	})
 
 	t.Run("正常系: プラグイン呼び出しを含む.ksファイルを変換できる", func(t *testing.T) {
 		t.Parallel()
