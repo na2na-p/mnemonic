@@ -15,7 +15,7 @@ import (
 // 成功した場合、copyTree由来の旧拡張子ファイルが削除されることを検証する。
 //
 // MIDIがT-220で解決した「変換成功後に旧ファイルを消す」のと同じ方法
-// （convertMidiFileList内のos.Remove(midiFile)、失敗はビルドを落とさない
+// （convertMidiFileListWith内のos.Remove(result.SourcePath)、失敗はビルドを落とさない
 // best-effort）を、ConversionManager経由で処理される動画にも適用する。
 func TestRemoveStaleVideoSourceFiles(t *testing.T) {
 	t.Parallel()

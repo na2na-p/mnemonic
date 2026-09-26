@@ -408,6 +408,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Equal(t, source, result.SourcePath)
 		assert.Contains(t, result.Message, "FFmpeg")
 		assert.False(t, result.Permanent)
 	})

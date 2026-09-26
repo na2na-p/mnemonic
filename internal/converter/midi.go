@@ -200,7 +200,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 
 	trimSeconds, hasTrim := c.silenceDetector.trimPoint(tmpWavPath)
 
-	if result := c.runFFmpeg(tmpWavPath, dest, trimSeconds, hasTrim); result != nil {
+	if result := c.runFFmpeg(source, tmpWavPath, dest, trimSeconds, hasTrim); result != nil {
 		return *result, nil
 	}
 
@@ -241,8 +241,9 @@ func (c *MidiConverter) runFluidsynth(source, wavOutput string) *ConversionResul
 
 // runFFmpeg はFFmpegを実行してwavInputをoggOutputへ変換する。
 // hasTrimがtrueの場合、trimSeconds秒で出力を打ち切ることで末尾無音をトリムする。
-// エラー時は*ConversionResultを、成功時はnilを返す。
-func (c *MidiConverter) runFFmpeg(wavInput, oggOutput string, trimSeconds float64, hasTrim bool) *ConversionResult {
+// エラー時は*ConversionResultを、成功時はnilを返す。sourceは失敗結果の
+// SourcePath（変換元のMIDIパス）にのみ使う。
+func (c *MidiConverter) runFFmpeg(source, wavInput, oggOutput string, trimSeconds float64, hasTrim bool) *ConversionResult {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
@@ -259,7 +260,7 @@ func (c *MidiConverter) runFFmpeg(wavInput, oggOutput string, trimSeconds float6
 
 	if _, err := c.runner.Run(ctx, "ffmpeg", args...); err != nil {
 		return &ConversionResult{
-			SourcePath: wavInput,
+			SourcePath: source,
 			Status:     StatusFailed,
 			Message:    fmt.Sprintf("FFmpeg変換に失敗しました: %s", err),
 		}

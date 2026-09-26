@@ -1,11 +1,13 @@
 package pipeline
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,25 +145,49 @@ func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error
 	return nil
 }
 
-// convertMidiFileList はmidiFilesを順にOGGへ変換し、失敗を集約して返す。
+// convertMidiFileList はmidiFilesをOGGへ変換し、失敗を集約して返す。
 //
 // why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
 // 失敗した全ファイルを把握できるようにするため。ただし1件でも失敗した場合は
 // エラーを返し、変換されなかったMIDIを指す.ogg参照がAPKへ混入するのを防ぐ。
 func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter) error {
+	return convertMidiFileListWith(midiFiles, midiConverter, nil)
+}
+
+// convertMidiFileListWith はsleepがnilでなければConversionManagerのリトライ
+// 待機に使う。
+//
+// why not: 待機関数をパッケージ変数で差し替えられるようにしない。t.Parallel()
+// で並行に走るテストが同じ変数を書き換えるとデータ競合になるため、呼び出し
+// ごとの引数として受け取る。
+func convertMidiFileListWith(
+	midiFiles []string,
+	midiConverter *converter.MidiConverter,
+	sleep func(time.Duration),
+) error {
+	tasks := make([]converter.FileTask, 0, len(midiFiles))
+	for _, midiFile := range midiFiles {
+		tasks = append(tasks, converter.FileTask{Source: midiFile, Dest: withSuffix(midiFile, ".ogg")})
+	}
+
+	manager := converter.NewConversionManager([]converter.Converter{midiConverter}, nil, 0, nil)
+	if sleep != nil {
+		manager.SleepFunc = sleep
+	}
+
+	results := manager.ConvertFiles(tasks).Results
+	// why not: ConvertFilesの結果は並列ワーカーの完了順に並び実行ごとに
+	// 変わるため、そのまま報告すると同じ失敗でもエラー文の並びが揺れる。
+	// 変換元パス順に並べ替えて報告を決定的にする。
+	slices.SortFunc(results, func(a, b converter.ConversionResult) int {
+		return cmp.Compare(a.SourcePath, b.SourcePath)
+	})
+
 	var failures []string
 
-	for _, midiFile := range midiFiles {
-		oggFile := withSuffix(midiFile, ".ogg")
-
-		result, err := midiConverter.Convert(midiFile, oggFile)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, err))
-
-			continue
-		}
+	for _, result := range results {
 		if result.Status != converter.StatusSuccess {
-			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, result.Message))
+			failures = append(failures, fmt.Sprintf("%s: %s", result.SourcePath, result.Message))
 
 			continue
 		}
@@ -174,7 +200,7 @@ func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConver
 		// 損害が大きい。本パッケージには
 		// ロガーの注入口が無いため警告出力も行わない（copyPolyfillFilesUsingの
 		// フォント取得失敗と同じ方針）。
-		_ = os.Remove(midiFile)
+		_ = os.Remove(result.SourcePath)
 	}
 
 	if len(failures) > 0 {
