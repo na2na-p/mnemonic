@@ -3,17 +3,17 @@
 package builder
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/na2na-p/mnemonic/internal/cmdrun"
 )
 
 // センチネルエラー群。
@@ -65,37 +65,24 @@ func NewExecCommandRunner() CommandRunner {
 }
 
 func (execCommandRunner) Run(ctx context.Context, workDir string, env []string, args []string) (RunResult, error) {
-	if len(args) == 0 {
-		return RunResult{}, errors.New("実行するコマンドが指定されていません")
+	res, err := cmdrun.Run(ctx, cmdrun.Options{Dir: workDir, Env: env}, args...)
+	if errors.Is(err, cmdrun.ErrNoCommand) {
+		return RunResult{}, err
 	}
-
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // gradlewを呼び出す用途のため妥当
-	cmd.Dir = workDir
-	cmd.Env = env
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
+	// why not: コンテキストで強制終了されたgradlewはcmdrunからResult{ExitCode: -1}と
+	// nil errorで返るため、errだけを見るとタイムアウトがビルド失敗として報告される。
+	// 一方、成功時にctx.Err()を見ると、期限直前に正常終了したビルドがタイムアウト扱いに
+	// なるため、失敗した場合に限って確認する。
+	if err != nil || res.ExitCode != 0 {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return RunResult{}, fmt.Errorf("%w: %w", ErrGradleTimeout, ctxErr)
 		}
-
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return RunResult{
-				ExitCode: exitErr.ExitCode(),
-				Stdout:   stdout.String(),
-				Stderr:   stderr.String(),
-			}, nil
-		}
-
+	}
+	if err != nil {
 		return RunResult{}, fmt.Errorf("gradleコマンドの実行に失敗しました: %w", err)
 	}
 
-	return RunResult{ExitCode: 0, Stdout: stdout.String(), Stderr: stderr.String()}, nil
+	return RunResult{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
 }
 
 // BuildResult はGradleビルド結果を表す不変値。

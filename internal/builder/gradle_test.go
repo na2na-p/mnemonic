@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/na2na-p/mnemonic/internal/builder"
+	"github.com/na2na-p/mnemonic/internal/cmdrun"
 )
 
 func TestNewGradleBuilder(t *testing.T) {
@@ -362,4 +364,85 @@ func writeFakeGradlew(t *testing.T, dir string) {
 		gradlewName = "gradlew.bat"
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, gradlewName), []byte("#!/bin/sh\n"), 0o700)) //nolint:gosec // テスト用のフェイク実行ファイルのため妥当
+}
+
+func TestExecCommandRunner_Run(t *testing.T) {
+	t.Parallel()
+
+	t.Run("正常系: 終了コード0でstdoutを返す", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+
+		result, err := runner.Run(t.Context(), "", nil, []string{"echo", "-n", "ok"})
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, result.ExitCode)
+		assert.Equal(t, "ok", result.Stdout)
+	})
+
+	t.Run("正常系: 非ゼロ終了コードはerrorではなくRunResultで返す", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+
+		result, err := runner.Run(t.Context(), "", nil, []string{"sh", "-c", "echo fail 1>&2; exit 3"})
+
+		require.NoError(t, err)
+		assert.Equal(t, 3, result.ExitCode)
+		assert.Contains(t, result.Stderr, "fail")
+	})
+
+	t.Run("正常系: workDirが作業ディレクトリになる", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+		dir := t.TempDir()
+
+		result, err := runner.Run(t.Context(), dir, nil, []string{"pwd"})
+
+		require.NoError(t, err)
+		assert.Equal(t, 0, result.ExitCode)
+
+		// macOSではt.TempDir()の/varが/private/varへのシンボリックリンクのため、
+		// 両辺を実パスへ解決してから比較する。
+		wantDir, err := filepath.EvalSymlinks(dir)
+		require.NoError(t, err)
+		gotDir, err := filepath.EvalSymlinks(strings.TrimRight(result.Stdout, "\n"))
+		require.NoError(t, err)
+		assert.Equal(t, wantDir, gotDir)
+	})
+
+	t.Run("異常系: コンテキスト期限超過で強制終了された場合はErrGradleTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+
+		_, err := runner.Run(ctx, "", nil, []string{"sleep", "5"})
+
+		require.ErrorIs(t, err, builder.ErrGradleTimeout)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("異常系: コマンドが空の場合にErrNoCommand", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+
+		_, err := runner.Run(t.Context(), "", nil, nil)
+
+		require.ErrorIs(t, err, cmdrun.ErrNoCommand)
+	})
+
+	t.Run("異常系: コマンドが見つからない場合にerror", func(t *testing.T) {
+		t.Parallel()
+
+		runner := builder.NewExecCommandRunner()
+
+		_, err := runner.Run(t.Context(), "", nil, []string{"mnemonic-builder-nonexistent-command-xyz"})
+
+		assert.Error(t, err)
+	})
 }

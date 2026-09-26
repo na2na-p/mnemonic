@@ -1,11 +1,11 @@
 package signer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
+
+	"github.com/na2na-p/mnemonic/internal/cmdrun"
 )
 
 // RunResult は外部コマンドの実行結果を表す。
@@ -42,29 +42,13 @@ func NewExecCommandRunner() CommandRunner {
 }
 
 func (execCommandRunner) Run(ctx context.Context, args []string) (RunResult, error) {
-	if len(args) == 0 {
-		return RunResult{}, errors.New("実行するコマンドが指定されていません")
+	res, err := cmdrun.Run(ctx, cmdrun.Options{}, args...)
+	if errors.Is(err, cmdrun.ErrNoCommand) {
+		return RunResult{}, err
 	}
-
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // zipalign/apksignerを呼び出す用途のため妥当
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return RunResult{
-				ExitCode: exitErr.ExitCode(),
-				Stdout:   stdout.String(),
-				Stderr:   stderr.String(),
-			}, nil
-		}
-
 		return RunResult{}, fmt.Errorf("コマンドの実行に失敗しました: %w", err)
 	}
 
-	return RunResult{ExitCode: 0, Stdout: stdout.String(), Stderr: stderr.String()}, nil
+	return RunResult{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
 }
