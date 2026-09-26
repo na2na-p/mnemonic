@@ -31,7 +31,7 @@ func TestNewSDL2SourceCache(t *testing.T) {
 			wantCache: true,
 		},
 		{
-			name: "異常系: キャッシュディレクトリを解決できない場合はnilを返す",
+			name: "異常系: キャッシュディレクトリを解決できない場合は原因を警告してnilを返す",
 			home: "",
 		},
 	}
@@ -41,18 +41,24 @@ func TestNewSDL2SourceCache(t *testing.T) {
 			t.Setenv("HOME", tt.home)
 			t.Setenv("XDG_CACHE_HOME", "")
 
+			logger := &recordingLogger{}
+
 			dir, err := cache.Dir()
 			if !tt.wantCache {
 				require.Error(t, err)
-				assert.Nil(t, newSDL2SourceCache())
+				assert.Nil(t, newSDL2SourceCache(logger))
+				assert.Equal(t, []string{
+					"キャッシュディレクトリを解決できないため、SDL2ソースのキャッシュを使わずに続行します: " + err.Error(),
+				}, logger.messages("WARNING"))
 
 				return
 			}
 
 			require.NoError(t, err)
-			got := newSDL2SourceCache()
+			got := newSDL2SourceCache(logger)
 			require.NotNil(t, got)
 			assert.Equal(t, filepath.Join(dir, "sdl2_sources"), got.CachePath())
+			assert.Empty(t, logger.messages("WARNING"))
 		})
 	}
 }

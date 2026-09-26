@@ -696,7 +696,7 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"image/bg01.tlg": "not a tlg image",
 			},
 			wantFailed:  filepath.Join("image", "bg01.tlg"),
-			wantSummary: "失敗 1件",
+			wantSummary: "アセット変換: 成功 1 件 / 失敗 1 件 / スキップ 0 件",
 		},
 		{
 			name: "正常系: 変換可能なアセットだけならエラーを返さない",
@@ -704,7 +704,7 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
 				"system/font.ttf": "stub font",
 			},
-			wantSummary: "失敗 0件",
+			wantSummary: "アセット変換: 成功 1 件 / 失敗 0 件 / スキップ 0 件",
 		},
 		{
 			name: "正常系: chardetが未対応の文字コードと推定する短いShift_JISの.csvがあってもエラーを返さない",
@@ -723,7 +723,7 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				// Shift_JISの"猫"。chardetは候補を1つも返さない。
 				"data/name.csv": "\x94\x4c",
 			},
-			wantSummary:   "成功 2件",
+			wantSummary:   "アセット変換: 成功 2 件 / 失敗 0 件 / スキップ 0 件",
 			wantConverted: map[string]string{"data/name.csv": "猫"},
 		},
 	}
@@ -748,7 +748,9 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 
 			infos := logger.messages("INFO")
 			require.Len(t, infos, 1, "変換結果の集計は失敗時も含めて1回報告する")
-			assert.Contains(t, infos[0], tt.wantSummary)
+			if tt.wantSummary != "" {
+				assert.Equal(t, tt.wantSummary, infos[0])
+			}
 
 			if tt.wantFailed == "" {
 				require.NoError(t, err)
