@@ -106,24 +106,30 @@ func ensureSourceExists(source string) error {
 	return nil
 }
 
-// classifyStatError はsourceに対するos.Statの失敗errを分類する。
+// classifyStatError はsourceに対するos.Statの失敗errを、変換元のセンチネル
+// (ErrSourceNotFound/ErrSourceUnreadable)でclassifyPathErrorに従って分類する。
+func classifyStatError(source string, err error) error {
+	return classifyPathError(source, err, ErrSourceNotFound, ErrSourceUnreadable)
+}
+
+// classifyPathError はpathに対するos.Statの失敗errを分類する。
 //
-// 存在しない場合はErrSourceNotFound、権限不足の場合はOSのエラーを包んだ
-// ErrSourceUnreadableを、いずれもErrPermanentFailureでラップして返す。
+// 存在しない場合はnotFoundをpathとともに、権限不足の場合はOSのエラーを包んだ
+// unreadableを、いずれもErrPermanentFailureでラップして返す。
 // それ以外（親がファイル・パス名が長すぎる・I/Oエラーなど）はOSのエラーを包んだ
-// ErrSourceUnreadableを再試行対象として返す。
+// unreadableを再試行対象として返す。
 //
-// why not: Statの失敗を一律にErrSourceNotFoundにはしない。権限不足まで
+// why not: Statの失敗を一律にnotFoundにはしない。権限不足まで
 // 「見つかりません」と報告すると利用者が原因を探せず、EIOなどの一時的な失敗まで
 // 恒久扱いになって再試行されなくなる。
-func classifyStatError(source string, err error) error {
+func classifyPathError(path string, err, notFound, unreadable error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
+		return permanentError(fmt.Errorf("%w: %s", notFound, path))
 	case errors.Is(err, fs.ErrPermission):
-		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+		return permanentError(fmt.Errorf("%w: %w", unreadable, err))
 	default:
-		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+		return fmt.Errorf("%w: %w", unreadable, err)
 	}
 }
 

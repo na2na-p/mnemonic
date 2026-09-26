@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -370,6 +373,212 @@ func TestEncodingConverter_CanConvert(t *testing.T) {
 
 		assert.False(t, c.CanConvert(binaryPath))
 	})
+
+	t.Run("正常系: 対応拡張子でもNULを含む内容はFalse", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "bin.ks")
+		writeFile(t, path, []byte{'a', 0x00, 'b'})
+		c := converter.NewEncodingConverter("", "")
+
+		assert.False(t, c.CanConvert(path))
+	})
+
+	readFailureCases := []struct {
+		name       string
+		skipAsRoot bool
+		setup      func(t *testing.T) string
+		expected   bool
+	}{
+		{
+			name: "正常系: 対応拡張子で存在しないファイルは変換時に失敗を報告させるためTrue",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return filepath.Join(t.TempDir(), "missing.ks")
+			},
+			expected: true,
+		},
+		{
+			name:       "正常系: 対応拡張子で探索権限の無いディレクトリ配下のファイルはTrue",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return writeFileInLockedDir(t, "script.ks", []byte("test content"))
+			},
+			expected: true,
+		},
+		{
+			name:       "正常系: 対応拡張子で読み込み権限の無いファイルはTrue",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "script.ks")
+				writeFile(t, path, []byte("test content"))
+				require.NoError(t, os.Chmod(path, 0o000))
+
+				return path
+			},
+			expected: true,
+		},
+		{
+			name: "正常系: 非対応拡張子で存在しないファイルはFalse",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return filepath.Join(t.TempDir(), "missing.png")
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range readFailureCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			path := tt.setup(t)
+			c := converter.NewEncodingConverter("", "")
+
+			assert.Equal(t, tt.expected, c.CanConvert(path))
+		})
+	}
+}
+
+func TestEncodingConverter_CanConvert_ThroughManager(t *testing.T) {
+	t.Parallel()
+
+	t.Run("異常系: 探索権限の無いディレクトリ配下の.ksはスキップせず読み込めない失敗として報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		source := writeFileInLockedDir(t, "script.ks", []byte("test content"))
+		m := converter.NewConversionManager([]converter.Converter{converter.NewEncodingConverter("", "")}, nil, 1, nil)
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(t.TempDir(), "script.ks")}})
+
+		require.Len(t, summary.Results, 1)
+		result := summary.Results[0]
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Contains(t, result.Message, "読み込めません")
+		assert.Contains(t, result.Message, "permission denied")
+		assert.Contains(t, result.Message, source)
+	})
+
+	t.Run("異常系: 読み込み権限の無い.ksファイルは再試行せず読み込めない失敗として報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		source := filepath.Join(t.TempDir(), "script.ks")
+		writeFile(t, source, []byte("test content"))
+		require.NoError(t, os.Chmod(source, 0o000))
+
+		conv := &countingConverter{Converter: converter.NewEncodingConverter("", "")}
+		rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+		m.SleepFunc = func(time.Duration) {}
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(t.TempDir(), "script.ks")}})
+
+		require.Len(t, summary.Results, 1)
+		result := summary.Results[0]
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Contains(t, result.Message, "読み込めません")
+		assert.Contains(t, result.Message, "permission denied")
+		assert.Equal(t, 1, strings.Count(result.Message, source))
+		assert.NotContains(t, result.Message, "最大リトライ回数超過")
+		assert.Equal(t, int32(1), conv.calls.Load())
+	})
+}
+
+// countingConverter はConvertの呼び出し回数を数えるConverter。
+type countingConverter struct {
+	converter.Converter
+
+	calls atomic.Int32
+}
+
+func (c *countingConverter) Convert(source, dest string) (converter.ConversionResult, error) {
+	c.calls.Add(1)
+
+	return c.Converter.Convert(source, dest)
+}
+
+func TestEncodingConverter_Convert_ReadFailure(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		skipAsRoot    bool
+		setup         func(t *testing.T) string
+		wantOSErr     error
+		wantPermanent bool
+	}{
+		{
+			name:       "異常系: 読み込み権限の無い変換元は再試行不要なErrSourceUnreadableになる",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "source.txt")
+				writeFile(t, path, []byte("plain ascii text"))
+				require.NoError(t, os.Chmod(path, 0o000))
+
+				return path
+			},
+			wantOSErr:     fs.ErrPermission,
+			wantPermanent: true,
+		},
+		{
+			name: "異常系: ディレクトリの変換元は再試行対象のErrSourceUnreadableになる",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "source.txt")
+				mkdirAll(t, path)
+
+				return path
+			},
+			wantOSErr:     syscall.EISDIR,
+			wantPermanent: false,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			source := tt.setup(t)
+			c := converter.NewEncodingConverter("", "")
+			result, err := c.Convert(source, filepath.Join(t.TempDir(), "dest.txt"))
+
+			require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+			require.ErrorIs(t, err, tt.wantOSErr)
+			require.NotErrorIs(t, err, converter.ErrSourceNotFound)
+			assert.Equal(t, 1, strings.Count(err.Error(), source))
+			if tt.wantPermanent {
+				require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			} else {
+				require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			}
+			assert.Equal(t, source, result.SourcePath)
+		})
+	}
 }
 
 func TestEncodingConverter_Convert(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -304,24 +305,26 @@ func isKirikiriScriptExtension(ext string) bool {
 // 返す（文字コード変換は拡張子を保持する）。
 func (c *EncodingConverter) GetOutputExtension(_ string) string { return "" }
 
-// CanConvert はfilePathが変換可能かを判定する。
-// 拡張子がサポート対象であり、かつテキストファイルである場合にtrueを返す。
+// CanConvert はfilePathが変換可能かを拡張子と内容で判定する。
+//
+// 拡張子がサポート対象でない場合はfalseを返す。サポート対象の場合、内容を
+// 読み込めればIsTextFileの判定結果を返し、読み込めなければ（存在しない・権限不足を
+// 含む）trueを返して、その失敗の報告をConvertに委ねる。
+//
+// why not: 読み込めないファイルをfalseにはしない。ConversionManagerは
+// 対応するConverterが無いファイルを、ConvertFilesではStatusSkipped
+// （「対応するConverterが見つかりません」）とし、ConvertDirectoryでは変換対象から
+// 外すため、読めない素材が非対応形式と区別できないまま未変換で残り、失敗として
+// 報告されない。
 func (c *EncodingConverter) CanConvert(filePath string) bool {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	if !containsString(c.SupportedExtensions(), ext) {
 		return false
 	}
 
-	if _, err := os.Stat(filePath); err != nil {
-		return false
-	}
-
 	isText, err := c.detector.IsTextFile(filePath)
-	if err != nil {
-		return false
-	}
 
-	return isText
+	return err != nil || isText
 }
 
 // Convert はsourceの文字コードを変換し、destへ出力する。
@@ -329,9 +332,13 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 // 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
 // ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
 // それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
+// 確認後の読み込みの失敗は、権限不足の場合に限りOSのエラーを包んだ
+// ErrSourceUnreadableをErrPermanentFailureでラップして返す。確認後に変換元が
+// 存在しなくなった場合のErrSourceNotFoundと、それ以外の理由でOSのエラーを包んだ
+// ErrSourceUnreadableは、いずれも再試行対象として返す。
 // デコード/エンコードに失敗した場合（変換先にUTF-16を指定した場合を含む）は
 // ErrEncodingConversionFailedをErrPermanentFailureでラップして返す。
-// 読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象とする。
+// 出力の失敗はOSのエラーを%wで保持し、再試行対象とする。
 //
 // errがnilのとき、Statusは変換元が変換先と同じエンコーディングで（変換先がUTF-8
 // なら内容が有効なUTF-8であることも確かめる）、UTF-8 BOMが無く、吉里吉里
@@ -353,7 +360,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 
 	data, err := os.ReadFile(source) //nolint:gosec // 存在確認済みの変換元ファイルを読む用途のため妥当
 	if err != nil {
-		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, classifyReadError(source, err)
 	}
 
 	data, plan, err := c.prepareSource(data)
@@ -418,6 +425,29 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		BytesBefore: bytesBefore,
 		BytesAfter:  getFileSize(dest),
 	}, nil
+}
+
+// classifyReadError はensureSourceExistsで確認済みのsourceに対するos.ReadFileの
+// 失敗errを分類する。権限不足はOSのエラーを包んだErrSourceUnreadableを
+// ErrPermanentFailureでラップして返し、存在しない場合はErrSourceNotFoundを、
+// それ以外はOSのエラーを包んだErrSourceUnreadableを再試行対象として返す。
+//
+// why not: 読み込みの失敗を一律に恒久扱いにも再試行対象にもしない。
+// ImageConverterのTLG読み込み(decodeSource)と同じく、再試行しても変わらないと
+// 原因から判別できる権限不足だけを恒久扱いにし、ensureSourceExists後の削除競合や
+// I/Oエラーなど一時的でありうる失敗は再試行側に残す。ファイル自体に読み込み権限が
+// 無い場合はos.Statが成功してensureSourceExistsを通過し、ここで初めて失敗するため、
+// 再試行対象にするとDefaultRetryConfigでは3回試行して1秒と2秒待った末に
+// 「最大リトライ回数超過」として報告され、権限不足という原因が見えにくくなる。
+func classifyReadError(source string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%w: %s", ErrSourceNotFound, source)
+	default:
+		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+	}
 }
 
 // ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 復号に使った

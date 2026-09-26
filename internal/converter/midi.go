@@ -28,6 +28,12 @@ var (
 var (
 	// ErrSoundfontNotFound はMidiConverterに設定されたサウンドフォントが存在しない場合のエラー。
 	ErrSoundfontNotFound = errors.New("サウンドフォントが見つかりません")
+	// ErrSoundfontUnreadable は存在しない以外の理由でMidiConverterに設定された
+	// サウンドフォントを確認できない場合のエラー。OSのエラーを%wで保持する。
+	//
+	// why not: ErrSourceUnreadableは流用しない。その文言は変換元ファイルを指し、
+	// 変換元ではなく設定されたサウンドフォントの問題であることが利用者に伝わらない。
+	ErrSoundfontUnreadable = errors.New("サウンドフォントを読み込めません")
 	// ErrFluidsynthFailed はFluidSynthによるMIDIからWAVへのレンダリングが失敗した場合のエラー。
 	// CommandRunnerが返したエラーを%wで保持する。
 	ErrFluidsynthFailed = errors.New("FluidSynth変換に失敗しました")
@@ -171,8 +177,10 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
 // ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
 // それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
-// サウンドフォントが存在しない場合はErrSoundfontNotFoundを
-// ErrPermanentFailureでラップして返す。FluidSynthの失敗はErrFluidsynthFailed、
+// サウンドフォントが存在しない場合はErrSoundfontNotFoundを、権限不足で確認できない
+// 場合はOSのエラーを包んだErrSoundfontUnreadableを、いずれもErrPermanentFailureで
+// ラップして返し、それ以外の理由で確認できない場合はErrSoundfontUnreadableを
+// 再試行対象として返す。FluidSynthの失敗はErrFluidsynthFailed、
 // FFmpegの失敗はErrMidiFFmpegFailed、出力先ディレクトリ・一時WAVの作成失敗は
 // OSのエラーを%wで保持して返し、いずれも再試行対象とする。errがnilのとき、
 // StatusはStatusSuccessとなる。
@@ -188,7 +196,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	}
 
 	if _, err := os.Stat(c.soundfontPath); err != nil {
-		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %s", ErrSoundfontNotFound, c.soundfontPath))
+		return ConversionResult{SourcePath: source}, classifyPathError(c.soundfontPath, err, ErrSoundfontNotFound, ErrSoundfontUnreadable)
 	}
 
 	bytesBefore := getFileSize(source)

@@ -3,8 +3,10 @@ package converter_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -166,6 +168,56 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, converter.ErrVideoSourceNotFound)
 	})
+
+	statFailures := []struct {
+		name       string
+		skipAsRoot bool
+		setup      func(t *testing.T) string
+		wantOSErr  error
+	}{
+		{
+			name:       "異常系: 探索権限の無いディレクトリ配下のファイルは見つからないとは報告せずOSのエラーを返す",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return writeFileInLockedDir(t, "video.mpg", []byte("dummy"))
+			},
+			wantOSErr: fs.ErrPermission,
+		},
+		{
+			name: "異常系: 親がファイルの場合は見つからないとは報告せずOSのエラーを返す",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				parent := filepath.Join(t.TempDir(), "parent.mpg")
+				writeFile(t, parent, []byte("not a directory"))
+
+				return filepath.Join(parent, "video.mpg")
+			},
+			wantOSErr: syscall.ENOTDIR,
+		},
+	}
+
+	for _, tt := range statFailures {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			path := tt.setup(t)
+			c := converter.NewVideoConverter(0, nil)
+			_, err := c.GetVideoInfo(path)
+
+			require.ErrorIs(t, err, converter.ErrVideoInfoUnavailable)
+			require.ErrorIs(t, err, tt.wantOSErr)
+			require.NotErrorIs(t, err, converter.ErrVideoSourceNotFound)
+			assert.NotContains(t, err.Error(), "見つかりません")
+			assert.Contains(t, err.Error(), path)
+		})
+	}
 
 	t.Run("正常系: 動画情報を正しく取得する", func(t *testing.T) {
 		t.Parallel()

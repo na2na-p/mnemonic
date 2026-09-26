@@ -3,10 +3,12 @@ package converter_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -215,6 +217,68 @@ func TestMidiConverter_Convert(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
 		assert.Contains(t, err.Error(), "サウンドフォントが見つかりません: "+soundfont)
 	})
+
+	soundfontStatFailures := []struct {
+		name          string
+		skipAsRoot    bool
+		setup         func(t *testing.T) string
+		wantOSErr     error
+		wantPermanent bool
+	}{
+		{
+			name:       "異常系: 探索権限の無いディレクトリ配下のサウンドフォントは見つからないとは報告せず再試行不要なエラー",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return writeFileInLockedDir(t, "test.sf2", []byte("soundfont data"))
+			},
+			wantOSErr:     fs.ErrPermission,
+			wantPermanent: true,
+		},
+		{
+			name: "異常系: 親がファイルのサウンドフォントは再試行対象のエラー",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				parent := filepath.Join(t.TempDir(), "parent.sf2")
+				writeFile(t, parent, []byte("not a directory"))
+
+				return filepath.Join(parent, "test.sf2")
+			},
+			wantOSErr:     syscall.ENOTDIR,
+			wantPermanent: false,
+		},
+	}
+
+	for _, tt := range soundfontStatFailures {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, "input.mid")
+			writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+			soundfont := tt.setup(t)
+
+			c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, nil)
+			_, err := c.Convert(source, filepath.Join(dir, "output.ogg"))
+
+			require.ErrorIs(t, err, converter.ErrSoundfontUnreadable)
+			require.ErrorIs(t, err, tt.wantOSErr)
+			require.NotErrorIs(t, err, converter.ErrSoundfontNotFound)
+			assert.NotContains(t, err.Error(), "見つかりません")
+			assert.Contains(t, err.Error(), soundfont)
+			if tt.wantPermanent {
+				require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			} else {
+				require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			}
+		})
+	}
 
 	t.Run("異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す", func(t *testing.T) {
 		t.Parallel()

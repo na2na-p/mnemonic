@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
@@ -20,7 +21,8 @@ import (
 // ErrVideoSourceNotFound はget_video_info対象の動画ファイルが存在しない場合のエラー。
 var ErrVideoSourceNotFound = errors.New("ファイルが見つかりません")
 
-// ErrVideoInfoUnavailable はffprobeの実行・パースに失敗した場合のエラー。
+// ErrVideoInfoUnavailable はffprobeの実行・パースに失敗した場合と、存在しない以外の
+// 理由で動画ファイルを確認できない場合のエラー。
 var ErrVideoInfoUnavailable = errors.New("動画情報を取得できません")
 
 // ErrNoVideoStream はffprobe結果に動画ストリームが含まれない場合のエラー。
@@ -395,9 +397,18 @@ type ffprobeFormat struct {
 //
 // 実行される実効的なffprobeコマンドは以下の通り:
 // `ffprobe -hide_banner -show_format -show_streams -of json <file>`
+//
+// filePathが存在しない場合はErrVideoSourceNotFoundを返す。それ以外の理由
+// （権限不足・親がファイルなど）でos.Statに失敗した場合と、ffprobeの実行・
+// 出力の解析に失敗した場合はErrVideoInfoUnavailableを返し、前者はOSのエラーを
+// %wで保持する。
 func (c *VideoConverter) GetVideoInfo(filePath string) (VideoInfo, error) {
 	if _, err := os.Stat(filePath); err != nil {
-		return VideoInfo{}, fmt.Errorf("%w: %s", ErrVideoSourceNotFound, filePath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return VideoInfo{}, fmt.Errorf("%w: %s", ErrVideoSourceNotFound, filePath)
+		}
+
+		return VideoInfo{}, fmt.Errorf("%w: %w", ErrVideoInfoUnavailable, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
