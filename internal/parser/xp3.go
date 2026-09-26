@@ -15,9 +15,6 @@ import (
 	"github.com/na2na-p/mnemonic/internal/safepath"
 )
 
-// XP3MagicTest はテストフィクスチャで使用される簡易マジックナンバー（7バイト）。
-var XP3MagicTest = []byte{'X', 'P', '3', 0x0d, 0x0a, 0x1a, 0x0a}
-
 // センチネルエラー群。
 var (
 	// ErrXP3NotFound はXP3ファイルが存在しない場合のエラー。
@@ -126,14 +123,7 @@ func NewXP3Archive(archivePath string) (*XP3Archive, error) {
 }
 
 func validateXP3Magic(data []byte) bool {
-	if bytes.HasPrefix(data, XP3Magic) {
-		return true
-	}
-	if bytes.HasPrefix(data, XP3MagicTest) {
-		return true
-	}
-
-	return bytes.HasPrefix(data, []byte("XP3"))
+	return bytes.HasPrefix(data, XP3Magic)
 }
 
 func (a *XP3Archive) parseArchive() error {
@@ -150,7 +140,7 @@ func (a *XP3Archive) parseArchive() error {
 	}
 	header = header[:n]
 
-	if len(header) < 7 || !validateXP3Magic(header) {
+	if len(header) < len(XP3Magic) || !validateXP3Magic(header) {
 		return fmt.Errorf("%w: %s", ErrInvalidXP3, a.archivePath)
 	}
 
@@ -161,17 +151,14 @@ func (a *XP3Archive) parseArchive() error {
 
 // parseFileIndex はファイルインデックスをパースする。
 //
-// テスト用の最小限のXP3ファイル（ヘッダー19バイト未満、または完全な
-// 11バイトマジックを持たない簡易形式）の場合、パースエラーとはせず空の
-// ファイル一覧のまま処理を終える。
+// ヘッダーが19バイト未満（マジックの後にインデックスオフセットが続かない）の
+// 場合、パースエラーとはせず空のファイル一覧のまま処理を終える。
 func (a *XP3Archive) parseFileIndex(f io.ReadSeeker, header []byte) {
 	if len(header) < 19 {
 		return
 	}
 
-	if bytes.HasPrefix(header, XP3Magic) {
-		a.parseStandardIndex(f, header)
-	}
+	a.parseStandardIndex(f, header)
 }
 
 func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) {

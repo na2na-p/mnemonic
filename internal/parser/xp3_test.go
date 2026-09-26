@@ -16,10 +16,15 @@ import (
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
-// minimalXP3Bytes は最小限のXP3ファイル（簡易マジック + パディング、
-// ファイルインデックスは持たない）を返す。
+// minimalXP3Bytes は最小限のXP3ファイル（11バイトマジック + インデックス
+// オフセット）を返す。オフセットはファイル末尾（19）を指すため、インデックスは
+// 存在せず、解析は空のファイル一覧で終わる。
 func minimalXP3Bytes() []byte {
-	return []byte{'X', 'P', '3', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00}
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+
+	return buf.Bytes()
 }
 
 func TestEncryptionType_Values(t *testing.T) {
@@ -152,6 +157,31 @@ func TestNewXP3Archive(t *testing.T) {
 
 		require.ErrorIs(t, err, parser.ErrInvalidXP3)
 	})
+
+	invalidMagicCases := map[string][]byte{
+		// why not: 長さガード（11バイト未満）で弾かれないよう11バイト以上にし、
+		// マジック判定そのものが7バイトの短いマジックを拒否することを確認する。
+		"異常系: 7バイトの簡易マジックはXP3と認めずErrInvalidXP3": {
+			'X', 'P', '3', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,
+		},
+		"異常系: 先頭3バイトがXP3なだけのファイルはErrInvalidXP3": append(
+			[]byte{'X', 'P', '3'}, []byte("ABCDEFGH")...,
+		),
+		"異常系: 11バイトマジックが10バイトで途切れたファイルはErrInvalidXP3": parser.XP3Magic[:len(parser.XP3Magic)-1],
+	}
+
+	for name, content := range invalidMagicCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "invalid.xp3")
+			writeFile(t, path, content)
+
+			_, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+		})
+	}
 }
 
 func TestXP3Archive_ListFiles(t *testing.T) {
@@ -169,6 +199,37 @@ func TestXP3Archive_ListFiles(t *testing.T) {
 		files := archive.ListFiles()
 
 		assert.Empty(t, files)
+	})
+
+	t.Run("正常系: インデックスオフセットを持たない11バイトマジックのみのファイルで空のファイル一覧を返す", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "magic-only.xp3")
+		writeFile(t, path, parser.XP3Magic)
+
+		archive, err := parser.NewXP3Archive(path)
+		require.NoError(t, err)
+
+		assert.Empty(t, archive.ListFiles())
+	})
+
+	// why not: 11バイトちょうどのファイルではヘッダーバッファの容量（32バイト）に
+	// 隠れてオフセット読み出しが偶然成立するため、19バイト未満のガードを外しても
+	// 検出できない。マジックに7バイトだけ続く18バイトのファイルでは、ガードが無いと
+	// 同じ容量の余りからオフセット1が読まれ、ヘッダー自身をインデックスとして解釈した
+	// 巨大なサイズをreadFileTableが確保しようとしてpanicする。この検出は
+	// readFileTableの確保が無制限である間だけ成立するため、確保に上限を設ける際は
+	// 本ケースをガード違反を直接観測する形へ見直す必要がある。
+	t.Run("正常系: インデックスオフセットが途切れた18バイトのファイルで空のファイル一覧を返す", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "truncated-offset.xp3")
+		writeFile(t, path, append(append([]byte{}, parser.XP3Magic...), 0x01, 0, 0, 0, 0, 0, 0))
+
+		archive, err := parser.NewXP3Archive(path)
+		require.NoError(t, err)
+
+		assert.Empty(t, archive.ListFiles())
 	})
 }
 
@@ -387,7 +448,7 @@ func TestXP3EncryptionChecker_RaiseIfEncrypted(t *testing.T) {
 // --- 標準インデックス（バージョン1）を持つ実XP3アーカイブのビルダー ---
 //
 // XP3Archiveの本体ロジック（zlib解凍・チャンク解析・オフセット算出）は
-// 簡易マジックのみの最小ファイルでは検証できないため、単一セグメントの
+// マジックとインデックスオフセットだけの最小ファイルでは検証できないため、単一セグメントの
 // 往復検証（構築→解析→展開→内容一致）用に独自のビルダーを用意している。
 // 複数セグメント関連（xp3SegmentSpec.segments経由）についても、同様の
 // 理由からこのビルダーへ統合した。
