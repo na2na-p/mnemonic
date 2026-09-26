@@ -763,8 +763,9 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 			}
 
 			require.ErrorIs(t, err, ErrAssetConversionFailed)
-			require.ErrorContains(t, err, "  - "+tt.wantFailed+": ")
-			require.ErrorContains(t, err, "TLG形式ではありません")
+			assert.True(t, strings.HasSuffix(err.Error(),
+				"\n  - "+tt.wantFailed+": 再試行しても解消しない変換失敗です: TLG形式ではありません"), err.Error())
+			assert.NotContains(t, err.Error(), extractDir)
 			// system/はcopyPolyfillFilesが作るため、これが無いことで変換失敗時に
 			// finalizeConvertedTreeへ進んでいないことを確かめる。
 			assert.NoDirExists(t, filepath.Join(a.convertDir, "system"))
@@ -851,13 +852,15 @@ func TestBuildPipeline_ExecuteConvert_ReportsPreferredSourceAndVideoHint(t *test
 	logger := &recordingLogger{}
 	p.SetLogger(logger)
 
-	_, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+	a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
 
 	require.ErrorIs(t, err, ErrAssetConversionFailed)
 	require.ErrorContains(t, err, "  - "+filepath.Join("video", "op.mpg")+": ")
 	assert.True(t, strings.HasSuffix(err.Error(), "\n動画を変換しない場合は --skip-video を指定してください"), err.Error())
+	assert.NotContains(t, err.Error(), extractDir)
+	assert.NotContains(t, err.Error(), a.convertDir)
 	assert.Contains(t, logger.messages("INFO"),
-		filepath.Join("video", "op.wmv")+": 同名の "+filepath.Join(extractDir, "video", "op.mpg")+" を優先したため変換しません")
+		filepath.Join("video", "op.wmv")+": 同名の "+filepath.Join("video", "op.mpg")+" を優先したため変換しません")
 }
 
 func TestBuildPipeline_ExecuteConvert_ReturnsErrorWhenExtractPhaseNotDone(t *testing.T) {

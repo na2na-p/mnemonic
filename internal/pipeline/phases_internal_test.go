@@ -326,7 +326,7 @@ func TestLogPreferredSourceSkips(t *testing.T) {
 			SourcePath: under(rel),
 			DestPath:   dest,
 			Status:     converter.StatusSkipped,
-			Message:    fmt.Sprintf("同名の %s を優先したため変換しません", under(winnerRel)),
+			Message:    fmt.Sprintf("同名の %s を優先したため変換しません", filepath.FromSlash(winnerRel)),
 		}
 	}
 	losers := func(n int) []converter.ConversionResult {
@@ -341,7 +341,7 @@ func TestLogPreferredSourceSkips(t *testing.T) {
 		lines := make([]string, 0, n)
 		for i := range n {
 			lines = append(lines, fmt.Sprintf("%s: 同名の %s を優先したため変換しません",
-				filepath.Join("video", fmt.Sprintf("op%02d.wmv", i)), under(fmt.Sprintf("video/op%02d.mpg", i))))
+				filepath.Join("video", fmt.Sprintf("op%02d.wmv", i)), filepath.Join("video", fmt.Sprintf("op%02d.mpg", i))))
 		}
 
 		return lines
@@ -365,7 +365,7 @@ func TestLogPreferredSourceSkips(t *testing.T) {
 				{SourcePath: under("image/bg.tlg"), Status: converter.StatusFailed, Message: "TLG形式ではありません"},
 			},
 			want: []string{
-				filepath.Join("video", "op.wmv") + ": 同名の " + under("video/op.mpg") + " を優先したため変換しません",
+				filepath.Join("video", "op.wmv") + ": 同名の " + filepath.Join("video", "op.mpg") + " を優先したため変換しません",
 			},
 		},
 		{

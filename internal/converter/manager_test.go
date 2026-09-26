@@ -932,6 +932,96 @@ func TestConversionManager_ConvertDirectory(t *testing.T) {
 	})
 }
 
+// TestConversionManager_ConvertDirectory_RelativeMessages は、ConvertDirectoryが
+// 返す結果のMessageが、sourceDir・destDir配下のファイルをそれぞれのルートからの
+// 相対パスで示し、SourcePath・DestPathは絶対パスのまま返すことを検証する。
+func TestConversionManager_ConvertDirectory_RelativeMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		files      []string
+		convertErr func(source, dest string) error
+		// wantはsourceDirからの相対パス（/区切り）ごとの期待するMessage（/区切り）。
+		want map[string]string
+	}{
+		{
+			name:  "正常系: 出力先の重複で変換しなかった変換元は優先した変換元を相対パスで示す",
+			files: []string{"video/op.wmv", "video/op.mpg"},
+			want: map[string]string{
+				"video/op.wmv": "同名の video/op.mpg を優先したため変換しません",
+				"video/op.mpg": "",
+			},
+		},
+		{
+			name:  "異常系: 出力先が重複した失敗は出力先と変換元を相対パスで示す",
+			files: []string{"video/op.wmv", "video/op.avi"},
+			want: map[string]string{
+				"video/op.avi": "再試行しても解消しない変換失敗です: 出力先が重複しています: video/op.mpg ← video/op.avi, video/op.wmv",
+				"video/op.wmv": "再試行しても解消しない変換失敗です: 出力先が重複しています: video/op.mpg ← video/op.avi, video/op.wmv",
+			},
+		},
+		{
+			name:  "異常系: Convertのエラー文に含まれる変換元と出力先の絶対パスを相対パスにする",
+			files: []string{"video/op.wmv"},
+			convertErr: func(source, dest string) error {
+				return fmt.Errorf("Error opening input file %s. | 出力 %s.tmp", source, dest)
+			},
+			want: map[string]string{
+				"video/op.wmv": "最大リトライ回数超過: Error opening input file video/op.wmv. | 出力 video/op.mpg.tmp",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			base := t.TempDir()
+			sourceDir := filepath.Join(base, "extract")
+			destDir := filepath.Join(base, "convert")
+			for _, rel := range tt.files {
+				path := filepath.Join(sourceDir, filepath.FromSlash(rel))
+				mkdirAll(t, filepath.Dir(path))
+				writeFile(t, path, []byte("content"))
+			}
+
+			conv := newMockConverter(".mpg", ".wmv", ".avi")
+			conv.outputExtension = ".mpg"
+			conv.convertFunc = func(source, dest string, _ int) (converter.ConversionResult, error) {
+				if tt.convertErr != nil {
+					return converter.ConversionResult{SourcePath: source}, tt.convertErr(source, dest)
+				}
+
+				return converter.ConversionResult{SourcePath: source, DestPath: dest, Status: converter.StatusSuccess}, nil
+			}
+
+			m := converter.NewConversionManager(
+				[]converter.Converter{conv}, &converter.RetryConfig{MaxAttempts: 1}, 2, nil,
+			)
+			summary, err := m.ConvertDirectory(sourceDir, destDir, true)
+			require.NoError(t, err)
+
+			got := make(map[string]string, len(summary.Results))
+			for _, result := range summary.Results {
+				rel, relErr := filepath.Rel(sourceDir, result.SourcePath)
+				require.NoError(t, relErr)
+				got[filepath.ToSlash(rel)] = result.Message
+
+				if result.DestPath != "" {
+					assert.Equal(t, filepath.Join(destDir, "video", "op.mpg"), result.DestPath)
+				}
+			}
+
+			want := make(map[string]string, len(tt.want))
+			for rel, message := range tt.want {
+				want[rel] = filepath.FromSlash(message)
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
 func TestCalculateWorkers(t *testing.T) {
 	t.Parallel()
 

@@ -1,6 +1,7 @@
 package converter
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Converter は個々のアセット変換処理を表すインターフェース。
@@ -123,6 +126,7 @@ func (m *ConversionManager) GetConverterForFile(filePath string) Converter {
 }
 
 // ConvertFiles は複数ファイルを並列変換し、サマリーを返す。
+// 結果のMessageに現れるパスは、FileTaskに渡されたパスのまま変えない。
 //
 // 同じDestを持つタスクが2件以上ある場合、変換元の拡張子がDestの拡張子と
 // 大文字小文字を無視して一致するタスクがちょうど1件なら、そのタスクだけを変換し、
@@ -341,13 +345,84 @@ func (m *ConversionManager) sleep(seconds float64) {
 
 // ConvertDirectory はsourceDir配下の対応ファイルをdestDirへ変換し、サマリーを
 // 返す。recursive=trueの場合はサブディレクトリも再帰的に処理する。
+//
+// 結果のMessageに現れるsourceDir・destDir配下のパスは、relativeMessageに従い
+// それぞれのルートからの相対パスにする。SourcePath・DestPathは変更しない。
+//
+// why not: 絶対パスのまま返さない。internal/pipelineのCONVERTフェーズは実行の
+// 終了時に削除する一時ディレクトリを変換するため、その絶対パスは利用者が参照
+// できず、報告の行を長くするだけである。Converterのエラー文を個別に相対化しない
+// のは、ffmpegのstderr（ffmpeg 9.0.1は渡された入力パスをそのまま
+// 「Error opening input file <パス>.」と出す）やOSのエラーのように、パスを含む
+// 文言の多くをConverter以外が組み立てるためである。
 func (m *ConversionManager) ConvertDirectory(sourceDir, destDir string, recursive bool) (ConversionSummary, error) {
 	files, err := m.collectDirectoryFiles(sourceDir, destDir, recursive)
 	if err != nil {
 		return ConversionSummary{}, err
 	}
 
-	return m.ConvertFiles(files), nil
+	summary := m.ConvertFiles(files)
+	for i := range summary.Results {
+		summary.Results[i].Message = relativeMessage(summary.Results[i].Message, sourceDir, destDir)
+	}
+
+	return summary, nil
+}
+
+// relativeMessage はmessage中の、rootsのいずれかの配下を指すパスを、そのルート
+// からの相対パスに置き換える。ルートが入れ子の場合は長い方のルートを使う。
+// 置き換えるのは文頭か空白の直後から始まるパスだけで、ルート自体を指すパスは
+// そのまま残す。
+//
+// why not: 文中のどこに現れても置き換えはしない。ルートが/var/xのときの
+// /private/var/x/aのように、ルートを途中に含む別のパスまで切り詰めて、
+// 別のパスに書き換えてしまう。
+func relativeMessage(message string, roots ...string) string {
+	prefixes := make([]string, 0, len(roots))
+	for _, root := range roots {
+		prefix := filepath.Clean(root)
+		if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+			prefix += string(filepath.Separator)
+		}
+		prefixes = append(prefixes, prefix)
+	}
+	slices.SortFunc(prefixes, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
+
+	var b strings.Builder
+	for i := 0; i < len(message); {
+		if startsPath(message, i) {
+			if prefix, ok := matchingPrefix(message[i:], prefixes); ok {
+				i += len(prefix)
+
+				continue
+			}
+		}
+		b.WriteByte(message[i])
+		i++
+	}
+
+	return b.String()
+}
+
+// startsPath はmessageのi番目のバイトが文頭か空白の直後にあるかを返す。
+func startsPath(message string, i int) bool {
+	if i == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(message[:i])
+
+	return unicode.IsSpace(r)
+}
+
+// matchingPrefix はprefixesのうちsの接頭辞である最初のものを返す。
+func matchingPrefix(s string, prefixes []string) (string, bool) {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return prefix, true
+		}
+	}
+
+	return "", false
 }
 
 func (m *ConversionManager) collectDirectoryFiles(sourceDir, destDir string, recursive bool) ([]FileTask, error) {

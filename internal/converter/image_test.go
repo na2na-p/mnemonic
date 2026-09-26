@@ -329,8 +329,8 @@ func TestTLGImageDecoder_GetInfo(t *testing.T) {
 		decoder := converter.NewTLGImageDecoder()
 		_, err := decoder.GetInfo(path)
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
+		require.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
+		assert.EqualError(t, err, "TLG形式ではありません")
 	})
 }
 
@@ -445,8 +445,8 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		decoder := converter.NewTLGImageDecoder()
 		_, err := decoder.Decode(path)
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
+		require.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
+		assert.EqualError(t, err, "TLG形式ではありません")
 	})
 }
 
@@ -812,9 +812,9 @@ func TestImageConverter_Convert(t *testing.T) {
 		c := converter.NewImageConverter()
 		_, err := c.Convert(source, filepath.Join(dir, "output.png"))
 
-		require.Error(t, err)
 		require.ErrorIs(t, err, converter.ErrTLGInvalidFormat)
-		assert.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.EqualError(t, err, "再試行しても解消しない変換失敗です: TLG形式ではありません")
 	})
 
 	t.Run("異常系: 壊れたBMPファイルは再試行不要なエラーを返す", func(t *testing.T) {

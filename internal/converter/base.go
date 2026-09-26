@@ -47,6 +47,9 @@ const (
 //
 // 出力先が重複し別の変換元を優先したためConversionManagerが変換しなかった
 // 変換元は、DestPathに優先した変換元の出力先を持つStatusSkippedとなる。
+//
+// ConversionManager.ConvertDirectoryの結果では、Messageの文頭か空白の直後に
+// 置かれた変換元・出力先のパスは、それぞれのルートからの相対パスとなる。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
