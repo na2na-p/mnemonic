@@ -3,18 +3,21 @@ package pipeline
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
 // stubExecutePhase を差し込み、実際のフェーズ処理をスキップしてRun()の
 // オーケストレーション（進捗コールバック・phasesCompleted集計・統計収集）
-// のみを検証する。
+// のみを検証する。キャッシュディレクトリもt.TempDir()配下へ差し替え、CleanCacheを
+// 指定したテストが開発者の実キャッシュを消さないようにする。
 func newValidPipelineForOrchestration(t *testing.T) *BuildPipeline {
 	t.Helper()
 
@@ -25,6 +28,8 @@ func newValidPipelineForOrchestration(t *testing.T) *BuildPipeline {
 	config := NewConfig(input, filepath.Join(dir, "output.apk"))
 	p := NewBuildPipeline(config)
 	p.executePhase = func(_ Phase, a buildArtifacts) (buildArtifacts, error) { return a, nil }
+	cacheDir := filepath.Join(dir, "cache")
+	p.cacheDir = func() (string, error) { return cacheDir, nil }
 
 	return p
 }
@@ -74,17 +79,180 @@ func TestBuildPipeline_Run_SkipVideo(t *testing.T) {
 	assert.True(t, result.Success)
 }
 
+// seedCacheDir はキャッシュディレクトリ直下の各キャッシュ（テンプレート・フォント・
+// プラグイン・SDL2ソース・署名鍵）を模したファイルをcacheDir配下に作成する。
+// 戻り値は署名鍵以外のキャッシュのファイルパスと、署名鍵のファイルパス。
+func seedCacheDir(t *testing.T, cacheDir string) (others []string, keystore string) {
+	t.Helper()
+
+	others = []string{
+		filepath.Join(cacheDir, "templates", "latest", "x"),
+		filepath.Join(cacheDir, "fonts", "Koruri-Regular.ttf"),
+		filepath.Join(cacheDir, "plugins", "arm64-v8a", "libextrans.so"),
+		filepath.Join(cacheDir, "sdl2_sources", "marker"),
+	}
+	keystore = filepath.Join(cacheDir, cache.KeystoreDirName, "debug.keystore")
+
+	for _, path := range append(slices.Clone(others), keystore) {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte("cached"), 0o600))
+	}
+
+	return others, keystore
+}
+
 func TestBuildPipeline_Run_CleanCache(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		cleanCache      bool
+		templateOffline bool
+		invalidInput    bool
+		wantSuccess     bool
+		wantRemoved     bool
+		wantErrContains string
+	}{
+		{
+			name:        "正常系: CleanCache指定時は署名鍵以外のキャッシュを全て削除し署名鍵は残す",
+			cleanCache:  true,
+			wantSuccess: true,
+			wantRemoved: true,
+		},
+		{
+			name:        "正常系: CleanCache未指定時はキャッシュに触れない",
+			cleanCache:  false,
+			wantSuccess: true,
+			wantRemoved: false,
+		},
+		{
+			name:         "異常系: 入力の検証に失敗した場合はCleanCache指定時もキャッシュに触れない",
+			cleanCache:   true,
+			invalidInput: true,
+			wantSuccess:  false,
+			wantRemoved:  false,
+		},
+		{
+			name:            "異常系: TemplateOfflineと同時指定の場合は検証で失敗しキャッシュに触れない",
+			cleanCache:      true,
+			templateOffline: true,
+			wantSuccess:     false,
+			wantRemoved:     false,
+			wantErrContains: "--template-offline",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newValidPipelineForOrchestration(t)
+			p.config.CleanCache = tt.cleanCache
+			p.config.TemplateOffline = tt.templateOffline
+			if tt.invalidInput {
+				p.config.InputPath = filepath.Join(t.TempDir(), "missing.exe")
+			}
+
+			cacheDir, err := p.cacheDir()
+			require.NoError(t, err)
+			others, keystore := seedCacheDir(t, cacheDir)
+
+			result := p.Run(nil)
+
+			assert.Equal(t, tt.wantSuccess, result.Success)
+			assert.Contains(t, result.ErrorMessage, tt.wantErrContains)
+			for _, path := range others {
+				if tt.wantRemoved {
+					assert.NoFileExists(t, path)
+				} else {
+					assert.FileExists(t, path)
+				}
+			}
+			assert.FileExists(t, keystore)
+		})
+	}
+}
+
+func TestNewBuildPipeline_DefaultCacheDirIsCacheDir(t *testing.T) {
+	t.Parallel()
+
+	p := NewBuildPipeline(NewConfig("game.exe", "game.apk"))
+
+	got, gotErr := p.cacheDir()
+	want, wantErr := cache.Dir()
+
+	require.NoError(t, wantErr)
+	require.NoError(t, gotErr)
+	assert.Equal(t, want, got)
+}
+
+func TestBuildPipeline_Run_CleanCacheFailure(t *testing.T) {
 	t.Parallel()
 
 	p := newValidPipelineForOrchestration(t)
 	p.config.CleanCache = true
+	p.cacheDir = func() (string, error) { return "", assert.AnError }
 
-	assert.True(t, p.Config().CleanCache)
+	var phases []Phase
+	p.executePhase = func(phase Phase, a buildArtifacts) (buildArtifacts, error) {
+		phases = append(phases, phase)
+
+		return a, nil
+	}
 
 	result := p.Run(nil)
 
-	assert.True(t, result.Success)
+	assert.False(t, result.Success)
+	assert.Contains(t, result.ErrorMessage, ErrCacheClean.Error())
+	assert.Empty(t, phases)
+}
+
+func TestBuildPipeline_CleanCache_Error(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T) func() (string, error)
+	}{
+		{
+			name: "異常系: キャッシュディレクトリを解決できない",
+			setup: func(*testing.T) func() (string, error) {
+				return func() (string, error) { return "", assert.AnError }
+			},
+		},
+		{
+			name: "異常系: キャッシュを削除できない",
+			setup: func(t *testing.T) func() (string, error) {
+				t.Helper()
+
+				if os.Geteuid() == 0 {
+					t.Skip("rootはパーミッションに関係なく削除できるためスキップ")
+				}
+
+				cacheDir := t.TempDir()
+				others, _ := seedCacheDir(t, cacheDir)
+				lockedDir := filepath.Dir(others[0])
+				require.NoError(t, os.Chmod(lockedDir, 0o500))
+				t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o700) })
+
+				return func() (string, error) { return cacheDir, nil }
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newValidPipelineForOrchestration(t)
+			p.cacheDir = tt.setup(t)
+
+			err := p.cleanCache()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrCacheClean)
+		})
+	}
 }
 
 func TestBuildPipeline_Run_PhaseFailure(t *testing.T) {
@@ -304,7 +472,12 @@ func newTestPipeline(t *testing.T) *BuildPipeline {
 	input := filepath.Join(dir, "game.exe")
 	require.NoError(t, os.WriteFile(input, make([]byte, 100), 0o600))
 
-	return NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+	p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+	// why not: 既定のcache.Dirのままにしない。CleanCacheを指定したRunに開発者の実キャッシュを消させないため。
+	cacheDir := filepath.Join(dir, "cache")
+	p.cacheDir = func() (string, error) { return cacheDir, nil }
+
+	return p
 }
 
 func TestBuildPipeline_ExecuteBuild_RejectsUnusablePackageName(t *testing.T) {

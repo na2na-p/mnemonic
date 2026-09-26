@@ -75,7 +75,7 @@ mnemonic build <input.exe> -o <output.apk>
       --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス
       --quality string              画像品質プリセット (default "high")
       --skip-video                  動画変換をスキップ
-      --clean                       キャッシュをクリア
+      --clean                       署名鍵以外のキャッシュ（テンプレート・フォント・プラグイン・SDL2 ソース）をクリアしてからビルドする
       --template-version string     テンプレートバージョン固定
       --template-refresh-days int   テンプレートキャッシュ期限（日）(default 7)
       --template-offline            オフラインモード

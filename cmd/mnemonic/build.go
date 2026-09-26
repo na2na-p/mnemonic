@@ -128,7 +128,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipVideo, "skip-video", false, "動画変換をスキップ")
 	cmd.Flags().CountVarP(&verbose, "verbose", "v", "詳細ログ出力")
 	cmd.Flags().StringVar(&quality, "quality", pipeline.DefaultQuality, "画像品質プリセット")
-	cmd.Flags().BoolVar(&clean, "clean", false, "キャッシュをクリア")
+	cmd.Flags().BoolVar(&clean, "clean", false, "署名鍵以外のキャッシュ（テンプレート・フォント・プラグイン・SDL2 ソース）をクリアしてからビルドする")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "ログファイル出力先")
 	cmd.Flags().IntVar(&ffmpegTimeout, "ffmpeg-timeout", pipeline.DefaultFFmpegTimeoutSecs, "FFmpegタイムアウト（秒）")
 	cmd.Flags().IntVar(&gradleTimeout, "gradle-timeout", pipeline.DefaultGradleTimeoutSecs, "Gradleタイムアウト（秒）")

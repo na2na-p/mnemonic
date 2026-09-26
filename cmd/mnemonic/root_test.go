@@ -196,6 +196,44 @@ func TestBuildCommand_SoundfontFlag(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_CleanFlag(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	tests := []struct {
+		name      string
+		extraArgs []string
+		want      bool
+	}{
+		{
+			name:      "正常系: --clean指定時はCleanCacheがConfigへ渡る",
+			extraArgs: []string{"--clean"},
+			want:      true,
+		},
+		{
+			name:      "正常系: --clean未指定時はCleanCacheがfalse",
+			extraArgs: nil,
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captured := withCapturingBuildPipeline(t, &stubBuildRunner{
+				runResult: pipeline.Result{Success: true, OutputPath: &outputFile},
+			})
+
+			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
+			result := invoke(t, args)
+
+			require.Equal(t, 0, result.exitCode)
+			assert.Equal(t, tt.want, captured.CleanCache)
+		})
+	}
+}
+
 func TestBuildCommand_Success(t *testing.T) {
 	dir := t.TempDir()
 	inputFile := filepath.Join(dir, "game.exe")

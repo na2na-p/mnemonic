@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -8,8 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/parser"
 )
+
+// ErrCacheClean はConfig.CleanCache指定時にキャッシュをクリアできなかった場合のエラー。
+var ErrCacheClean = errors.New("キャッシュのクリアに失敗しました")
 
 // BuildPipeline はビルドパイプラインオーケストレーター。
 //
@@ -42,6 +47,11 @@ type BuildPipeline struct {
 	keystorePath     func() (string, error)
 	keystoreValid    func(path string) bool
 	keystoreGenerate func(path string) error
+
+	// cacheDir はキャッシュディレクトリの解決関数。既定値はcache.Dir。
+	// Config.CleanCacheのテストが開発者の実キャッシュを消さないよう差し替え可能に
+	// する（executePhaseと同じ設計方針）。
+	cacheDir func() (string, error)
 }
 
 // buildArtifacts はフェーズ間で引き渡すビルド成果物。値として次のフェーズへ渡す。
@@ -65,6 +75,7 @@ func NewBuildPipeline(config Config) *BuildPipeline {
 	b.keystorePath = resolveDebugKeystorePath
 	b.keystoreValid = validateDebugKeystoreFile
 	b.keystoreGenerate = generateDebugKeystoreFile
+	b.cacheDir = cache.Dir
 
 	return b
 }
@@ -103,6 +114,10 @@ func (b *BuildPipeline) Validate() []string {
 		}
 	}
 
+	if b.config.CleanCache && b.config.TemplateOffline {
+		errs = append(errs, "--clean と --template-offline は同時に指定できません。オフラインで使う唯一のテンプレートキャッシュを削除してしまうため")
+	}
+
 	return errs
 }
 
@@ -117,6 +132,16 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 
 	if errs := b.Validate(); len(errs) > 0 {
 		return Result{Success: false, OutputPath: nil, ErrorMessage: errs[0]}
+	}
+
+	// why not: テンプレートを読むBUILDフェーズの直前ではなく全フェーズの前でクリアする。
+	// フォントはCONVERTフェーズ（copyPolyfillFiles）で読むため、それより後では古い
+	// フォントが使われる。検証より後に置くのは、入力の誤りで失敗するだけの実行で
+	// キャッシュを消さないため。
+	if b.config.CleanCache {
+		if err := b.cleanCache(); err != nil {
+			return Result{Success: false, OutputPath: nil, ErrorMessage: err.Error()}
+		}
 	}
 
 	var phasesCompleted []Phase
@@ -209,4 +234,26 @@ func (b *BuildPipeline) runPhase(phase Phase, a buildArtifacts) (buildArtifacts,
 	default:
 		return a, fmt.Errorf("未知のフェーズです: %s", phase)
 	}
+}
+
+// cleanCache はキャッシュディレクトリ配下の署名鍵以外のキャッシュを削除する。
+//
+// why not: テンプレートだけでなくフォントとプラグインも消す。フォントはmasterブランチ
+// （builder.KoruriVersion）、プラグインはlatest_krkrsdl2リリース
+// （builder.DefaultPluginConfigs）という更新され続ける参照から取得され、キャッシュの
+// 有効性はファイルの有無でしか判定しない（FontFetcher.IsCacheValid、
+// PluginFetcher.IsAllCacheValid）。古い複製が期限切れにならずにAPKへ入り続けるため、
+// クリアの対象から外せない。署名鍵だけは残す。消すと次回ビルドの署名鍵が変わり、既存
+// APKへの上書きインストールができなくなる（cache.ClearCacheDirが署名鍵を除外する理由）。
+func (b *BuildPipeline) cleanCache() error {
+	dir, err := b.cacheDir()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrCacheClean, err)
+	}
+
+	if err := cache.ClearCacheDir(dir, false); err != nil {
+		return fmt.Errorf("%w: %w", ErrCacheClean, err)
+	}
+
+	return nil
 }
