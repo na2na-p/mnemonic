@@ -145,6 +145,21 @@ func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error
 	return nil
 }
 
+// maxMidiWorkers はMIDI変換で同時に走らせるワーカー数の上限。
+//
+// why not: CPU数だけで並列化しない。fluidsynthはワーカーごとにサウンド
+// フォント全体を常駐させるため、ワーカー数 × サウンドフォント分のメモリを
+// 使う。converter.CalculateWorkers(nil)はメモリを見ないので、
+// CPU数どおりに並列化すると小型機でメモリが枯渇する。2は並列の
+// 利点を残しつつ常駐メモリをサウンドフォント2つ分に抑える上限。
+const maxMidiWorkers = 2
+
+// why not: 下限の1を省かない。0以下をそのままNewConversionManagerへ渡すと
+// 「自動計算」と解釈されCPU数どおりのワーカー数に戻ってしまうため。
+func midiWorkerCount(cpuCount int) int {
+	return max(1, min(cpuCount, maxMidiWorkers))
+}
+
 // convertMidiFileList はmidiFilesをOGGへ変換し、失敗を集約して返す。
 //
 // why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
@@ -170,7 +185,9 @@ func convertMidiFileListWith(
 		tasks = append(tasks, converter.FileTask{Source: midiFile, Dest: withSuffix(midiFile, ".ogg")})
 	}
 
-	manager := converter.NewConversionManager([]converter.Converter{midiConverter}, nil, 0, nil)
+	manager := converter.NewConversionManager(
+		[]converter.Converter{midiConverter}, nil, midiWorkerCount(converter.CalculateWorkers(nil)), nil,
+	)
 	if sleep != nil {
 		manager.SleepFunc = sleep
 	}

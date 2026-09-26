@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -286,4 +287,102 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMidiWorkerCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		cpuCount int
+		want     int
+	}{
+		{name: "境界値: CPU数が0以下でも1ワーカーは確保する", cpuCount: 0, want: 1},
+		{name: "正常系: 1CPUなら1ワーカー", cpuCount: 1, want: 1},
+		{name: "正常系: 2CPUなら2ワーカー", cpuCount: 2, want: 2},
+		{name: "正常系: 8CPUでも2ワーカーに抑える", cpuCount: 8, want: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, midiWorkerCount(tt.cpuCount))
+		})
+	}
+}
+
+// concurrencyRecordingRunner はfakeCommandRunnerの応答を返しつつ、同時に
+// 実行中のfluidsynthレンダリング数の最大値を記録する。
+//
+// why not: レンダリングを即座に返さない。一瞬で終わる呼び出しは並列ワーカー
+// 同士が重なり合わず、上限を超える並列化をしていても最大同時実行数が1に
+// 見えてしまうため、holdの間だけ呼び出しを留めて重なりを観測できるようにする。
+type concurrencyRecordingRunner struct {
+	fakeCommandRunner
+	hold time.Duration
+
+	mu     sync.Mutex
+	active int
+	peak   int
+}
+
+func (r *concurrencyRecordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "fluidsynth" && slices.Contains(args, "-F") {
+		r.mu.Lock()
+		r.active++
+		r.peak = max(r.peak, r.active)
+		r.mu.Unlock()
+
+		<-time.After(r.hold)
+
+		r.mu.Lock()
+		r.active--
+		r.mu.Unlock()
+	}
+
+	return r.fakeCommandRunner.Run(ctx, name, args...)
+}
+
+func (r *concurrencyRecordingRunner) peakConcurrency() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.peak
+}
+
+func TestConvertMidiFileListWith_Concurrency(t *testing.T) {
+	t.Parallel()
+
+	if runtime.NumCPU() <= 2 {
+		t.Skip("CPU数が2以下ではCPU数由来のワーカー数が上限を超えないため、上限の検証にならない")
+	}
+
+	t.Run("正常系: CPU数が多くてもfluidsynthの同時レンダリングは2件までに抑える", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		midiFiles := make([]string, 0, 4)
+		for _, name := range []string{"a.mid", "b.mid", "c.mid", "d.mid"} {
+			path := filepath.Join(dir, name)
+			require.NoError(t, os.WriteFile(path, []byte("MThd"), 0o600))
+			midiFiles = append(midiFiles, path)
+		}
+
+		soundfont := filepath.Join(dir, "soundfont.sf2")
+		require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
+
+		runner := &concurrencyRecordingRunner{
+			fakeCommandRunner: fakeCommandRunner{responses: map[string]fakeCommandResponse{
+				"fluidsynth": {},
+				"ffmpeg":     {},
+			}},
+			hold: 50 * time.Millisecond,
+		}
+		midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
+
+		require.NoError(t, convertMidiFileListWith(midiFiles, midiConverter, (&sleepRecorder{}).sleep))
+
+		assert.LessOrEqual(t, runner.peakConcurrency(), 2)
+	})
 }
