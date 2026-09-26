@@ -154,8 +154,8 @@ func (b *BuildPipeline) Validate() []string {
 	}
 
 	if b.config.SourceEncoding != "" && !converter.IsSelectableSourceEncoding(b.config.SourceEncoding) {
-		errs = append(errs, fmt.Sprintf("--source-encoding に指定できない文字コード名です: %s（指定できる名前: %s）",
-			b.config.SourceEncoding, strings.Join(converter.SelectableSourceEncodings, ", ")))
+		errs = append(errs, fmt.Sprintf("--source-encoding に指定できない文字コード名です: %s。指定できる名前（括弧内は別名）: %s",
+			b.config.SourceEncoding, converter.DescribeSelectableSourceEncodings()))
 	}
 
 	if b.config.CleanCache && b.config.TemplateOffline {
