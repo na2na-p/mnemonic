@@ -101,3 +101,39 @@ func TestSkipChunk(t *testing.T) {
 		})
 	}
 }
+
+// readSegmentはパッケージ非公開ヘルパーであり、セグメントのオフセットがファイル末尾より
+// 先を指す場合の読み取り量をアーカイブを組まずに直接検証するため、ホワイトボックステストとする。
+func TestReadSegment(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("abcdef")
+	fileSize := int64(len(data))
+
+	cases := []struct {
+		name         string
+		segment      XP3Segment
+		wantConsumed int64
+	}{
+		{"正常系: オフセットがファイル末尾より先なら何も読まずに空データを返す", XP3Segment{Offset: fileSize + 10, Size: 4, OriginalSize: 4}, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				got      []byte
+				consumed int64
+				err      error
+			)
+			require.NotPanics(t, func() {
+				got, consumed, err = readSegment(bytes.NewReader(data), tc.segment, fileSize, fileSize)
+			})
+
+			require.NoError(t, err)
+			assert.Empty(t, got)
+			assert.Equal(t, tc.wantConsumed, consumed)
+		})
+	}
+}

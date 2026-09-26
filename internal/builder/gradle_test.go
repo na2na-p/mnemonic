@@ -171,6 +171,7 @@ func TestGradleBuilder_Build(t *testing.T) {
 		}{
 			{name: "正常系: releaseビルド", buildType: "release", expectedTask: "assembleRelease"},
 			{name: "正常系: debugビルド", buildType: "debug", expectedTask: "assembleDebug"},
+			{name: "正常系: ビルドタイプが空文字列ならreleaseビルド", buildType: "", expectedTask: "assembleRelease"},
 		}
 
 		for _, tc := range testCases {
@@ -249,6 +250,11 @@ func TestGradleBuilder_GetAPKPath(t *testing.T) {
 				name:         "正常系: debugビルドのパス",
 				buildType:    "debug",
 				relativePath: filepath.Join("app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+			},
+			{
+				name:         "正常系: ビルドタイプが空文字列ならreleaseビルドのパス",
+				buildType:    "",
+				relativePath: filepath.Join("app", "build", "outputs", "apk", "release", "app-release-unsigned.apk"),
 			},
 		}
 

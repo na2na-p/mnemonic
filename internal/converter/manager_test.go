@@ -196,6 +196,27 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		assert.Len(t, summary.Results, 3)
 	})
 
+	t.Run("正常系: MaxWorkersが0以下でも1ワーカーで全タスクを変換する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		files := make([]converter.FileTask, 0, 3)
+		for i := range 3 {
+			files = append(files, converter.FileTask{
+				Source: filepath.Join(dir, "source.txt"),
+				Dest:   filepath.Join(dir, fmt.Sprintf("dest%d.txt", i)),
+			})
+		}
+
+		m := converter.NewConversionManager([]converter.Converter{newMockConverter(".txt")}, nil, 1, nil)
+		m.MaxWorkers = 0
+		summary := m.ConvertFiles(files)
+
+		assert.Equal(t, 3, summary.Total)
+		assert.Equal(t, 3, summary.Success)
+		assert.Len(t, summary.Results, 3)
+	})
+
 	t.Run("正常系: 並列実行の検証", func(t *testing.T) {
 		t.Parallel()
 
