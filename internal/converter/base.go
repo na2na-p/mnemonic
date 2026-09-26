@@ -115,6 +115,29 @@ func classifyStatError(source string, err error) error {
 	return classifyPathError(source, err, ErrSourceNotFound, ErrSourceUnreadable)
 }
 
+// classifyReadError は変換元sourceに対するos.ReadFileの失敗errを分類する。
+// 権限不足はOSのエラーを包んだErrSourceUnreadableをErrPermanentFailureで
+// ラップして返し、存在しない場合はErrSourceNotFoundを、それ以外はOSのエラーを
+// 包んだErrSourceUnreadableを再試行対象として返す。
+//
+// why not: 読み込みの失敗を一律に恒久扱いにも再試行対象にもしない。再試行しても
+// 変わらないと原因から判別できる権限不足だけを恒久扱いにし、os.Statによる事前の
+// 確認(ensureSourceExists/validateSource)の後の削除競合やI/Oエラーなど一時的で
+// ありうる失敗は再試行側に残す。ファイル自体に読み込み権限が無い場合はos.Statが
+// 成功して事前の確認を通過し、ここで初めて失敗するため、再試行対象にすると
+// DefaultRetryConfigでは3回試行して1秒と2秒待った末に「最大リトライ回数超過」
+// として報告され、権限不足という原因が見えにくくなる。
+func classifyReadError(source string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%w: %s", ErrSourceNotFound, source)
+	default:
+		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+	}
+}
+
 // classifyPathError はpathに対するos.Statの失敗errを分類する。
 //
 // 存在しない場合はnotFoundをpathとともに、権限不足の場合はOSのエラーを包んだ

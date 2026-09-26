@@ -187,9 +187,10 @@ func newBuildCmd() *cobra.Command {
 	// 適用する。
 	cmd.Flags().StringVar(
 		&sourceEncoding, "source-encoding", "",
-		"テキストアセットの変換元文字コード（"+strings.Join(converter.SelectableSourceEncodings, ", ")+
-			"、未指定時はファイルごとに自動検出）。指定すると、BOMで始まるファイルと吉里吉里の"+
-			"simple crypt形式を除くすべてのテキストアセットを、BOM無しのUTF-8も含めてこの文字コードとして読む",
+		"テキストアセットの変換元文字コード。未指定時はファイルごとに自動検出する。"+
+			"指定できる名前（括弧内は別名）: "+converter.DescribeSelectableSourceEncodings()+"。"+
+			"指定すると、BOMで始まるファイルと吉里吉里のsimple crypt形式を除くすべてのテキストアセットを、"+
+			"BOM無しのUTF-8も含めてこの文字コードとして読む",
 	)
 
 	return cmd
