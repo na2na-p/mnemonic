@@ -344,8 +344,11 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 		return ConversionResult{SourcePath: source}, fmt.Errorf("出力先ディレクトリの作成に失敗しました: %w", err)
 	}
 
-	// 吉里吉里(KiriKiriZ)はBOM無しUTF-8をShift_JISとして誤解釈するため、
-	// ScriptAdjusterが扱う.ks/.tjsは常にBOM付きUTF-8で書き出す。
+	// ScriptAdjusterが扱う.ks/.tjsは常にBOM付きUTF-8で書き出す。吉里吉里がBOM無し
+	// テキストを読む文字コードはビルドで決まり（TVP_TEXT_READ_ANSI_MBCSありなら
+	// Shift_JIS、なしなら不正なバイト列で例外を投げる厳格なUTF-8。krkrsdl2
+	// external/krkrz/base/TextStream.cpp:33-37, :205-227）、BOMがあればどちらでも
+	// UTF-8として読まれる。
 	adjustedBytes := append(append([]byte{}, utf8BOM...), []byte(adjusted)...)
 	if err := os.WriteFile(dest, adjustedBytes, 0o644); err != nil { //nolint:gosec // ビルド成果物の出力用途のため妥当な権限
 		return ConversionResult{SourcePath: source}, fmt.Errorf("出力ファイルの書き込みに失敗しました: %w", err)

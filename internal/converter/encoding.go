@@ -33,8 +33,15 @@ var ErrEncodingFileNotFound = errors.New("ファイルが見つかりません")
 // 目的のエンコーディングへ変換できなかった場合のエラー。原因のエラーを%wで保持する。
 var ErrEncodingConversionFailed = errors.New("エンコーディング変換に失敗しました")
 
+// ErrUndecodableSource は変換元の内容が、試した変換元エンコーディングのいずれでも
+// 置換文字(U+FFFD)を生じずに復号できなかった場合のエラー。
+var ErrUndecodableSource = errors.New("変換元エンコーディングとして復号できないバイト列が含まれています")
+
 // utf8BOM はUTF-8のバイトオーダーマーク。
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
+
+// replacementCharacter はU+FFFD(REPLACEMENT CHARACTER)のUTF-8表現。
+var replacementCharacter = []byte("\uFFFD")
 
 // utf16LEBOM / utf16BEBOM はUTF-16のバイトオーダーマーク。utf32LEBOMはutf16LEBOMと
 // 先頭2バイトが一致するため、UTF-16LEと取り違えないよう区別に使う。
@@ -46,7 +53,7 @@ var (
 
 // SupportedEncodings はEncodingConverterが変換元として認識するエンコーディング名の一覧。
 // utf-16le/utf-16beは変換元としてのみ受け付け、変換先には指定できない。
-var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "big5", "cp949", "utf-16le", "utf-16be"}
+var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949", "utf-16le", "utf-16be"}
 
 // encodingAliases はchardetが返すエンコーディング名とSupportedEncodingsの対応マッピング。
 //
@@ -60,6 +67,12 @@ var encodingAliases = map[string]string{
 	"sjis":      "shift_jis",
 	"euc_jp":    "euc-jp",
 	"eucjp":     "euc-jp",
+	// why not: 別名が無いと、chardetが返す"GB-18030"と"EUC-KR"（saintfish/chardet
+	// multi_byte.go）がSupportedEncodingsのどれにも一致せず、gb18030とcp949は
+	// 自動検出で選ばれない。
+	"gb-18030":  "gb18030",
+	"euc-kr":    "cp949",
+	"euckr":     "cp949",
 	"utf8":      "utf-8",
 	"utf-8-sig": "utf-8",
 	"ascii":     "utf-8",
@@ -146,16 +159,22 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		return EncodingDetectionResult{Encoding: "utf-8", Confidence: 1.0, IsSupported: true}
 	}
 
-	result, err := chardet.NewTextDetector().DetectBest(data)
-
 	var (
 		rawEncoding string
 		confidence  float64
 	)
 
-	if err == nil && result != nil {
-		rawEncoding = result.Charset
-		confidence = float64(result.Confidence) / 100.0
+	// why not: DetectBestは使わない。chardetは各判定器をgoroutineで並行に走らせ、
+	// 到着順に集めた結果を安定でないsort.Sortで並べるため、同じ信頼度の候補の
+	// どれが先頭になるかは実行ごとに変わる。短いテキストでは多バイト系判定器が
+	// 揃って「不正な並びは無いが判断材料も無い」ことを示す信頼度10を返しやすく、
+	// 同じShift_JISの"ｾｰﾌﾞ"を300回判定するとgb-18030/big5/euc-jp/euc-krに
+	// 178/41/41/40回と割れた。変換元エンコーディングの決定がこの抽選に左右され
+	// ないよう、全候補から compareDetectionCandidates の全順序で先頭を選ぶ。
+	if results, err := chardet.NewTextDetector().DetectAll(data); err == nil && len(results) > 0 {
+		best := slices.MinFunc(results, compareDetectionCandidates)
+		rawEncoding = best.Charset
+		confidence = float64(best.Confidence) / 100.0
 	}
 
 	normalized := ""
@@ -168,6 +187,28 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		Confidence:  confidence,
 		IsSupported: isSupportedEncoding(rawEncoding),
 	}
+}
+
+// chardetTieBreakOrder は同じ信頼度の多バイト系候補を並べる順序で、chardetが判定器を
+// 登録している順序（detector.goのrecognizers）に合わせる。
+var chardetTieBreakOrder = []string{"Shift_JIS", "GB-18030", "EUC-JP", "EUC-KR", "Big5"}
+
+// compareDetectionCandidates はchardetの候補を信頼度の降順、同じ信頼度なら
+// chardetTieBreakOrderの順、それ以外は名前の昇順に並べる全順序。
+func compareDetectionCandidates(a, b chardet.Result) int {
+	return cmp.Or(
+		cmp.Compare(b.Confidence, a.Confidence),
+		cmp.Compare(tieBreakRank(a.Charset), tieBreakRank(b.Charset)),
+		strings.Compare(a.Charset, b.Charset),
+	)
+}
+
+func tieBreakRank(charsetName string) int {
+	if i := slices.Index(chardetTieBreakOrder, charsetName); i >= 0 {
+		return i
+	}
+
+	return len(chardetTieBreakOrder)
 }
 
 // IsTextFile はfilePathがテキストファイルかどうかを判定する。
@@ -252,9 +293,12 @@ func (c *EncodingConverter) SupportedExtensions() []string {
 
 // kirikiriScriptExtensions は吉里吉里スクリプトファイルの拡張子一覧。
 //
-// why not: これらのファイルはUTF-8 BOMが無いとKirikiriZ側でShift_JISとして
-// 誤解釈されるため、変換先がUTF-8の場合は常にBOMを付与する必要がある
-// （ASCIIのみの内容でも例外にしない。8a188fa）。
+// why not: 変換先がUTF-8の場合は常にBOMを付与し、BOM無しUTF-8にはしない（ASCIIのみの
+// 内容でも例外にしない。8a188fa）。吉里吉里がBOM無しテキストを読む文字コードは
+// ビルドで決まり、TVP_TEXT_READ_ANSI_MBCSを定義したビルドはShift_JISで、定義しない
+// ビルドは厳格なUTF-8で読んで不正なバイト列では例外を投げる（krkrsdl2
+// external/krkrz/base/TextStream.cpp:33-37, :205-227）。UTF-8 BOMがあればどちらの
+// 既定でもUTF-8として読まれる（同:181-184）。
 var kirikiriScriptExtensions = []string{".ks", ".tjs", ".asd"}
 
 func isKirikiriScriptExtension(ext string) bool {
@@ -312,17 +356,16 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
 	}
 
-	data, sourceEncoding, err := c.prepareSource(data)
+	data, plan, err := c.prepareSource(data)
 	if err != nil {
 		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %w", ErrEncodingConversionFailed, err))
 	}
 
 	targetNormalized := strings.ReplaceAll(strings.ToLower(c.targetEncoding), "-", "_")
-	sourceNormalized := strings.ReplaceAll(strings.ToLower(sourceEncoding), "-", "_")
 	hasBOM := bytes.HasPrefix(data, utf8BOM)
 	isKirikiriScript := isKirikiriScriptExtension(filepath.Ext(source))
 
-	if sourceNormalized == targetNormalized && !hasBOM && !isKirikiriScript {
+	if plan.isOnly(c.targetEncoding) && !hasBOM && !isKirikiriScript {
 		return ConversionResult{
 			SourcePath:  source,
 			DestPath:    dest,
@@ -337,13 +380,14 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		data = data[len(utf8BOM):]
 	}
 
-	resultBytes, convErr := convertEncoding(data, sourceEncoding, c.targetEncoding)
+	resultBytes, sourceEncoding, convErr := convertEncoding(data, plan, c.targetEncoding)
 	if convErr != nil {
 		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %w", ErrEncodingConversionFailed, convErr))
 	}
 
-	// 吉里吉里スクリプトファイル(.ks/.tjs/.asd)はUTF-8 BOMが無いとShift_JISとして
-	// 誤解釈されるため、変換先がUTF-8の場合はBOMを付与する。
+	// 吉里吉里スクリプトファイル(.ks/.tjs/.asd)は、変換先がUTF-8の場合BOMを付与して
+	// 読み手の既定エンコーディングに依存しないようにする（理由は
+	// kirikiriScriptExtensionsを参照）。
 	//
 	// why not: UTF-16由来のファイルは拡張子によらずBOM無しにしない。元のUTF-16
 	// ファイルはBOMで自己記述していたため、BOM無しUTF-8にすると読み手の既定
@@ -370,74 +414,177 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 	}, nil
 }
 
-// ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 検出されたソース
-// エンコーディング)を返す。
+// ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 復号に使った
+// ソースエンコーディング)を返す。
 //
 // デコード/エンコード失敗はerrとして返す。Convertと異なり
 // ErrEncodingConversionFailed・ErrPermanentFailureでのラップは行わない。
 func (c *EncodingConverter) ConvertBytes(data []byte) ([]byte, string, error) {
-	data, sourceEncoding, err := c.prepareSource(data)
+	data, plan, err := c.prepareSource(data)
 	if err != nil {
 		return nil, "", err
 	}
 
 	data = bytes.TrimPrefix(data, utf8BOM)
 
-	resultBytes, err := convertEncoding(data, sourceEncoding, c.targetEncoding)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return resultBytes, sourceEncoding, nil
+	return convertEncoding(data, plan, c.targetEncoding)
 }
 
-// prepareSource は変換元dataと、その変換元エンコーディングを返す。dataが吉里吉里の
-// simple crypt形式であれば、復号したBOM付きUTF-16LEと"utf-16le"を返す。
-func (c *EncodingConverter) prepareSource(data []byte) ([]byte, string, error) {
+// prepareSource は変換元dataと、それを復号するエンコーディングの候補を返す。dataが
+// 吉里吉里のsimple crypt形式であれば、復号したBOM付きUTF-16LEと"utf-16le"を返す。
+func (c *EncodingConverter) prepareSource(data []byte) ([]byte, sourcePlan, error) {
 	// why not: モードが対応済みかどうかに関わらず、FE FEで始まれば復号へ回し、
 	// 未対応モードや壊れた形式はエラーにする。吉里吉里本体もそれらのテキストは
 	// 読み込みエラーにするため、別エンコーディングとして推定し直して変換を続けても、
 	// エンジンが読めないファイルを別の中身に書き換えるだけになる。
 	if !bytes.HasPrefix(data, simpleCryptSignature) {
-		return data, c.resolveSourceEncoding(data), nil
+		return data, c.planSource(data), nil
 	}
 
 	decoded, err := decodeSimpleCrypt(data)
 	if err != nil {
-		return nil, "", err
+		return nil, sourcePlan{}, err
 	}
 
 	// why not: 変換元エンコーディングの指定より優先する。復号結果は常にUTF-16LEで
 	// あり、指定に従うと復号済みのデータを別エンコーディングとして誤読する。
-	return decoded, "utf-16le", nil
+	return decoded, singleSource("utf-16le"), nil
 }
 
-func (c *EncodingConverter) resolveSourceEncoding(data []byte) string {
+// ambiguousConfidence は、多バイト系の推定をそれだけでは採用しない信頼度の上限。
+//
+// why not: 推定名だけで復号しない。chardetの多バイト系判定器は2バイト文字が10個
+// 以下で不正な並びが無いと一律に10（0.1）を返し、頻出字が1つも無い場合も文字数に
+// よらず10になる（saintfish/chardet multi_byte.go matchConfidence）。この値は
+// 「判断材料が無い」ことしか示さず、短いShift_JISの"ｾｰﾌﾞ"や"name=ｱｲﾃﾑ"は
+// gb-18030 0.1と推定され、GB18030で復号するとU+FFFDを含まない漢字の文字化けに
+// なる。文として十分な長さのGBK・EUC-KR・Big5・EUC-JPの実測値はいずれも1.0
+// だった。0.5はこの0.1と1.0の間に置いた境界で、2バイト文字20個に頻出字が1個
+// だけの場合（0.48）のような根拠の薄い推定もこちらに含める。
+const ambiguousConfidence = 0.5
+
+// shiftJISLookalikeEncodings は、推定の信頼度が低いときにShift_JISとの取り違えを
+// 疑う多バイト系エンコーディング。
+//
+// why not: utf-8は含めない。UTF-8は復号時に厳格に検証しており、正しいUTF-8の
+// "猫"（chardetの信頼度0.8）もShift_JISとしてはU+FFFD無しに"迪ｫ"と復号できて
+// しまうため、両方で復号してShift_JISを優先するとUTF-8のファイルを文字化けさせる。
+// shift_jisも含めない。低信頼度でもshift_jisと推定されれば候補はShift_JISだけで、
+// ほかの文字コードとは突き合わせない。そのため短いGBKの"中文测试"（shift_jis 0.1）は
+// Shift_JISの文字化け"ﾖﾐﾎﾄｲ簗ﾔ"として成功し、"保存数据"（同0.1）は恒久的な失敗に
+// なる。逆に候補が2つでもShift_JISでU+FFFDが出れば推定名を採るため、短いEUC-JPの
+// "漢字"（gb18030 0.1）はGB18030の"戳机"になる。いずれも入力をCP932とみなす前提で
+// 受け入れる帰結である。
+var shiftJISLookalikeEncodings = []string{"euc-jp", "gb2312", "gb18030", "big5", "cp949"}
+
+// sourcePlan は変換元を復号するエンコーディングの候補を優先順に持つ。
+type sourcePlan struct {
+	candidates []string
+	// failure はすべての候補で復号できなかった場合のエラー文言。空文字列なら
+	// 各候補の失敗だけを返す。
+	failure string
+}
+
+func singleSource(enc string) sourcePlan {
+	return sourcePlan{candidates: []string{enc}}
+}
+
+// isOnly は候補がencだけかを、大文字小文字と"-"/"_"の違いを無視して判定する。
+func (p sourcePlan) isOnly(enc string) bool {
+	key := func(name string) string { return strings.ReplaceAll(strings.ToLower(name), "-", "_") }
+
+	return len(p.candidates) == 1 && key(p.candidates[0]) == key(enc)
+}
+
+// decode はdataを候補の順にUTF-8へ復号し、最初に復号できた結果とその候補を返す。
+func (p sourcePlan) decode(data []byte) ([]byte, string, error) {
+	errs := make([]error, 0, len(p.candidates))
+
+	for _, enc := range p.candidates {
+		decoded, err := decodeToUTF8(data, enc)
+		if err == nil {
+			return decoded, enc, nil
+		}
+
+		errs = append(errs, fmt.Errorf("ソースエンコーディング%sのデコードに失敗しました: %w", enc, err))
+	}
+
+	if p.failure == "" {
+		return nil, "", errors.Join(errs...)
+	}
+
+	return nil, "", fmt.Errorf("%s: %w", p.failure, errors.Join(errs...))
+}
+
+func (c *EncodingConverter) planSource(data []byte) sourcePlan {
 	if c.sourceEncoding != "" {
-		return c.sourceEncoding
+		return singleSource(c.sourceEncoding)
 	}
 
 	detection := c.detector.DetectBytes(data)
-	if detection.Encoding == "" {
-		return "utf-8"
-	}
 
-	return detection.Encoding
+	switch {
+	case detection.Encoding == "":
+		return singleSource("utf-8")
+	case !detection.IsSupported && utf8.Valid(data):
+		// why not: 未対応の推定でも、有効なUTF-8はShift_JISとして読まない。chardetの
+		// UTF-8判定器は非ASCIIが3文字以下だと0.8止まりで、単バイト系の推定に負ける
+		// （UTF-8の"title=名前"はwindows-1252 0.9）。Shift_JISの復号器はこのバイト列を
+		// U+FFFD無しに"title=蜷榊燕"と復号してしまい、正しいUTF-8のファイルを黙って
+		// 文字化けさせる。
+		return singleSource("utf-8")
+	case !detection.IsSupported:
+		// why not: chardetが対応外の文字コード名を返したBOM無しテキストは、そのまま
+		// 残すことも失敗にすることもせず、Shift_JISとして復号する。
+		// 残さない理由: 変換先のエンジン（krkrsdl2 android-support）は
+		// TVP_TEXT_READ_ANSI_MBCSを定義せずにビルドされ、BOM無しテキストを厳格な
+		// UTF-8として読み、不正なバイト列で例外を投げる（krkrsdl2
+		// external/krkrz/base/TextStream.cpp:33-37, :205-227）。未変換のShift_JISは
+		// 読み込み時に落ちる。
+		// Shift_JISとする理由: ここに来るのは有効なUTF-8ではないBOM無しテキストで、
+		// 元のWindows版エンジンがそれを読めたのはANSIコードページで読む経路だけである。
+		// 吉里吉里2はBOM無しテキストを常にANSIコードページで読み（krkr2@dec49af
+		// kirikiri2/branches/2.32stable/kirikiri2/src/core/base/TextStream.cpp:146-158
+		// からtjs2/tjsConfig.h:99-100、tjsConfig.cpp:208-245の
+		// MultiByteToWideChar(CP_ACP)）、吉里吉里ZはTVP_TEXT_READ_ANSI_MBCSを定義した
+		// ビルドか-readencoding=Shift_JISの指定があるときだけShift_JISで読む（上記
+		// TextStream.cpp:33-37, :220-224、同base/ScriptMgnIntf.cpp:141-147）。日本語版
+		// WindowsのANSIコードページはCP932である。
+		// 失敗にしない理由: 短いテキストではchardetがShift_JISをwindows-1252や
+		// iso-8859-1と推定しやすく（"[config]\ntitle=猫"はwindows-1252 0.75）、
+		// 失敗にすると正しいゲームがchardetの弱さだけでビルドできなくなる。
+		// Shift_JISでもU+FFFDが出る内容はdecodeToUTF8が失敗にする。
+		return sourcePlan{
+			candidates: []string{"shift_jis"},
+			failure:    fmt.Sprintf("検出結果%sは未対応で、Shift_JISとしても復号できませんでした", detection.Encoding),
+		}
+	case detection.Confidence < ambiguousConfidence && slices.Contains(shiftJISLookalikeEncodings, detection.Encoding):
+		// 両方で復号できる場合は、上の未対応時と同じ理由（元のエンジンが有効な
+		// UTF-8でないBOM無しテキストを読む経路はCP932だけ）でShift_JISを優先する。
+		return sourcePlan{
+			candidates: []string{"shift_jis", detection.Encoding},
+			failure: fmt.Sprintf("検出結果%s（信頼度%.2f）とShift_JISのいずれとしても復号できませんでした",
+				detection.Encoding, detection.Confidence),
+		}
+	default:
+		return singleSource(detection.Encoding)
+	}
 }
 
-// convertEncoding はdataをsourceEncodingからUTF-8を経由してtargetEncodingへ変換する。
-func convertEncoding(data []byte, sourceEncoding, targetEncoding string) ([]byte, error) {
-	utf8Bytes, err := decodeToUTF8(data, sourceEncoding)
+// convertEncoding はdataをplanの候補からUTF-8を経由してtargetEncodingへ変換し、
+// (変換結果, 復号に使った変換元エンコーディング)を返す。
+func convertEncoding(data []byte, plan sourcePlan, targetEncoding string) ([]byte, string, error) {
+	utf8Bytes, sourceEncoding, err := plan.decode(data)
 	if err != nil {
-		return nil, fmt.Errorf("ソースエンコーディング%sのデコードに失敗しました: %w", sourceEncoding, err)
+		return nil, "", err
 	}
 
 	encoded, err := encodeFromUTF8(utf8Bytes, targetEncoding)
 	if err != nil {
-		return nil, fmt.Errorf("ターゲットエンコーディング%sへのエンコードに失敗しました: %w", targetEncoding, err)
+		return nil, "", fmt.Errorf("ターゲットエンコーディング%sへのエンコードに失敗しました: %w", targetEncoding, err)
 	}
 
-	return encoded, nil
+	return encoded, sourceEncoding, nil
 }
 
 func decodeToUTF8(data []byte, sourceEncoding string) ([]byte, error) {
@@ -454,7 +601,24 @@ func decodeToUTF8(data []byte, sourceEncoding string) ([]byte, error) {
 		return nil, err
 	}
 
-	return enc.NewDecoder().Bytes(data)
+	decoded, err := enc.NewDecoder().Bytes(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// why not: 復号器のエラーだけに頼らない。x/textの多バイト系復号器は不正な
+	// バイト列でもエラーを返さずU+FFFDに置き換える（japanese/shiftjis.go、
+	// simplifiedchinese/gbk.goなど）ため、別の文字コードのテキストをShift_JISや
+	// GB18030として読んだ結果が黙って成功し、文字化けを書き出してしまう。変換元に
+	// U+FFFDそのものが符号化されている場合（GB18030は符号化できる）も失敗になるが、
+	// ゲームのテキストには現れないものとして受け入れる。
+	// UTF-16は対象外: BOMかsimple crypt形式で自己記述しており、chardetの推定を
+	// 経由しないため別の文字コードと取り違えることがない。
+	if !isUTF16Encoding(sourceEncoding) && bytes.Contains(decoded, replacementCharacter) {
+		return nil, fmt.Errorf("%w: %s", ErrUndecodableSource, sourceEncoding)
+	}
+
+	return decoded, nil
 }
 
 // isUTF16Encoding はエンコーディング名encが（別名の正規化後に）utf-16le/utf-16beかを返す。
@@ -487,7 +651,9 @@ func encodeFromUTF8(data []byte, targetEncoding string) ([]byte, error) {
 // encodingByName はSupportedEncodings（utf-8を除く）に対応するx/text/encoding実装を返す。
 //
 // why not: "gb2312"はx/text/encoding/simplifiedchineseに専用の実装が無いため、
-// バイト範囲が互換なGBK（GB2312のスーパーセット）で代替する。"cp949"はx/text側で
+// バイト範囲が互換なGBK（GB2312のスーパーセット）で代替する。"gb18030"をこのGBKへ
+// 寄せないのは、GBKの復号器が4バイト符号を扱わずU+FFFDにするため（x/text
+// simplifiedchinese/gbk.goのgb18030フラグ）。"cp949"はx/text側で
 // EUCKRという名称だが、Code Page 949そのものを指す実装であるためcp949に直接対応する。
 // UTF-16はUseBOMの復号器を返すため、先頭のBOMは復号時に取り除かれ、BOMがあれば
 // そのバイト順が名前のバイト順より優先される。
@@ -499,6 +665,8 @@ func encodingByName(name string) (encoding.Encoding, error) {
 		return japanese.EUCJP, nil
 	case "gb2312":
 		return simplifiedchinese.GBK, nil
+	case "gb18030":
+		return simplifiedchinese.GB18030, nil
 	case "big5":
 		return traditionalchinese.Big5, nil
 	case "cp949":

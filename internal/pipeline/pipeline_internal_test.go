@@ -639,6 +639,15 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				"system/font.ttf": "stub font",
 			},
 		},
+		{
+			name: "正常系: chardetが未対応の文字コードと推定する短いShift_JISの.csvがあってもエラーを返さない",
+			files: map[string]string{
+				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
+				"system/font.ttf": "stub font",
+				// Shift_JISの"id,name\n1,ｱｲﾃﾑ"。chardetはiso-8859-1と推定する。
+				"data/items.csv": "id,name\n1,\xb1\xb2\xc3\xd1",
+			},
+		},
 	}
 
 	for _, tt := range tests {
