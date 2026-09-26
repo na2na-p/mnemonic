@@ -3,8 +3,6 @@ package pipeline
 import (
 	"regexp"
 	"strings"
-
-	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
 // javaReservedWords はパッケージ名生成時のフォールバック用Java予約語リスト。
@@ -44,19 +42,4 @@ func (b *BuildPipeline) sanitizeName(name string) string {
 	}
 
 	return sanitized
-}
-
-// gameIconNames は優先順位の高いアイコンファイル名（krkr/吉里吉里ゲームで
-// よく使われる）。
-var gameIconNames = []string{"icon.png", "icon.ico", "icon.bmp"}
-
-// findGameIcon はゲームアイコンを検索する。
-//
-// 以下の優先順位でアイコンを検索する:
-//  1. 抽出ディレクトリからアイコンファイルを検索
-//  2. EXEファイルから埋め込みアイコンを抽出（入力がEXEの場合のみ）
-//
-// 見つからない場合は空文字列を返す。
-func (b *BuildPipeline) findGameIcon() string {
-	return b.findGameIconUsing(parser.NewExeIconExtractor())
 }

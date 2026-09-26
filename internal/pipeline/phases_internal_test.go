@@ -79,7 +79,7 @@ func TestBuildPipeline_FinalizeConvertedTree_RemoveStaleVideoSourceFilesPrecedes
 	// system/font.ttfが無い場合に実ネットワークへフォントダウンロードを試みる
 	// (copyFontFile参照)。あらかじめsystem/font.ttfを用意しその既存ファイル
 	// ガードを通すことで、finalizeConvertedTreeを実ネットワークに触れず最後
-	// まで実行できるようにする（本ファイル冒頭のalwaysFailRoundTripper/
+	// まで実行できるようにする（polyfill_test.goのalwaysFailRoundTripper/
 	// offlineFontFetcherが実ネットワークを避けているのと同じ方針）。
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "system"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "system", "font.ttf"), []byte("stub font"), 0o600))
