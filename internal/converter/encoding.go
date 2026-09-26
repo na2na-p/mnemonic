@@ -287,9 +287,11 @@ func (c *EncodingConverter) CanConvert(filePath string) bool {
 
 // Convert はsourceの文字コードを変換し、destへ出力する。
 //
-// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、デコード/
-// エンコードに失敗した場合（変換先にUTF-16を指定した場合を含む）は
-// ErrEncodingConversionFailedを、いずれもErrPermanentFailureでラップして返す。
+// 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
+// ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
+// それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
+// デコード/エンコードに失敗した場合（変換先にUTF-16を指定した場合を含む）は
+// ErrEncodingConversionFailedをErrPermanentFailureでラップして返す。
 // 読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象とする。
 //
 // errがnilのとき、Statusは変換元が変換先と同じエンコーディングで、UTF-8 BOMが

@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"testing"
 	"unicode/utf16"
 
@@ -22,6 +23,24 @@ func writeFile(t *testing.T, path string, content []byte) {
 func mkdirAll(t *testing.T, path string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(path, 0o750))
+}
+
+// writeFileInLockedDir はtempディレクトリ配下のディレクトリにnameのファイルを作成し、
+// そのディレクトリの権限を0o000にしてファイルのパスを返すテストヘルパー。
+// 返すパスはos.StatがEACCESで失敗する。
+func writeFileInLockedDir(t *testing.T, name string, content []byte) string {
+	t.Helper()
+
+	locked := filepath.Join(t.TempDir(), "locked")
+	mkdirAll(t, locked)
+	path := filepath.Join(locked, name)
+	writeFile(t, path, content)
+	// t.TempDir()のクリーンアップは探索権限の無いディレクトリを削除できないため、
+	// 権限を落とす前に戻す処理を登録する。
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // テスト用の一時ディレクトリの権限を戻す用途のため妥当
+	require.NoError(t, os.Chmod(locked, 0o000))
+
+	return path
 }
 
 // readFile はpathの内容を読み込むテストヘルパー。

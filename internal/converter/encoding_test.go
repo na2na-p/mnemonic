@@ -2,6 +2,7 @@ package converter_test
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -464,6 +465,27 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrSourceNotFound)
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
 		assert.Contains(t, err.Error(), "変換元ファイルが見つかりません: "+source)
+		assert.Equal(t, source, result.SourcePath)
+	})
+
+	t.Run("異常系: 権限不足で確認できない変換元は見つからないとは報告せず再試行不要なエラー", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		source := writeFileInLockedDir(t, "source.txt", []byte("plain ascii text"))
+		c := converter.NewEncodingConverter("", "")
+		result, err := c.Convert(source, filepath.Join(t.TempDir(), "dest.txt"))
+
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.NotErrorIs(t, err, converter.ErrSourceNotFound)
+		assert.NotContains(t, err.Error(), "見つかりません")
+		assert.Contains(t, err.Error(), source)
+		require.EqualError(t, err, "再試行しても解消しない変換失敗です: 変換元ファイルを読み込めません: stat "+source+": permission denied")
 		assert.Equal(t, source, result.SourcePath)
 	})
 

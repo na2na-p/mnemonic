@@ -4,6 +4,7 @@ package converter
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
@@ -74,32 +75,53 @@ func (r ConversionResult) IsSuccess() bool {
 
 // validateSource は変換元ファイルの検証を行う。
 //
-// ファイルが存在しない場合はErrSourceNotFound、ディレクトリの場合は
-// ErrSourceIsDirectoryを返す。
+// os.Statの失敗はclassifyStatErrorで分類して返す。変換元がディレクトリの場合は
+// ErrSourceIsDirectoryをErrPermanentFailureでラップして返す。
 func validateSource(source string) error {
 	info, err := os.Stat(source)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrSourceNotFound, source)
+		return classifyStatError(source, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("%w: %s", ErrSourceIsDirectory, source)
+		return permanentError(fmt.Errorf("%w: %s", ErrSourceIsDirectory, source))
 	}
 
 	return nil
 }
 
-// ensureSourceExists はsourceをos.Statで確認できない場合、ErrSourceNotFoundを
-// 恒久的な失敗としてラップしたエラーを返す。
+// ensureSourceExists はsourceをos.Statで確認できない場合、その失敗を
+// classifyStatErrorで分類したエラーを返す。
 //
 // why not: validateSourceは使わない。validateSourceはディレクトリも拒否するが、
 // Encoding/Script/Video/Midiの各Converterはディレクトリをこの時点では弾かず、
 // 後続の読み込みや外部コマンドの失敗（再試行対象）として扱う。
 func ensureSourceExists(source string) error {
 	if _, err := os.Stat(source); err != nil {
-		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
+		return classifyStatError(source, err)
 	}
 
 	return nil
+}
+
+// classifyStatError はsourceに対するos.Statの失敗errを分類する。
+//
+// 存在しない場合はErrSourceNotFound、権限不足の場合はOSのエラーを包んだ
+// ErrSourceUnreadableを、いずれもErrPermanentFailureでラップして返す。
+// それ以外（親がファイル・パス名が長すぎる・I/Oエラーなど）はOSのエラーを包んだ
+// ErrSourceUnreadableを再試行対象として返す。
+//
+// why not: Statの失敗を一律にErrSourceNotFoundにはしない。権限不足まで
+// 「見つかりません」と報告すると利用者が原因を探せず、EIOなどの一時的な失敗まで
+// 恒久扱いになって再試行されなくなる。
+func classifyStatError(source string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
+	case errors.Is(err, fs.ErrPermission):
+		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+	default:
+		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+	}
 }
 
 // permanentError はerrをErrPermanentFailureでラップし、呼び出し側がerrors.Isで

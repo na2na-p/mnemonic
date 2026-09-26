@@ -287,8 +287,10 @@ func (a *ScriptAdjuster) CanConvert(filePath string) bool {
 
 // Convert はスクリプトファイルに調整ルールを適用し、destへ出力する。
 //
-// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、内容が
-// UTF-8として妥当でない場合はErrScriptNotUTF8を、いずれもErrPermanentFailureで
+// 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
+// ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
+// それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
+// 内容がUTF-8として妥当でない場合はErrScriptNotUTF8をErrPermanentFailureで
 // ラップして返す。読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象と
 // する。errがnilのとき、Statusは調整箇所が無ければStatusSkipped、それ以外は
 // StatusSuccessとなる。

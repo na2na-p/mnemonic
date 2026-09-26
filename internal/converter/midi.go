@@ -160,8 +160,10 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // に続けて
 // `ffmpeg -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> <dest>`
 //
-// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFound、
-// サウンドフォントが存在しない場合はErrSoundfontNotFoundを、いずれも
+// 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
+// ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
+// それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
+// サウンドフォントが存在しない場合はErrSoundfontNotFoundを
 // ErrPermanentFailureでラップして返す。FluidSynthの失敗はErrFluidsynthFailed、
 // FFmpegの失敗はErrMidiFFmpegFailed、出力先ディレクトリ・一時WAVの作成失敗は
 // OSのエラーを%wで保持して返し、いずれも再試行対象とする。errがnilのとき、

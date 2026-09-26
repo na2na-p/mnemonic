@@ -271,11 +271,12 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 
 // Convert は画像ファイルを指定された形式に変換し、destへ出力する。
 //
-// 失敗はerrとして返す。変換元の検証(validateSource)とデコードの失敗
+// 失敗はerrとして返す。変換元の検証(validateSource)の失敗のうち、変換元が
+// 存在しない・権限不足で確認できない・ディレクトリである場合と、デコードの失敗
 // （TLG未実装・未対応の拡張子を含む）はErrPermanentFailureでラップして返す。
-// TLGの読み込み失敗（権限不足を除く）・TLG以外の変換元のオープン失敗・
-// 出力先の作成・PNGエンコードの失敗は再試行対象とする。errがnilのとき、
-// StatusはStatusSuccessとなる。
+// それ以外の理由で変換元を確認できない場合、TLGの読み込み失敗（権限不足を除く）・
+// TLG以外の変換元のオープン失敗・出力先の作成・PNGエンコードの失敗は再試行対象と
+// する。errがnilのとき、StatusはStatusSuccessとなる。
 //
 // why not(decodeSourceの対応拡張子): CanConvert/SupportedExtensionsは.tlg
 // のみだが、Convert()自体は.bmp/.jpg/.jpeg/.png/.tlgを直接処理できる
@@ -284,7 +285,7 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 // の分岐は維持する）。
 func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := validateSource(source); err != nil {
-		return ConversionResult{SourcePath: source}, permanentError(err)
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	bytesBefore := getFileSize(source)

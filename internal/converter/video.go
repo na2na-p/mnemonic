@@ -177,11 +177,12 @@ func (c *VideoConverter) IsFFmpegAvailable() bool {
 // (パススルー)。それ以外はffmpegで変換する。出力は一時ファイルへ書き込み、
 // サイズが0より大きいことを確認してからdestへrenameする(fail-loud)。
 //
-// 失敗はerrとして返す。変換元が存在しない場合はErrSourceNotFoundを
-// ErrPermanentFailureでラップして返す。ffmpeg変換・パススルーコピー・出力の
-// 確定(0バイト出力はErrEmptyOutput)の失敗はErrVideoConversionFailedで、
-// 出力先ディレクトリの作成失敗はOSのエラーを%wで保持して返し、いずれも
-// 再試行対象とする。errがnilのとき、StatusはStatusSuccessとなる。
+// 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
+// ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
+// それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
+// ffmpeg変換・パススルーコピー・出力の確定(0バイト出力はErrEmptyOutput)の失敗は
+// ErrVideoConversionFailedで、出力先ディレクトリの作成失敗はOSのエラーを%wで
+// 保持して返し、いずれも再試行対象とする。errがnilのとき、StatusはStatusSuccessとなる。
 func (c *VideoConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := ensureSourceExists(source); err != nil {
 		return ConversionResult{SourcePath: source}, err
