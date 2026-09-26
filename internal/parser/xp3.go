@@ -10,8 +10,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"unicode/utf16"
+
+	"github.com/na2na-p/mnemonic/internal/safepath"
 )
 
 // XP3MagicTest はテストフィクスチャで使用される簡易マジックナンバー（7バイト）。
@@ -547,7 +548,10 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 	defer func() { _ = f.Close() }()
 
 	for _, entry := range a.fileEntries {
-		outputPath, err := safeJoin(outputDir, entry.Name)
+		outputPath, err := safepath.Join(outputDir, entry.Name)
+		if errors.Is(err, safepath.ErrOutsideBase) {
+			return fmt.Errorf("%w: %w", ErrInvalidXP3, err)
+		}
 		if err != nil {
 			return err
 		}
@@ -658,36 +662,6 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([
 	}
 
 	return buf, consumed, nil
-}
-
-// safeJoin はbaseDir配下にentryNameを結合する。
-//
-// why not: エントリ名はアーカイブ内データに由来し外部入力として信頼できない
-// ため、展開先がbaseDir外に脱出しないことを検証する（zip slip対策）。
-//
-// もう1点、entryName中の"\"はここで"/"へ正規化してからOS区切り文字へ
-// 変換するためディレクトリ階層として扱われる。"\"をパス区切りとして扱わず
-// リテラルな単一ファイル名の一部として扱う実装も考えられるが、XP3アーカイブ
-// 内のエントリ名はWindows由来で"\"区切りのケースが実際にあり得るため、
-// ディレクトリ階層として正規化する挙動を意図的に選んでいる。
-func safeJoin(baseDir, entryName string) (string, error) {
-	cleanedName := filepath.FromSlash(strings.ReplaceAll(entryName, `\`, "/"))
-	joined := filepath.Join(baseDir, cleanedName)
-
-	base, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", fmt.Errorf("出力ディレクトリの絶対パス解決に失敗しました: %w", err)
-	}
-	target, err := filepath.Abs(joined)
-	if err != nil {
-		return "", fmt.Errorf("展開先パスの絶対パス解決に失敗しました: %w", err)
-	}
-
-	if target != base && !strings.HasPrefix(target, base+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: 展開先が出力ディレクトリの外を指しています: %s", ErrInvalidXP3, entryName)
-	}
-
-	return target, nil
 }
 
 // IsEncrypted は暗号化されているかを判定する。

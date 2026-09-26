@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/na2na-p/mnemonic/internal/safepath"
 )
 
 // fileExists はpathが存在するファイル/ディレクトリかどうかを返す。
@@ -105,9 +107,9 @@ func extractTemplateZip(templatePath, destDir string) error {
 //
 // why not: エントリ名はテンプレートZIP内データに由来し外部入力として
 // 信頼できないため、展開先がdestDir外に脱出しないことを検証する
-// （zip slip対策。internal/parser/xp3.goのsafeJoinと同じ理由）。
+// （zip slip対策。詳細はsafepath.Joinのwhy not参照）。
 func extractZipEntry(f *zip.File, destDir string) error {
-	destPath, err := safeJoin(destDir, f.Name)
+	destPath, err := safepath.Join(destDir, f.Name)
 	if err != nil {
 		return err
 	}
@@ -126,7 +128,7 @@ func extractZipEntry(f *zip.File, destDir string) error {
 	}
 	defer func() { _ = src.Close() }()
 
-	dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // destPathはsafeJoinでdestDir配下に限定済み
+	dst, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // destPathはsafepath.JoinでdestDir配下に限定済み
 	if err != nil {
 		return err
 	}
@@ -137,26 +139,4 @@ func extractZipEntry(f *zip.File, destDir string) error {
 	}
 
 	return nil
-}
-
-// safeJoin はbaseDir配下にentryNameを結合する（zip slip対策）。
-func safeJoin(baseDir, entryName string) (string, error) {
-	cleanedName := filepath.FromSlash(strings.ReplaceAll(entryName, `\`, "/"))
-	joined := filepath.Join(baseDir, cleanedName)
-
-	base, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", fmt.Errorf("出力ディレクトリの絶対パス解決に失敗しました: %w", err)
-	}
-
-	target, err := filepath.Abs(joined)
-	if err != nil {
-		return "", fmt.Errorf("展開先パスの絶対パス解決に失敗しました: %w", err)
-	}
-
-	if target != base && !strings.HasPrefix(target, base+string(filepath.Separator)) {
-		return "", fmt.Errorf("展開先が出力ディレクトリの外を指しています: %s", entryName)
-	}
-
-	return target, nil
 }
