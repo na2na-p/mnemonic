@@ -239,8 +239,7 @@ func (c *TemplateCache) GetCachedVersion() (string, bool) {
 // SaveTemplate はテンプレートをキャッシュに保存する。
 // templatePathが存在しない場合はos.ErrNotExistを満たすerrorを返す。
 func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, error) {
-	srcInfo, err := os.Stat(templatePath)
-	if err != nil {
+	if _, err := os.Stat(templatePath); err != nil {
 		return "", err
 	}
 
@@ -255,17 +254,8 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 
 	destination := filepath.Join(cachePath, filepath.Base(templatePath))
 
-	alreadyInPlace, err := isSameFile(srcInfo, destination)
-	if err != nil {
+	if err := copyFile(templatePath, destination); err != nil {
 		return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
-	}
-
-	// why not: copyFileは読み出し前に保存先をO_TRUNCで開くため、同一ファイルへの
-	// コピーは内容を消してしまう。既に保存先にある場合はメタデータの更新だけ行う。
-	if !alreadyInPlace {
-		if err := copyFile(templatePath, destination); err != nil {
-			return "", fmt.Errorf("%w: テンプレートの保存に失敗しました: %w", ErrTemplateCache, err)
-		}
 	}
 
 	now := time.Now().UTC()
