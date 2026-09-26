@@ -172,7 +172,7 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // 実行される実効的なコマンドは以下の通り:
 // `fluidsynth -ni -g 1.0 -r <sampleRate> [-o synth.dynamic-sample-loading=1] -F <一時WAV> <soundfont> <source>`
 // に続けて
-// `ffmpeg -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> <dest>`
+// `ffmpeg -hide_banner -loglevel error -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> [-t <秒>] <dest>`
 //
 // 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
 // ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
@@ -357,7 +357,15 @@ func (c *MidiConverter) runFFmpeg(wavInput, oggOutput string, trimSeconds float6
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
+	// why not: -hide_banner -loglevel errorを外さない。NewExecCommandRunnerは
+	// stderrを絞らずにエラーへ含めるため、これらが無いとバナーがそのまま
+	// エラーに入る。ffmpeg 9.0.1で同じ形の呼び出しに、拡張子だけ.wavで中身が
+	// ランダムな100バイトという、ffmpegが形式を判別できない入力を与えると、
+	// stderr 13行中10行がバージョンとビルド構成のバナーだった。付けると
+	// 3行になり、原因は1行目に出た。
 	args := []string{
+		"-hide_banner",
+		"-loglevel", "error",
 		"-y", // Overwrite output
 		"-i", wavInput,
 		"-c:a", c.audioCodec,

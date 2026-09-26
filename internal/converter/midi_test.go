@@ -323,7 +323,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
 			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -362,7 +362,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
 			Return([]byte(`{"frames":[{"tags":{"lavfi.silence_start":"10.5"}}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", "-t", "10.800", dest).
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", "-t", "10.800", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -397,7 +397,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
 			Return([]byte(`{"frames":[{"tags":{"lavfi.silence_start":"1.0"}},{"tags":{"lavfi.silence_end":"1.5"}}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -432,7 +432,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", "-v", "error", "-f", "lavfi", "-i", gomock.Any(), "-show_entries", "frame_tags=lavfi.silence_start,lavfi.silence_end", "-of", "json").
 			Return(nil, errors.New("ffprobe error"))
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", gomock.Any(), "-c:a", "libvorbis", "-q:a", "4", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -494,7 +494,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return(nil, errors.New("FFmpeg error"))
 
 		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
@@ -527,7 +527,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -563,7 +563,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 			Run(gomock.Any(), "ffprobe", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 			Return([]byte(`{"frames":[{}]}`), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", gomock.Any(), "-c:a", "libopus", "-q:a", "6", dest).
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", gomock.Any(), "-c:a", "libopus", "-q:a", "6", dest).
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest, []byte("OggS"))
 
@@ -597,7 +597,7 @@ func expectRenderedOgg(runner *MockCommandRunner, times int) {
 		Return([]byte(`{"frames":[{}]}`), nil).
 		Times(times)
 	runner.EXPECT().
-		Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Run(gomock.Any(), "ffmpeg", gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		// why not: writeFile（require）を使わない。並行変換のテストではこの関数が
 		// テスト本体とは別のgoroutineで呼ばれ、そこでのFailNowは許されない。
 		// 書き込みの失敗は変換エラーとして呼び出し側の検証に委ねる。
