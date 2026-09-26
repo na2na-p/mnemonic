@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,14 +17,6 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/converter/tlg"
 )
-
-// ErrTLGDecodeNotImplemented はTLG画像のデコードが未実装であることを示す
-// センチネルエラー。
-//
-// why not: TLG6の本体デコード実装はスコープ外であり、ヘッダのマジックバイト
-// 判定とヘッダ解析のみ実装する。TLG5は実装済みのため、このエラーはTLG6形式の
-// ファイルに対してのみ返る。
-var ErrTLGDecodeNotImplemented = errors.New("TLGデコードは未実装です")
 
 // ErrUnsupportedImageFormat はstdlib/x-imageで対応していない画像拡張子を
 // 指定した場合のエラー。
@@ -58,8 +51,7 @@ type TLGInfo struct {
 }
 
 // TLGImageDecoder はTLG形式の画像ファイルを読み込み、image.Imageへ変換する。
-// TLG5およびTLG6形式に対応（TLG6は本体デコード未実装）。SDSコンテナ形式も
-// サポートする。
+// TLG5およびTLG6形式に対応し、SDSコンテナ形式もサポートする。
 type TLGImageDecoder struct {
 	tlg5Decoder *tlg.TLG5Decoder
 	tlg6Decoder *tlg.TLG6Decoder
@@ -119,21 +111,22 @@ func detectVersion(data []byte) TLGVersion {
 }
 
 // readTLGSource はfilePathを読み込み、SDSコンテナを解いた生データを返す。
-// ファイルが存在しない場合はErrSourceNotFoundを返す。
+// ファイルが存在しない場合はErrSourceNotFound、それ以外の理由で読み込めない場合は
+// OSのエラーを包んだErrSourceUnreadableを返す。
 func readTLGSource(filePath string) ([]byte, error) {
 	data, err := os.ReadFile(filePath) //nolint:gosec // 呼び出し側が指定したアセットパスを読む用途のため妥当
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrSourceNotFound, filePath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w: %s", ErrSourceNotFound, filePath)
+		}
+
+		return nil, fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
 	}
 
 	return unwrapSDS(data), nil
 }
 
-// GetInfo はTLG画像のメタ情報を取得する。
-//
-// why not: TLG6のヘッダ解析は実装済みのTLG6Decoder.ParseHeaderで完結するため、
-// GetInfoはTLG5/TLG6のいずれでもErrTLGDecodeNotImplementedを返さない
-// （decode()本体のみが未実装であるため）。
+// GetInfo はTLG画像のメタ情報をヘッダーだけから取得する。
 func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 	data, err := readTLGSource(filePath)
 	if err != nil {
@@ -161,7 +154,6 @@ func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 }
 
 // Decode はTLG画像をデコードしてimage.Imageを返す。
-// TLG6形式の場合はErrTLGDecodeNotImplementedを返す（本体デコード未実装）。
 func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 	data, err := readTLGSource(filePath)
 	if err != nil {
@@ -177,17 +169,12 @@ func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 
 		return img, nil
 	case TLGVersionTLG6:
-		// why not: tlg6Decoder.Decode()はマジックバイトが有効な限り常に
-		// tlg.ErrTLG6NotImplemented（"TLG6デコードは未実装です"）を返す。
-		// これをErrTLGDecodeNotImplementedへさらに%wでラップすると
-		// 「TLGデコードは未実装です: TLG6デコードは未実装です」という
-		// 冗長な二重メッセージになるため、下位エラーの文言は引き継がず
-		// ErrTLGDecodeNotImplementedのみを返す。呼び出し自体は、将来
-		// tlg6Decoder.Decodeが実装された際にここを更新し忘れないための
-		// フックとして残す。
-		_, _ = d.tlg6Decoder.Decode(data)
+		img, decErr := d.tlg6Decoder.Decode(data)
+		if decErr != nil {
+			return nil, decErr
+		}
 
-		return nil, ErrTLGDecodeNotImplemented
+		return img, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
 	}
@@ -265,9 +252,12 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 
 // Convert は画像ファイルを指定された形式に変換し、destへ出力する。
 //
-// why not: 他のConverterと異なり、validateSource・TLG未実装エラー・画像
-// デコードの失敗を自身で捕捉せず、呼び出し元(ConversionManager)へerrとして
-// 伝播させる。これらの失敗はConversionResultではなくerrとして返す。
+// 失敗はerrとして返す。変換元の検証(validateSource)の失敗のうち、変換元が
+// 存在しない・権限不足で確認できない・ディレクトリである場合と、デコードの失敗
+// （壊れたTLG・未対応の拡張子を含む）はErrPermanentFailureでラップして返す。
+// それ以外の理由で変換元を確認できない場合、TLGの読み込み失敗（権限不足を除く）・
+// TLG以外の変換元のオープン失敗・出力先の作成・PNGエンコードの失敗は再試行対象と
+// する。errがnilのとき、StatusはStatusSuccessとなる。
 //
 // why not(decodeSourceの対応拡張子): CanConvert/SupportedExtensionsは.tlg
 // のみだが、Convert()自体は.bmp/.jpg/.jpeg/.png/.tlgを直接処理できる
@@ -276,14 +266,14 @@ func (c *ImageConverter) CanConvert(filePath string) bool {
 // の分岐は維持する）。
 func (c *ImageConverter) Convert(source, dest string) (ConversionResult, error) {
 	if err := validateSource(source); err != nil {
-		return ConversionResult{}, permanentError(err)
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	bytesBefore := getFileSize(source)
 
 	img, err := c.decodeSource(source)
 	if err != nil {
-		return ConversionResult{}, err
+		return ConversionResult{SourcePath: source}, err
 	}
 
 	return c.saveAsPNG(img, dest, source, bytesBefore)
@@ -300,12 +290,14 @@ func (c *ImageConverter) decodeSource(source string) (image.Image, error) {
 	if ext == ".tlg" {
 		img, err := c.tlgDecoder.Decode(source)
 		if err != nil {
-			// why not: readTLGSourceは読み込み失敗をOSのエラーを捨てて一律ErrSourceNotFoundに
-			// するため、ここでは原因（権限不足・削除競合・I/Oエラー）を区別できない。
-			// validateSourceで存在は確認済みであり、原因が判別できない以上は他のconverterの
-			// 読み込み失敗と同じく再試行側に寄せる。OSのエラーを包むようになった時点で
-			// fs.ErrPermission等を恒久扱いに分類し直す。
-			if errors.Is(err, ErrSourceNotFound) {
+			// why not: 読み込み失敗を一律に恒久扱いにはしない。読み込み失敗のうち、再試行しても
+			// 変わらないと原因から判別できる権限不足だけを恒久扱いにし、validateSource後の削除競合や
+			// I/Oエラーなど一時的でありうる読み込み失敗は、他のconverterと同じく再試行側に残す。
+			if errors.Is(err, fs.ErrPermission) {
+				return nil, permanentError(err)
+			}
+
+			if errors.Is(err, ErrSourceNotFound) || errors.Is(err, ErrSourceUnreadable) {
 				return nil, err
 			}
 

@@ -14,3 +14,7 @@ indent_style = tab
 
 [*.{yml,yaml}]
 indent_size = 2
+
+# サードパーティのライセンス本文は行末スペースを含めて原文のまま保つ
+[THIRD_PARTY_NOTICES.md]
+trim_trailing_whitespace = false

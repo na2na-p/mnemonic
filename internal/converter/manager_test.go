@@ -62,7 +62,7 @@ func (c *mockConverter) Convert(source, dest string) (converter.ConversionResult
 	}
 
 	if callCount <= c.failCount {
-		return converter.ConversionResult{SourcePath: source, Status: converter.StatusFailed, Message: "変換失敗"}, nil
+		return converter.ConversionResult{SourcePath: source}, errors.New("変換失敗")
 	}
 
 	return converter.ConversionResult{
@@ -183,9 +183,8 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		files := make([]converter.FileTask, 0, 3)
 		for i := range 3 {
 			source := filepath.Join(dir, "source.txt")
-			dest := filepath.Join(dir, "dest.txt")
+			dest := filepath.Join(dir, fmt.Sprintf("dest%d.txt", i))
 			files = append(files, converter.FileTask{Source: source, Dest: dest})
-			_ = i
 		}
 
 		m := converter.NewConversionManager([]converter.Converter{newMockConverter(".txt")}, nil, 2, nil)
@@ -197,6 +196,27 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		assert.Len(t, summary.Results, 3)
 	})
 
+	t.Run("正常系: MaxWorkersが0以下でも1ワーカーで全タスクを変換する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		files := make([]converter.FileTask, 0, 3)
+		for i := range 3 {
+			files = append(files, converter.FileTask{
+				Source: filepath.Join(dir, "source.txt"),
+				Dest:   filepath.Join(dir, fmt.Sprintf("dest%d.txt", i)),
+			})
+		}
+
+		m := converter.NewConversionManager([]converter.Converter{newMockConverter(".txt")}, nil, 1, nil)
+		m.MaxWorkers = 0
+		summary := m.ConvertFiles(files)
+
+		assert.Equal(t, 3, summary.Total)
+		assert.Equal(t, 3, summary.Success)
+		assert.Len(t, summary.Results, 3)
+	})
+
 	t.Run("正常系: 並列実行の検証", func(t *testing.T) {
 		t.Parallel()
 
@@ -205,9 +225,8 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		for i := range 4 {
 			files = append(files, converter.FileTask{
 				Source: filepath.Join(dir, "source.txt"),
-				Dest:   filepath.Join(dir, "dest.txt"),
+				Dest:   filepath.Join(dir, fmt.Sprintf("dest%d.txt", i)),
 			})
-			_ = i
 		}
 
 		var (
@@ -273,9 +292,8 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		for i := range 3 {
 			files = append(files, converter.FileTask{
 				Source: filepath.Join(dir, "source.txt"),
-				Dest:   filepath.Join(dir, "dest.txt"),
+				Dest:   filepath.Join(dir, fmt.Sprintf("dest%d.txt", i)),
 			})
-			_ = i
 		}
 
 		var (
@@ -312,10 +330,10 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 
 		dir := t.TempDir()
 		files := make([]converter.FileTask, 0, fileCount)
-		for range fileCount {
+		for i := range fileCount {
 			files = append(files, converter.FileTask{
 				Source: filepath.Join(dir, "source.txt"),
-				Dest:   filepath.Join(dir, "dest.txt"),
+				Dest:   filepath.Join(dir, fmt.Sprintf("dest%d.txt", i)),
 			})
 		}
 
@@ -332,6 +350,71 @@ func TestConversionManager_ConvertFiles(t *testing.T) {
 		for i, v := range completions {
 			assert.Equal(t, i+1, v, "進捗コールバックはcompletedCountの単調増加順に呼ばれるはず")
 		}
+	})
+
+	t.Run("異常系: 出力先が重複するタスクはいずれも変換せず恒久的な失敗として報告する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		// why: 列挙順とパス順を逆にし、報告される変換元の並びがパス順であることを固定する。
+		collidingB := filepath.Join(dir, "b", "foo.txt")
+		collidingA := filepath.Join(dir, "a", "foo.txt")
+		collidedDest := filepath.Join(dir, "out", "foo.txt")
+		unique := filepath.Join(dir, "unique.txt")
+		uniqueDest := filepath.Join(dir, "out", "unique.txt")
+
+		var (
+			mu      sync.Mutex
+			called  []string
+			calls   [][2]int
+			convert = newMockConverter(".txt")
+		)
+		convert.convertFunc = func(source, dest string, _ int) (converter.ConversionResult, error) {
+			mu.Lock()
+			called = append(called, source)
+			mu.Unlock()
+
+			return converter.ConversionResult{SourcePath: source, DestPath: dest, Status: converter.StatusSuccess}, nil
+		}
+		callback := func(completed, total int) {
+			calls = append(calls, [2]int{completed, total})
+		}
+
+		m := converter.NewConversionManager([]converter.Converter{convert}, nil, 2, callback)
+		m.SleepFunc = func(time.Duration) {}
+		summary := m.ConvertFiles([]converter.FileTask{
+			{Source: collidingB, Dest: collidedDest},
+			{Source: unique, Dest: uniqueDest},
+			{Source: collidingA, Dest: collidedDest},
+		})
+
+		assert.Equal(t, 3, summary.Total)
+		assert.Equal(t, 1, summary.Success)
+		assert.Equal(t, 2, summary.Failed)
+		assert.Equal(t, 0, summary.Skipped)
+
+		mu.Lock()
+		assert.Equal(t, []string{unique}, called)
+		mu.Unlock()
+
+		wantMessage := "再試行しても解消しない変換失敗です: 出力先が重複しています: " +
+			collidedDest + " ← " + collidingA + ", " + collidingB
+		require.Len(t, summary.Results, 3)
+		failed := make(map[string]converter.ConversionResult)
+		for _, result := range summary.Results {
+			if result.Status == converter.StatusFailed {
+				failed[result.SourcePath] = result
+			}
+		}
+		require.Len(t, failed, 2)
+		for _, source := range []string{collidingA, collidingB} {
+			require.Contains(t, failed, source)
+			assert.Equal(t, wantMessage, failed[source].Message)
+			assert.Empty(t, failed[source].DestPath)
+		}
+
+		require.Len(t, calls, 3)
+		assert.Equal(t, [2]int{3, 3}, calls[len(calls)-1])
 	})
 }
 
@@ -442,16 +525,12 @@ func TestConversionManager_Retry(t *testing.T) {
 		wantMessage string
 	}{
 		{
-			name: "正常系: Permanentな失敗結果はリトライせず変換結果をそのまま返す",
+			name: "正常系: ErrPermanentFailureを多段にラップしたエラーもリトライせずエラー文言を返す",
 			convertFunc: func(source, _ string, _ int) (converter.ConversionResult, error) {
-				return converter.ConversionResult{
-					SourcePath: source,
-					Status:     converter.StatusFailed,
-					Message:    "恒久的な失敗",
-					Permanent:  true,
-				}, nil
+				return converter.ConversionResult{SourcePath: source},
+					fmt.Errorf("変換処理: %w", fmt.Errorf("%w: 恒久的な失敗", converter.ErrPermanentFailure))
 			},
-			wantMessage: "恒久的な失敗",
+			wantMessage: "変換処理: 再試行しても解消しない変換失敗です: 恒久的な失敗",
 		},
 		{
 			name: "正常系: ErrPermanentFailureをラップしたエラーはリトライせずエラー文言を返す",
@@ -496,10 +575,83 @@ func TestConversionManager_Retry(t *testing.T) {
 			assert.Equal(t, 1, summary.Failed)
 			require.Len(t, summary.Results, 1)
 			assert.Equal(t, converter.StatusFailed, summary.Results[0].Status)
+			assert.Equal(t, source, summary.Results[0].SourcePath)
 			assert.Equal(t, tc.wantMessage, summary.Results[0].Message)
-			assert.True(t, summary.Results[0].Permanent)
 		})
 	}
+
+	t.Run("正常系: 一時的なエラーは最大回数まで試行し最後のエラー文言に接頭辞を付けて返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		writeFile(t, source, []byte("content"))
+		dest := filepath.Join(dir, "dest.txt")
+
+		conv := newMockConverter(".txt")
+		conv.convertFunc = func(source, _ string, callCount int) (converter.ConversionResult, error) {
+			return converter.ConversionResult{SourcePath: source}, fmt.Errorf("%d回目の失敗", callCount)
+		}
+
+		rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+		m.SleepFunc = func(time.Duration) {}
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: dest}})
+
+		assert.Equal(t, 3, conv.CallCount())
+		assert.Equal(t, 1, summary.Failed)
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, converter.StatusFailed, summary.Results[0].Status)
+		assert.Equal(t, source, summary.Results[0].SourcePath)
+		assert.Equal(t, "最大リトライ回数超過: 3回目の失敗", summary.Results[0].Message)
+	})
+
+	t.Run("正常系: errがnilの結果はStatusによらず再試行せずそのまま返す", func(t *testing.T) {
+		t.Parallel()
+
+		// why: 失敗の報告経路はerrだけであり、ConversionManagerは結果のStatusを
+		// 再試行の判断に使わないことを固定する。
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		writeFile(t, source, []byte("content"))
+
+		want := converter.ConversionResult{SourcePath: source, Status: converter.StatusFailed, Message: "結果側の文言"}
+		conv := newMockConverter(".txt")
+		conv.convertFunc = func(_, _ string, _ int) (converter.ConversionResult, error) {
+			return want, nil
+		}
+
+		rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+		m.SleepFunc = func(time.Duration) {}
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(dir, "dest.txt")}})
+
+		assert.Equal(t, 1, conv.CallCount())
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, want, summary.Results[0])
+	})
+
+	t.Run("異常系: 試行回数が0以下なら変換せず失敗として返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "source.txt")
+		writeFile(t, source, []byte("content"))
+
+		conv := newMockConverter(".txt")
+
+		rc := converter.RetryConfig{MaxAttempts: 0, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(dir, "dest.txt")}})
+
+		assert.Zero(t, conv.CallCount())
+		assert.Equal(t, 1, summary.Failed)
+		require.Len(t, summary.Results, 1)
+		assert.Equal(t, "変換に失敗しました", summary.Results[0].Message)
+	})
 
 	t.Run("正常系: スキップ結果はリトライせず変換結果をそのまま返す", func(t *testing.T) {
 		t.Parallel()
@@ -708,7 +860,7 @@ func TestConversionManager_SummaryCountsAllStatuses(t *testing.T) {
 	conv := newMockConverter(".txt")
 	conv.convertFunc = func(source, dest string, _ int) (converter.ConversionResult, error) {
 		if strings.Contains(filepath.Base(source), "fail") {
-			return converter.ConversionResult{SourcePath: source, Status: converter.StatusFailed, Message: "強制失敗"}, nil
+			return converter.ConversionResult{SourcePath: source}, errors.New("強制失敗")
 		}
 
 		return converter.ConversionResult{SourcePath: source, DestPath: dest, Status: converter.StatusSuccess}, nil

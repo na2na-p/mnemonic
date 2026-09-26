@@ -316,7 +316,7 @@ const mpeg1Mp2ProbeJSON = `{
 func TestVideoConverter_Convert(t *testing.T) {
 	t.Parallel()
 
-	t.Run("異常系: 変換元ファイルが存在しない場合FAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: 変換元ファイルが存在しない場合は再試行不要なエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -326,11 +326,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		c := converter.NewVideoConverter(0, nil)
 		result, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "変換元ファイルが見つかりません: "+source)
 		assert.Equal(t, source, result.SourcePath)
-		assert.Contains(t, result.Message, "見つかりません")
-		assert.True(t, result.Permanent)
 	})
 
 	t.Run("正常系: 既にmpeg1video+mp2の場合は再エンコードせずコピーする", func(t *testing.T) {
@@ -536,7 +535,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 	})
 
-	t.Run("異常系: FFmpegがエラーを返す場合FAILEDを返しdestに変更を残さない", func(t *testing.T) {
+	t.Run("異常系: FFmpegがエラーを返す場合は再試行対象のエラーを返しdestに変更を残さない", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -544,6 +543,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		writeFile(t, source, []byte("dummy video content"))
 		dest := filepath.Join(dir, "output.mpg")
 		writeFile(t, dest, []byte("pre-existing copied raw file"))
+		ffmpegErr := errors.New("FFmpeg error")
 
 		probeJSON := `{
 			"streams": [
@@ -560,22 +560,23 @@ func TestVideoConverter_Convert(t *testing.T) {
 		runner.EXPECT().
 			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
-			Return(nil, errors.New("FFmpeg error"))
+			Return(nil, ffmpegErr)
 
 		c := converter.NewVideoConverter(0, runner)
 		result, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "動画変換に失敗しました")
-		assert.False(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrVideoConversionFailed)
+		require.ErrorIs(t, err, ffmpegErr)
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Equal(t, "動画変換に失敗しました: FFmpeg error", err.Error())
+		assert.Equal(t, source, result.SourcePath)
 		// why: fail-loud設計の検証。ffmpeg失敗時にdestの既存内容(コピー済みの
 		// 生ファイル)を0バイトへ破壊してはならない。
 		assert.Equal(t, "pre-existing copied raw file", string(readFile(t, dest)))
 		assert.NoFileExists(t, dest+".tmp")
 	})
 
-	t.Run("異常系: ffmpegが0バイト出力を書いた場合destへ反映せずFAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: ffmpegが0バイト出力を書いた場合destへ反映せず再試行対象のエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -608,12 +609,12 @@ func TestVideoConverter_Convert(t *testing.T) {
 			})
 
 		c := converter.NewVideoConverter(0, runner)
-		result, err := c.Convert(source, dest)
+		_, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "0バイト")
-		assert.False(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrVideoConversionFailed)
+		require.ErrorIs(t, err, converter.ErrEmptyOutput)
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Equal(t, "動画変換に失敗しました: 出力ファイルが0バイトです: "+dest+".tmp", err.Error())
 		assert.Equal(t, "pre-existing copied raw file", string(readFile(t, dest)))
 		assert.NoFileExists(t, dest+".tmp")
 	})
@@ -692,7 +693,7 @@ func TestNewVideoConverter_Defaults(t *testing.T) {
 func TestCopyFile_ErrorPaths(t *testing.T) {
 	t.Parallel()
 
-	t.Run("異常系: 変換元が読み取れない場合はFAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: 変換元が読み取れない場合は再試行対象のエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -709,10 +710,10 @@ func TestCopyFile_ErrorPaths(t *testing.T) {
 			Return([]byte(mpeg1Mp2ProbeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
-		result, err := c.Convert(source, dest)
+		_, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.False(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrVideoConversionFailed)
+		assert.Contains(t, err.Error(), "ファイルのコピーに失敗しました")
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 }

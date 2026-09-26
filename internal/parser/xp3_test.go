@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"unicode/utf16"
 
@@ -182,6 +184,26 @@ func TestNewXP3Archive(t *testing.T) {
 			require.ErrorIs(t, err, parser.ErrInvalidXP3)
 		})
 	}
+
+	truncatedIndexOffsetCases := map[string][]byte{
+		"異常系: インデックスオフセットを持たない11バイトマジックのみのファイルはErrInvalidXP3": parser.XP3Magic,
+		"異常系: インデックスオフセットが途切れた18バイトのファイルはErrInvalidXP3": append(
+			bytes.Clone(parser.XP3Magic), 0x01, 0, 0, 0, 0, 0, 0,
+		),
+	}
+
+	for name, content := range truncatedIndexOffsetCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "truncated-offset.xp3")
+			writeFile(t, path, content)
+
+			_, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+		})
+	}
 }
 
 func TestXP3Archive_ListFiles(t *testing.T) {
@@ -199,37 +221,6 @@ func TestXP3Archive_ListFiles(t *testing.T) {
 		files := archive.ListFiles()
 
 		assert.Empty(t, files)
-	})
-
-	t.Run("正常系: インデックスオフセットを持たない11バイトマジックのみのファイルで空のファイル一覧を返す", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "magic-only.xp3")
-		writeFile(t, path, parser.XP3Magic)
-
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
-
-		assert.Empty(t, archive.ListFiles())
-	})
-
-	// why not: 11バイトちょうどのファイルではヘッダーバッファの容量（32バイト）に
-	// 隠れてオフセット読み出しが偶然成立するため、19バイト未満のガードを外しても
-	// 検出できない。マジックに7バイトだけ続く18バイトのファイルでは、ガードが無いと
-	// 同じ容量の余りからオフセット1が読まれ、ヘッダー自身をインデックスとして解釈した
-	// 巨大なサイズをreadFileTableが確保しようとしてpanicする。この検出は
-	// readFileTableの確保が無制限である間だけ成立するため、確保に上限を設ける際は
-	// 本ケースをガード違反を直接観測する形へ見直す必要がある。
-	t.Run("正常系: インデックスオフセットが途切れた18バイトのファイルで空のファイル一覧を返す", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "truncated-offset.xp3")
-		writeFile(t, path, append(append([]byte{}, parser.XP3Magic...), 0x01, 0, 0, 0, 0, 0, 0))
-
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
-
-		assert.Empty(t, archive.ListFiles())
 	})
 }
 
@@ -445,7 +436,7 @@ func TestXP3EncryptionChecker_RaiseIfEncrypted(t *testing.T) {
 	})
 }
 
-// --- 標準インデックス（バージョン1）を持つ実XP3アーカイブのビルダー ---
+// --- 標準インデックスを持つ実XP3アーカイブのビルダー ---
 //
 // XP3Archiveの本体ロジック（zlib解凍・チャンク解析・オフセット算出）は
 // マジックとインデックスオフセットだけの最小ファイルでは検証できないため、単一セグメントの
@@ -491,17 +482,40 @@ func (e xp3EntrySpec) totalOriginalSize() uint64 {
 	return total
 }
 
-// buildXP3Archive はバージョン1形式（フラグ直後にcompressed_size/original_size
+// xp3IndexLayout はbuildXP3ArchiveWithLayoutが書き出すインデックスの形式を表す。
+//
+// cushionがtrueの場合、ヘッダーのインデックスオフセットは実インデックスではなく
+// クッションヘッダー（マイナーバージョン、継続フラグ0x80、index_size=0、
+// 実インデックスへのオフセット）を指す。rawがtrueの場合、実インデックスを
+// 非圧縮形式（フラグ0x00、index_size、テーブル）で書き出し、falseの場合は
+// zlib圧縮形式（フラグ0x01、compressed_size、original_size、テーブル）で書き出す。
+type xp3IndexLayout struct {
+	cushion bool
+	raw     bool
+}
+
+// buildXP3Archive はzlib圧縮インデックス（フラグ直後にcompressed_size/original_size
 // が続く形式）のXP3アーカイブをバイト列として構築する。
-// 各エントリはresolvedSegments()が返す1つ以上のセグメントとしてデータ領域に
-// 順に配置され、segmチャンクにも同じ順でセグメントレコードが書き込まれる
-// （複数segmレコードに対応したテストフィクスチャ）。
 func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 	t.Helper()
 
-	// データ領域: ヘッダーの直後に各エントリの各セグメントの実データ
-	// （圧縮対象なら圧縮後バイト列）を連結配置する。
-	const headerSize = 19 // 11(magic) + 8(info_offset)
+	return buildXP3ArchiveWithLayout(t, entries, xp3IndexLayout{})
+}
+
+// buildXP3ArchiveWithLayout はlayoutが表す形式のインデックスを持つXP3アーカイブを
+// バイト列として構築する。
+// 各エントリはresolvedSegments()が返す1つ以上のセグメントとしてデータ領域に
+// 順に配置され、segmチャンクにも同じ順でセグメントレコードが書き込まれる
+// （複数segmレコードに対応したテストフィクスチャ）。
+func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3IndexLayout) []byte {
+	t.Helper()
+
+	// データ領域: ヘッダー（クッションヘッダーを含む）の直後に各エントリの
+	// 各セグメントの実データ（圧縮対象なら圧縮後バイト列）を連結配置する。
+	headerSize := 19 // 11(magic) + 8(info_offset)
+	if layout.cushion {
+		headerSize += cushionHeaderSize
+	}
 
 	type placedSegment struct {
 		offset       int64
@@ -514,7 +528,7 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 	entrySegments := make([][]placedSegment, len(entries))
 	for i, e := range entries {
 		for _, seg := range e.resolvedSegments() {
-			offset := headerSize + int64(dataSection.Len())
+			offset := int64(headerSize + dataSection.Len())
 
 			payload := seg.data
 			if seg.compressFlag {
@@ -574,23 +588,66 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 	}
 
-	compressedTable := compressZlib(t, table.Bytes())
-
 	// アーカイブ全体のレイアウト:
-	//   [magic(11)] [info_offset(8)] [data...] [flag(1)+compressed_size(8)+original_size(8)+table]
-	// info_offsetはdata section終端（=インデックス開始位置）を指す。
+	//   [magic(11)] [info_offset(8)] ([cushion(29)]) [data...] [index]
+	// インデックスオフセット（クッションがある場合はクッション内の次インデックス
+	// オフセット）はdata section終端（=実インデックス開始位置）を指す。
+	indexOffset := uint64(headerSize) + uint64(dataSection.Len()) //nolint:gosec // テストヘルパーであり非負であることが既知
+
 	var buf bytes.Buffer
 	buf.Write(parser.XP3Magic)
-	indexOffset := int64(headerSize) + int64(dataSection.Len())
-	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	if layout.cushion {
+		writeUint64(&buf, cushionIndexOffset)
+		writeCushionHeader(&buf, 1, indexOffset)
+	} else {
+		writeUint64(&buf, indexOffset)
+	}
 	buf.Write(dataSection.Bytes())
 
-	buf.WriteByte(0x00) // flag: バージョン1（0x80ビットなし）
-	writeUint64(&buf, uint64(len(compressedTable)))
-	writeUint64(&buf, uint64(table.Len()))
-	buf.Write(compressedTable)
+	if layout.raw {
+		writeRawIndex(&buf, 0x00, table.Bytes())
+	} else {
+		writeZlibIndex(t, &buf, table.Bytes())
+	}
 
 	return buf.Bytes()
+}
+
+const (
+	// cushionIndexOffset はクッションヘッダー付きアーカイブでヘッダーの
+	// インデックスオフセットが指す位置（magic(11) + info_offset(8) + minor_version(4)）。
+	cushionIndexOffset = uint64(11 + 8 + 4)
+	// cushionHeaderSize はinfo_offset直後に置くクッションヘッダーのバイト数
+	// （minor_version(4) + flag(1) + index_size(8) + next_index_offset(8)）。
+	cushionHeaderSize = 4 + 1 + 8 + 8
+)
+
+// writeCushionHeader はminorVersion、継続フラグ0x80、index_size=0、nextIndexOffset
+// の順にクッションヘッダーを書き込む。
+func writeCushionHeader(buf *bytes.Buffer, minorVersion uint32, nextIndexOffset uint64) {
+	writeUint32(buf, minorVersion)
+	buf.WriteByte(0x80)
+	writeUint64(buf, 0)
+	writeUint64(buf, nextIndexOffset)
+}
+
+// writeRawIndex はflag、index_size、tableの順に非圧縮インデックスを書き込む。
+func writeRawIndex(buf *bytes.Buffer, flag byte, table []byte) {
+	buf.WriteByte(flag)
+	writeUint64(buf, uint64(len(table)))
+	buf.Write(table)
+}
+
+// writeZlibIndex はフラグ0x01、compressed_size、original_size、zlib圧縮した
+// tableの順にzlib圧縮インデックスを書き込む。
+func writeZlibIndex(t *testing.T, buf *bytes.Buffer, table []byte) {
+	t.Helper()
+
+	compressedTable := compressZlib(t, table)
+	buf.WriteByte(0x01)
+	writeUint64(buf, uint64(len(compressedTable)))
+	writeUint64(buf, uint64(len(table)))
+	buf.Write(compressedTable)
 }
 
 func writeChunkHeader(buf *bytes.Buffer, name string, body []byte) {
@@ -727,7 +784,7 @@ func buildXP3ArchiveWithRawTable(rawTable []byte) []byte {
 	buf.Write(parser.XP3Magic)
 	writeUint64(&buf, uint64(headerSize)) // info_offset: ヘッダー直後（データ領域なし）
 
-	buf.WriteByte(0x00)                      // flag: バージョン1
+	buf.WriteByte(0x01)                      // flag: zlib圧縮インデックス
 	writeUint64(&buf, uint64(len(rawTable))) // compressed_size相当（実際は非圧縮のrawTableをそのまま使う）
 	writeUint64(&buf, uint64(len(rawTable))) // original_size（読み飛ばされるのみ）
 	buf.Write(rawTable)
@@ -1098,7 +1155,7 @@ func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
 	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
 	buf.Write(dataSection)
 
-	buf.WriteByte(0x00) // flag: バージョン1
+	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
 	writeUint64(&buf, uint64(len(compressedTable)))
 	writeUint64(&buf, uint64(table.Len()))
 	buf.Write(compressedTable)
@@ -1244,7 +1301,7 @@ func TestXP3Archive_CompressedFlagWithMatchingSize_PassesThroughRawBytes(t *test
 	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
 	buf.Write(rawPayload)
 
-	buf.WriteByte(0x00) // flag: バージョン1
+	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
 	writeUint64(&buf, uint64(len(compressedTable)))
 	writeUint64(&buf, uint64(table.Len()))
 	buf.Write(compressedTable)
@@ -1318,7 +1375,7 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
 	buf.Write(payload)
 
-	buf.WriteByte(0x00) // flag: バージョン1
+	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
 	writeUint64(&buf, uint64(len(compressedTable)))
 	writeUint64(&buf, uint64(table.Len()))
 	buf.Write(compressedTable)
@@ -1341,4 +1398,830 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	// 分読まれうるが、budget導入後はエントリ全体でfileSizeを超えて読まれない。
 	assert.LessOrEqual(t, int64(len(extracted)), fileSize)
 	assert.Less(t, len(extracted), numSegments*segmentDeclaredSize)
+}
+
+const hugeDeclaredTableSize = uint64(1) << 40
+
+// buildXP3ArchiveWithHugeTableSize はインデックスオフセット19の直後に
+// flag、テーブルサイズとしてのhugeDeclaredTableSize、secondを置き、その後ろに
+// trailingを続けたXP3アーカイブを構築する。secondはzlib圧縮インデックス（フラグ0x01）
+// ではoriginal_size、非圧縮インデックス（フラグ0x00/0x80）ではテーブルの先頭8バイト
+// として解釈される。
+func buildXP3ArchiveWithHugeTableSize(flag byte, second uint64, trailing []byte) []byte {
+	const headerSize = 19 // 11(magic) + 8(info_offset)
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(headerSize))
+	buf.WriteByte(flag)
+	writeUint64(&buf, hugeDeclaredTableSize)
+	writeUint64(&buf, second)
+	buf.Write(trailing)
+
+	return buf.Bytes()
+}
+
+// buildUncompressedSingleEntryTable はnameを持つ1エントリ（segmレコード1件）だけの
+// 非圧縮ファイルテーブルを構築する。
+func buildUncompressedSingleEntryTable(name string) []byte {
+	nameUTF16 := utf16.Encode([]rune(name))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)                      // flags
+	writeUint64(&info, 0)                      // original_size
+	writeUint64(&info, 0)                      // size
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0) // flags
+	writeUint64(&segm, 0) // offset
+	writeUint64(&segm, 0) // size
+	writeUint64(&segm, 0) // original_size
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+
+	return table.Bytes()
+}
+
+func TestXP3Archive_HugeDeclaredTableSize_BoundedByFileSize(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// magic(11) + info_offset(8) + flag(1) + 2つのuint64(16)
+		indexHeaderEnd = uint64(36)
+		trailingSize   = 8
+	)
+
+	// 全ゼロの8バイトはzlib解凍に失敗して生データとして扱われ、チャンク名の後に
+	// chunk_size（8バイト）を読み切れない。宣言サイズが残量（8バイト）へクランプ
+	// されて実際に読み取られる経路を通しつつ、壊れたファイルテーブルとして
+	// ErrInvalidXP3になることを確認できる。
+	trailing := make([]byte, trailingSize)
+
+	// ファイルテーブルは残量ちょうどの長さのため、宣言サイズを残量へクランプして
+	// 読み取らなければ（読み飛ばすと）このエントリはListFilesに現れない。
+	entryTable := buildUncompressedSingleEntryTable("clamped.txt")
+
+	cases := map[string]struct {
+		content   []byte
+		wantLen   int
+		wantErr   bool
+		wantFiles []string
+	}{
+		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言し残量が無い場合はErrInvalidXP3": {
+			content: buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, nil),
+			wantLen: int(indexHeaderEnd),
+			wantErr: true,
+		},
+		"異常系: 非圧縮インデックスのindex_sizeが1TiBを宣言する場合は残量ぶんに縮めずErrInvalidXP3": {
+			content: buildXP3ArchiveWithHugeTableSize(0x00, 0, entryTable),
+			wantLen: int(indexHeaderEnd) + len(entryTable),
+			wantErr: true,
+		},
+		"異常系: 継続フラグ付き非圧縮インデックスのindex_sizeが1TiBを宣言する場合はErrInvalidXP3": {
+			content: buildXP3ArchiveWithHugeTableSize(0x80, 0, entryTable),
+			wantLen: int(indexHeaderEnd) + len(entryTable),
+			wantErr: true,
+		},
+		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言し残り8バイトが壊れたテーブルの場合はErrInvalidXP3": {
+			content: buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, trailing),
+			wantLen: int(indexHeaderEnd) + trailingSize,
+			wantErr: true,
+		},
+		"正常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言しても残量ぶんのファイルテーブルを読んでエントリを返す": {
+			content:   buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, entryTable),
+			wantLen:   int(indexHeaderEnd) + len(entryTable),
+			wantFiles: []string{"clamped.txt"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Len(t, tc.content, tc.wantLen)
+
+			path := filepath.Join(t.TempDir(), "huge-table.xp3")
+			writeFile(t, path, tc.content)
+
+			archive, err := parser.NewXP3Archive(path)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				return
+			}
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+func TestXP3Archive_DeclaredTableSize_AllocationBoundedByFileSize(t *testing.T) {
+	// why not: t.Parallel()を呼ばない。TotalAllocはプロセス全体の累積確保量であり、
+	// 並列実行中の他テストの確保も加算される。t.Parallel()を呼ばないトップレベル
+	// テストは並列テストが再開する前に単独で実行されるため、計測区間に他テストの
+	// 確保が混ざらない（並列テストのサブテストにすると並列の兄弟と重なる）。
+
+	// why not: 1<<40のケースは上限が無いとOSにkillされるため、テストの失敗として
+	// 観測できない。256MiBなら上限が無くても確保は成功するため、確保量の差で上限の
+	// 存在を観測できる。
+	const (
+		declaredTableSize = uint64(1) << 28
+		maxAllocDelta     = uint64(16) << 20
+	)
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
+	writeUint64(&buf, declaredTableSize)
+	writeUint64(&buf, declaredTableSize)
+
+	path := filepath.Join(t.TempDir(), "declared-256mib.xp3")
+	writeFile(t, path, buf.Bytes())
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	_, err := parser.NewXP3Archive(path)
+
+	runtime.ReadMemStats(&after)
+
+	require.ErrorIs(t, err, parser.ErrInvalidXP3)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, maxAllocDelta)
+}
+
+// withIndexOffset はcontentの複製のインデックスオフセットをoffsetへ書き換えて返す。
+func withIndexOffset(content []byte, offset uint64) []byte {
+	patched := bytes.Clone(content)
+	binary.LittleEndian.PutUint64(patched[len(parser.XP3Magic):len(parser.XP3Magic)+8], offset)
+
+	return patched
+}
+
+// buildXP3ArchiveWithIndex はインデックスオフセット19の直後にindexを置いたXP3
+// アーカイブを構築する。indexはフラグ以降のバイト列をそのまま与える。
+func buildXP3ArchiveWithIndex(index []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+	buf.Write(index)
+
+	return buf.Bytes()
+}
+
+func uint64Bytes(values ...uint64) []byte {
+	var buf bytes.Buffer
+	for _, v := range values {
+		writeUint64(&buf, v)
+	}
+
+	return buf.Bytes()
+}
+
+func TestNewXP3Archive_CorruptIndex(t *testing.T) {
+	t.Parallel()
+
+	v1Archive := buildXP3Archive(t, []xp3EntrySpec{{name: "v1.txt", data: []byte("v1")}})
+	cushionArchive := buildXP3ArchiveWithLayout(
+		t, []xp3EntrySpec{{name: "cushion.txt", data: []byte("cushion")}}, xp3IndexLayout{cushion: true},
+	)
+	validEntryTable := buildUncompressedSingleEntryTable("valid.txt")
+
+	// 継続フラグ付きの空の非圧縮インデックス（flag + index_size=0）の直後に
+	// 次インデックスオフセットnextを置く。インデックスは19バイト目から始まるため、
+	// 次インデックスオフセットは28バイト目から、ファイル末尾は36バイト目になる。
+	const continuedIndexStart, continuedIndexEnd = 19, 36
+	continuedIndex := func(next ...byte) []byte {
+		return buildXP3ArchiveWithIndex(append(append([]byte{0x80}, uint64Bytes(0)...), next...))
+	}
+
+	var rawIndexOverrun bytes.Buffer
+	rawIndexOverrun.WriteByte(0x00)
+	writeUint64(&rawIndexOverrun, uint64(len(validEntryTable))+1)
+	rawIndexOverrun.Write(validEntryTable)
+
+	cushionWithRawOverrun := buildXP3ArchiveWithLayout(
+		t, []xp3EntrySpec{{name: "cushion.txt", data: []byte("cushion")}}, xp3IndexLayout{cushion: true, raw: true},
+	)
+	// 末尾のテーブルを1バイト削り、index_sizeが残量を1バイト超えるようにする。
+	cushionWithRawOverrun = cushionWithRawOverrun[:len(cushionWithRawOverrun)-1]
+
+	var oversizedFileChunk bytes.Buffer
+	oversizedFileChunk.WriteString("File")
+	writeUint64(&oversizedFileChunk, 1000)
+
+	var oversizedUnknownChunk bytes.Buffer
+	oversizedUnknownChunk.WriteString("pad ")
+	writeUint64(&oversizedUnknownChunk, 1000)
+
+	var emptyFileChunk bytes.Buffer
+	emptyFileChunk.WriteString("File")
+	writeUint64(&emptyFileChunk, 12)
+
+	cases := map[string][]byte{
+		"異常系: zlib圧縮インデックスのアーカイブでインデックスオフセットがファイル末尾の1バイト先を指す": withIndexOffset(
+			v1Archive, uint64(len(v1Archive))+1,
+		),
+		"異常系: zlib圧縮インデックスのアーカイブでインデックスオフセットがファイル末尾より遥か先を指す": withIndexOffset(
+			v1Archive, uint64(len(v1Archive))+1000,
+		),
+		"異常系: クッションヘッダー付きアーカイブでインデックスオフセットがファイル末尾の1バイト先を指す": withIndexOffset(
+			cushionArchive, uint64(len(cushionArchive))+1,
+		),
+		"異常系: クッションヘッダー付きアーカイブでインデックスオフセットがファイル末尾より遥か先を指す": withIndexOffset(
+			cushionArchive, uint64(len(cushionArchive))+1000,
+		),
+		"異常系: インデックスオフセットがファイル末尾の1バイト前を指す": withIndexOffset(
+			v1Archive, uint64(len(v1Archive))-1,
+		),
+		"異常系: インデックスオフセットがint64の範囲を超える": withIndexOffset(v1Archive, math.MaxUint64),
+		"異常系: zlib圧縮インデックスのcompressed_sizeが途切れている": buildXP3ArchiveWithIndex(
+			[]byte{0x01, 0x01, 0x02, 0x03, 0x04},
+		),
+		"異常系: zlib圧縮インデックスのoriginal_sizeが途切れている": buildXP3ArchiveWithIndex(
+			append(append([]byte{0x01}, uint64Bytes(8)...), 0x01, 0x02, 0x03),
+		),
+		"異常系: zlib圧縮インデックスのcompressed_sizeがint64の範囲を超える": buildXP3ArchiveWithIndex(
+			append(append([]byte{0x01}, uint64Bytes(math.MaxUint64, 8)...), validEntryTable...),
+		),
+		"異常系: zlib圧縮インデックスのcompressed_sizeが0を宣言する": buildXP3ArchiveWithIndex(
+			append(append([]byte{0x01}, uint64Bytes(0, 0)...), validEntryTable...),
+		),
+		"異常系: 非圧縮インデックスのindex_sizeが途切れている": buildXP3ArchiveWithIndex(
+			[]byte{0x00, 0x01, 0x02, 0x03},
+		),
+		"異常系: 非圧縮インデックスのindex_sizeが残量を1バイト超える": buildXP3ArchiveWithIndex(
+			rawIndexOverrun.Bytes(),
+		),
+		"異常系: 非圧縮インデックスのindex_sizeがint64の範囲を超える": buildXP3ArchiveWithIndex(
+			append(append([]byte{0x00}, uint64Bytes(math.MaxUint64)...), validEntryTable...),
+		),
+		"異常系: クッションヘッダーの先の非圧縮インデックスのindex_sizeが残量を超える": cushionWithRawOverrun,
+		"異常系: 未知のエンコード方式のインデックス": buildXP3ArchiveWithIndex(
+			append(append([]byte{0x02}, uint64Bytes(uint64(len(validEntryTable)))...), validEntryTable...),
+		),
+		"異常系: 継続フラグ付きインデックスの次インデックスオフセットが途切れている": continuedIndex(0x01, 0x02, 0x03),
+		"異常系: 継続フラグ付きインデックスの次インデックスが無い":          continuedIndex(),
+		"異常系: 継続フラグ付きインデックスの次インデックスオフセットがファイル末尾を指す": continuedIndex(
+			uint64Bytes(continuedIndexEnd)...,
+		),
+		"異常系: 継続フラグ付きインデックスの次インデックスオフセットがファイル末尾より先を指す": continuedIndex(
+			uint64Bytes(1000)...,
+		),
+		"異常系: 継続フラグ付きインデックスの次インデックスオフセットがint64の範囲を超える": continuedIndex(
+			uint64Bytes(math.MaxUint64)...,
+		),
+		"異常系: 継続フラグ付きインデックスの次インデックスオフセットが自身を指して循環する": continuedIndex(
+			uint64Bytes(continuedIndexStart)...,
+		),
+		"異常系: ファイルテーブル末尾のチャンク名が途切れている": buildXP3ArchiveWithRawTable(
+			append(bytes.Clone(validEntryTable), 'F', 'i'),
+		),
+		"異常系: Fileチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithRawTable(
+			oversizedFileChunk.Bytes(),
+		),
+		"異常系: 未知のチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithRawTable(
+			oversizedUnknownChunk.Bytes(),
+		),
+		"異常系: Fileチャンクの本体が1バイトも残っていない": buildXP3ArchiveWithRawTable(
+			emptyFileChunk.Bytes(),
+		),
+	}
+
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "corrupt-index.xp3")
+			writeFile(t, path, content)
+
+			archive, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			assert.Equal(t, 1, strings.Count(err.Error(), path))
+			assert.Nil(t, archive)
+		})
+	}
+}
+
+func TestNewXP3Archive_IndexAtEOF(t *testing.T) {
+	t.Parallel()
+
+	v1Archive := buildXP3Archive(t, []xp3EntrySpec{{name: "v1.txt", data: []byte("v1")}})
+
+	cases := map[string]struct {
+		content   []byte
+		wantFiles []string
+	}{
+		"正常系: インデックスオフセットがヘッダー直後のファイル末尾を指す場合は空のファイル一覧": {
+			content: minimalXP3Bytes(),
+		},
+		"正常系: インデックスオフセットがデータ領域の後のファイル末尾を指す場合は空のファイル一覧": {
+			content: withIndexOffset(v1Archive, uint64(len(v1Archive))),
+		},
+		"正常系: zlib圧縮インデックスを解析できる": {
+			content:   v1Archive,
+			wantFiles: []string{"v1.txt"},
+		},
+		"正常系: index_sizeが0の非圧縮インデックスは空のファイル一覧": {
+			content: buildXP3ArchiveWithIndex(append([]byte{0x00}, uint64Bytes(0)...)),
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "index.xp3")
+			writeFile(t, path, tc.content)
+
+			archive, err := parser.NewXP3Archive(path)
+
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+func TestNewXP3Archive_IndexLayouts(t *testing.T) {
+	t.Parallel()
+
+	entries := []xp3EntrySpec{
+		{name: "scenario/first.ks", data: []byte("*start"), compressFlag: true},
+		{name: "image/title.png", data: []byte("PNGDATA")},
+	}
+	wantContents := map[string][]byte{
+		"scenario/first.ks": []byte("*start"),
+		"image/title.png":   []byte("PNGDATA"),
+	}
+
+	cases := map[string]xp3IndexLayout{
+		"正常系: zlib圧縮インデックスを解析・展開できる":             {},
+		"正常系: 非圧縮インデックスを解析・展開できる":                {raw: true},
+		"正常系: クッションヘッダーの先のzlib圧縮インデックスを解析・展開できる": {cushion: true},
+		"正常系: クッションヘッダーの先の非圧縮インデックスを解析・展開できる":    {cushion: true, raw: true},
+	}
+
+	for name, layout := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "layout.xp3")
+			writeFile(t, path, buildXP3ArchiveWithLayout(t, entries, layout))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"scenario/first.ks", "image/title.png"}, archive.ListFiles())
+
+			outputDir := filepath.Join(tmpDir, "out")
+			require.NoError(t, archive.ExtractAll(outputDir))
+			for name, want := range wantContents {
+				got, err := os.ReadFile(filepath.Join(outputDir, filepath.FromSlash(name))) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+				require.NoError(t, err)
+				assert.Equal(t, want, got)
+			}
+		})
+	}
+}
+
+func TestNewXP3Archive_ContinuedIndex(t *testing.T) {
+	t.Parallel()
+
+	cushionArchive := buildXP3ArchiveWithLayout(
+		t, []xp3EntrySpec{{name: "cushion.txt", data: []byte("cushion")}}, xp3IndexLayout{cushion: true},
+	)
+	// マイナーバージョン（info_offset直後の4バイト）を2へ書き換える。
+	cushionMinorVersion2 := bytes.Clone(cushionArchive)
+	binary.LittleEndian.PutUint32(cushionMinorVersion2[19:23], 2)
+
+	// 1つ目の索引は継続フラグ付きの非圧縮インデックスでfirst.txtを持ち、
+	// 直後の次インデックスオフセットが指す2つ目のzlib圧縮インデックスがsecond.txtを持つ。
+	firstTable := buildUncompressedSingleEntryTable("first.txt")
+	var chained bytes.Buffer
+	chained.Write(parser.XP3Magic)
+	writeUint64(&chained, 19)
+	writeRawIndex(&chained, 0x80, firstTable)
+	writeUint64(&chained, uint64(chained.Len()+8)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	writeZlibIndex(t, &chained, buildUncompressedSingleEntryTable("second.txt"))
+
+	cases := map[string]struct {
+		content   []byte
+		wantFiles []string
+	}{
+		"正常系: クッションヘッダーのマイナーバージョンが1以外でも読み飛ばして実インデックスを解析する": {
+			content:   cushionMinorVersion2,
+			wantFiles: []string{"cushion.txt"},
+		},
+		"正常系: 継続フラグ付きインデックスと次のインデックスの両方のエントリを返す": {
+			content:   chained.Bytes(),
+			wantFiles: []string{"first.txt", "second.txt"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "continued.xp3")
+			writeFile(t, path, tc.content)
+
+			archive, err := parser.NewXP3Archive(path)
+
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+// buildContinuedIndexChain はblocks個のインデックスを連ねたXP3アーカイブを構築する。
+// 最後以外は継続フラグ付きの空の非圧縮インデックスで、直後の次インデックス
+// オフセットが次のインデックスを指す。最後のインデックスはlastTableを持つ
+// 継続フラグなしの非圧縮インデックス。
+func buildContinuedIndexChain(blocks int, lastTable []byte) []byte {
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+	for range blocks - 1 {
+		writeRawIndex(&buf, 0x80, nil)
+		writeUint64(&buf, uint64(buf.Len()+8)) //nolint:gosec // テストヘルパーであり非負であることが既知
+	}
+	writeRawIndex(&buf, 0x00, lastTable)
+
+	return buf.Bytes()
+}
+
+func TestNewXP3Archive_ContinuedIndexChainLimit(t *testing.T) {
+	t.Parallel()
+
+	lastTable := buildUncompressedSingleEntryTable("last.txt")
+
+	cases := map[string]struct {
+		blocks    int
+		wantErr   bool
+		wantFiles []string
+	}{
+		"正常系: 16個までのインデックスの連鎖は最後のインデックスまで解析する": {
+			blocks:    16,
+			wantFiles: []string{"last.txt"},
+		},
+		"異常系: 17個のインデックスの連鎖はErrInvalidXP3": {
+			blocks:  17,
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "chain.xp3")
+			writeFile(t, path, buildContinuedIndexChain(tc.blocks, lastTable))
+
+			archive, err := parser.NewXP3Archive(path)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Equal(t, 1, strings.Count(err.Error(), path))
+				return
+			}
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+// zlibPadTable は"pad "チャンク1つだけから成るsizeバイトのファイルテーブルを
+// zlib圧縮したストリームを返す。
+//
+// why not: ゼロ列のテーブルはチャンク名・サイズ0のチャンクを12バイトごとに
+// 1つずつ読むことになり、数十MiBでは解析に時間がかかる。単一の未知チャンクに
+// すれば1回のスキップで読み終わる。
+func zlibPadTable(t *testing.T, size int) []byte {
+	t.Helper()
+
+	const chunkSize = 1 << 20
+
+	var header bytes.Buffer
+	header.WriteString("pad ")
+	writeUint64(&header, uint64(size-header.Len()-8)) //nolint:gosec // テストヘルパーであり非負であることが既知
+
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	_, err := w.Write(header.Bytes())
+	require.NoError(t, err)
+	chunk := make([]byte, chunkSize)
+	for written := header.Len(); written < size; written += chunkSize {
+		_, err := w.Write(chunk[:min(chunkSize, size-written)])
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+
+	return buf.Bytes()
+}
+
+func TestNewXP3Archive_ContinuedIndexTableLimit(t *testing.T) {
+	t.Parallel()
+
+	// 1つ目のインデックスの40MiBと2つ目の30MiBは、それぞれ単独では64MiBの上限に
+	// 収まるが、合計すると上限を超える。
+	const firstTableSize, secondTableSize = 40 << 20, 30 << 20
+
+	first := zlibPadTable(t, firstTableSize)
+
+	var secondRawTable bytes.Buffer
+	secondRawTable.WriteString("pad ")
+	writeUint64(&secondRawTable, secondTableSize-12)
+	secondRawTable.Write(make([]byte, secondTableSize-12))
+
+	cases := map[string]struct {
+		writeSecond         func(t *testing.T, buf *bytes.Buffer)
+		wantDecompressedErr bool
+	}{
+		"異常系: 2つ目のzlib圧縮インデックスが合計の上限を超えて膨張する場合はErrDecompressedTooLarge": {
+			writeSecond: func(t *testing.T, buf *bytes.Buffer) {
+				t.Helper()
+
+				second := zlibPadTable(t, secondTableSize)
+				buf.WriteByte(0x01)
+				writeUint64(buf, uint64(len(second)))
+				writeUint64(buf, secondTableSize)
+				buf.Write(second)
+			},
+			wantDecompressedErr: true,
+		},
+		"異常系: 2つ目の非圧縮インデックスが合計の上限を超える場合はErrInvalidXP3": {
+			writeSecond: func(t *testing.T, buf *bytes.Buffer) {
+				t.Helper()
+
+				writeRawIndex(buf, 0x00, secondRawTable.Bytes())
+			},
+		},
+		"異常系: 2つ目のzlib圧縮インデックスが解凍できず生データとして合計の上限を超える場合はErrInvalidXP3": {
+			writeSecond: func(t *testing.T, buf *bytes.Buffer) {
+				t.Helper()
+
+				buf.WriteByte(0x01)
+				writeUint64(buf, secondTableSize)
+				writeUint64(buf, secondTableSize)
+				buf.Write(secondRawTable.Bytes())
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			buf.Write(parser.XP3Magic)
+			writeUint64(&buf, 19)
+			buf.WriteByte(0x81) // 継続フラグ付きのzlib圧縮インデックス
+			writeUint64(&buf, uint64(len(first)))
+			writeUint64(&buf, firstTableSize)
+			buf.Write(first)
+			writeUint64(&buf, uint64(buf.Len()+8)) //nolint:gosec // テストヘルパーであり非負であることが既知
+			tc.writeSecond(t, &buf)
+
+			path := filepath.Join(t.TempDir(), "continued-table-limit.xp3")
+			writeFile(t, path, buf.Bytes())
+
+			_, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			assert.Equal(t, 1, strings.Count(err.Error(), path))
+			if tc.wantDecompressedErr {
+				require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+			}
+		})
+	}
+}
+
+func TestXP3EncryptionChecker_Check_CorruptIndex(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "corrupt-index.xp3")
+	writeFile(t, path, withIndexOffset(minimalXP3Bytes(), 1000))
+
+	result, err := parser.NewXP3EncryptionChecker(path).Check()
+
+	require.NoError(t, err)
+	assert.False(t, result.IsEncrypted)
+	assert.Equal(t, parser.EncryptionNone, result.EncryptionType)
+}
+
+// zlibZeroStream はsizeバイトのゼロ列をzlib圧縮したストリームを返す。
+//
+// why not: 圧縮前のゼロ列を一括で確保するとテスト自体がその分のメモリを使うため、
+// 1MiBのバッファを繰り返し書き込む。
+func zlibZeroStream(t *testing.T, size int) []byte {
+	t.Helper()
+
+	const chunkSize = 1 << 20
+
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	chunk := make([]byte, chunkSize)
+	for written := 0; written < size; written += chunkSize {
+		_, err := w.Write(chunk[:min(chunkSize, size-written)])
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+
+	return buf.Bytes()
+}
+
+func TestNewXP3Archive_FileTableDecompressionLimit(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		table     func(t *testing.T) []byte
+		wantErr   bool
+		wantFiles []string
+	}{
+		"異常系: 64MiBを超えて膨張するファイルテーブルはErrDecompressedTooLarge": {
+			table: func(t *testing.T) []byte {
+				t.Helper()
+
+				return zlibZeroStream(t, 65<<20)
+			},
+			wantErr: true,
+		},
+		"正常系: 数KBへ膨張するファイルテーブルは解析できる": {
+			table: func(t *testing.T) []byte {
+				t.Helper()
+
+				var table bytes.Buffer
+				table.Write(buildUncompressedSingleEntryTable("small.txt"))
+				writeChunkHeader(&table, "pad ", make([]byte, 4096))
+
+				return compressZlib(t, table.Bytes())
+			},
+			wantFiles: []string{"small.txt"},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "table.xp3")
+			writeFile(t, path, buildXP3ArchiveWithRawTable(tc.table(t)))
+
+			archive, err := parser.NewXP3Archive(path)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+				return
+			}
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+		})
+	}
+}
+
+// buildSingleCompressedSegmentArchive はpayloadを唯一の圧縮セグメントとして持つ
+// エントリ"segment.bin"のXP3アーカイブを構築する。segmレコードのoriginal_size
+// にはoriginalSizeをそのまま書き込む。
+func buildSingleCompressedSegmentArchive(t *testing.T, payload []byte, originalSize uint64) []byte {
+	t.Helper()
+
+	const headerSize = 19
+
+	nameUTF16 := utf16.Encode([]rune("segment.bin"))
+
+	var info bytes.Buffer
+	writeUint32(&info, 0)
+	writeUint64(&info, 0)
+	writeUint64(&info, 0)
+	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+	for _, u := range nameUTF16 {
+		writeUint16(&info, u)
+	}
+
+	var segm bytes.Buffer
+	writeUint32(&segm, 0x07)
+	writeUint64(&segm, headerSize)
+	writeUint64(&segm, uint64(len(payload)))
+	writeUint64(&segm, originalSize)
+
+	var entryBody bytes.Buffer
+	writeChunkHeader(&entryBody, "info", info.Bytes())
+	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+
+	var table bytes.Buffer
+	writeChunkHeader(&table, "File", entryBody.Bytes())
+	compressedTable := compressZlib(t, table.Bytes())
+
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(headerSize+len(payload))) //nolint:gosec // テストヘルパーであり非負であることが既知
+	buf.Write(payload)
+	buf.WriteByte(0x01)
+	writeUint64(&buf, uint64(len(compressedTable)))
+	writeUint64(&buf, uint64(table.Len()))
+	buf.Write(compressedTable)
+
+	return buf.Bytes()
+}
+
+func TestXP3Archive_ExtractAll_SegmentDecompressionLimit(t *testing.T) {
+	t.Parallel()
+
+	const inflatedSize = 1024
+
+	content := bytes.Repeat([]byte{'S'}, inflatedSize)
+
+	cases := map[string]struct {
+		originalSize uint64
+		wantErr      bool
+	}{
+		"異常系: original_sizeを超えて膨張するセグメントはErrDecompressedTooLarge": {
+			originalSize: 16,
+			wantErr:      true,
+		},
+		"異常系: original_sizeを1バイトだけ超えて膨張するセグメントはErrDecompressedTooLarge": {
+			originalSize: inflatedSize - 1,
+			wantErr:      true,
+		},
+		"正常系: original_sizeちょうどに膨張するセグメントは展開できる": {
+			originalSize: inflatedSize,
+		},
+		"正常系: original_sizeがint64の最大値でも1GiBの上限で展開できる": {
+			originalSize: math.MaxInt64,
+		},
+		"正常系: original_sizeがint64の範囲を超える場合は既定の上限で展開できる": {
+			originalSize: math.MaxUint64,
+		},
+		"正常系: original_sizeが2GiBを宣言しても実データが小さければ展開できる": {
+			originalSize: 2 << 30,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "segment.xp3")
+			writeFile(t, path, buildSingleCompressedSegmentArchive(t, compressZlib(t, content), tc.originalSize))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
+
+			outputDir := filepath.Join(tmpDir, "out")
+			err = archive.ExtractAll(outputDir)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+				assert.Equal(t, 1, strings.Count(err.Error(), path))
+				assert.Contains(t, err.Error(), "segment.bin")
+				assert.NoFileExists(t, filepath.Join(outputDir, "segment.bin"))
+				return
+			}
+			require.NoError(t, err)
+			extracted, err := os.ReadFile(filepath.Join(outputDir, "segment.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, content, extracted)
+		})
+	}
+}
+
+func TestNewXP3Archive_FileTableDecompression_AllocationBounded(t *testing.T) {
+	// why not: t.Parallel()を呼ばない。TotalAllocはプロセス全体の累積確保量であり、
+	// 並列実行中の他テストの確保も加算されるため、単独で実行されるトップレベルテストにする。
+
+	// why not: 解凍後の長さ検査だけでは膨張全量を読み込んだ後に弾くことになり、
+	// 読み取り上限が無くても同じErrDecompressedTooLargeになるため、確保量で上限の
+	// 存在を観測する。Go 1.26/1.27のio.ReadAllでの実測では、上限ありの確保量は
+	// 約157MiB（-race下では約315MiB）、上限なしでは約572MiB（-race下では約1144MiB）。
+	// -raceの有無どちらでも両者を分けられるよう、閾値は315MiBと572MiBの中間に置く。
+	const (
+		inflatedSize  = 256 << 20
+		maxAllocDelta = uint64(448) << 20
+	)
+
+	path := filepath.Join(t.TempDir(), "table-bomb-256mib.xp3")
+	writeFile(t, path, buildXP3ArchiveWithRawTable(zlibZeroStream(t, inflatedSize)))
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	_, err := parser.NewXP3Archive(path)
+
+	runtime.ReadMemStats(&after)
+
+	require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, maxAllocDelta)
 }

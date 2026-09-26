@@ -44,8 +44,12 @@ func (b *BuildPipeline) adjustScripts(directory string) error {
 			return nil
 		}
 
+		// why not: ConversionManagerを経由させない。ScriptAdjusterは外部コマンドを
+		// 起動せず、読み込んだ内容を置換してその場へ書き戻すだけなので、失敗は
+		// 変換直後の一時ツリーに対するローカルなファイルI/Oか内容起因の恒久的な
+		// 失敗に限られ、数秒のバックオフで解消する類ではなく、リトライが役に立たない。
 		if _, err := adjuster.Convert(path, path); err != nil {
-			return fmt.Errorf("スクリプトの調整に失敗しました: %s: %w", path, err)
+			return fmt.Errorf("スクリプトの調整に失敗しました: %w", err)
 		}
 
 		return nil

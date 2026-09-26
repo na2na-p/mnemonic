@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -290,6 +291,90 @@ func TestSDL2SourceCache_Save(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "new content", string(content))
 	})
+
+	t.Run("正常系: 保存後に一時ディレクトリが残らない", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+
+		sourceDir := filepath.Join(base, "source")
+		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
+		require.NoError(t, os.MkdirAll(orgDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(orgDir, "SDLActivity.java"), []byte("test content"), 0o600))
+
+		require.NoError(t, cache.Save(sourceDir))
+
+		assert.Empty(t, sdl2CacheTempDirs(t, cache))
+	})
+
+	t.Run("正常系: 前回の保存で残った一時ディレクトリを削除し、無関係なディレクトリは残す", func(t *testing.T) {
+		t.Parallel()
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		staleDir := filepath.Join(base, "cache", ".sdl2-cache-old")
+		require.NoError(t, os.MkdirAll(filepath.Join(staleDir, "org"), 0o750))
+		unrelatedDir := filepath.Join(base, "cache", "templates")
+		require.NoError(t, os.MkdirAll(unrelatedDir, 0o750))
+
+		sourceDir := filepath.Join(base, "source")
+		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
+		require.NoError(t, os.MkdirAll(orgDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(orgDir, "SDLActivity.java"), []byte("test content"), 0o600))
+
+		require.NoError(t, cache.Save(sourceDir))
+
+		assert.NoDirExists(t, staleDir)
+		assert.DirExists(t, unrelatedDir)
+	})
+
+	t.Run("異常系: コピーに失敗しても既存の有効なキャッシュを残す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootではパーミッションを除去しても読み込みを拒否できない")
+		}
+
+		base := t.TempDir()
+		cache := builder.NewSDL2SourceCache(filepath.Join(base, "cache"))
+		writeValidSDL2Cache(t, cache)
+
+		sourceDir := filepath.Join(base, "source")
+		orgDir := filepath.Join(sourceDir, "org", "libsdl", "app")
+		require.NoError(t, os.MkdirAll(orgDir, 0o750))
+		unreadableFile := filepath.Join(orgDir, "SDLActivity.java")
+		require.NoError(t, os.WriteFile(unreadableFile, []byte("new content"), 0o600))
+		require.NoError(t, os.Chmod(unreadableFile, 0o000))
+		t.Cleanup(func() {
+			require.NoError(t, os.Chmod(unreadableFile, 0o600))
+		})
+
+		err := cache.Save(sourceDir)
+
+		require.ErrorIs(t, err, builder.ErrSDL2SourceCache)
+		require.ErrorIs(t, err, builder.ErrSDL2SourceFetcher)
+		assert.FileExists(t, filepath.Join(cache.CachePath(), builder.SDL2CacheMarkerFile))
+		assert.True(t, cache.IsValid())
+		assert.Empty(t, sdl2CacheTempDirs(t, cache))
+	})
+}
+
+// sdl2CacheTempDirs はキャッシュディレクトリと同じ親にあるSave用一時ディレクトリの名前を返す。
+func sdl2CacheTempDirs(t *testing.T, cache *builder.SDL2SourceCache) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(filepath.Dir(cache.CachePath()))
+	require.NoError(t, err)
+
+	var names []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".sdl2-cache-") {
+			names = append(names, entry.Name())
+		}
+	}
+
+	return names
 }
 
 func TestSDL2SourceCache_RestoreTo(t *testing.T) {

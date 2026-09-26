@@ -185,3 +185,56 @@ func TestBuildPipeline_NewMidiConverter(t *testing.T) {
 		})
 	}
 }
+
+func TestConversionFailureError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		results []converter.ConversionResult
+		wantErr string
+	}{
+		{
+			name: "正常系: 失敗が無ければnilを返す",
+			results: []converter.ConversionResult{
+				{SourcePath: "a.ks", Status: converter.StatusSuccess},
+				{SourcePath: "b.tlg", Status: converter.StatusSkipped, Message: "変換不要"},
+			},
+		},
+		{
+			name: "異常系: 失敗した結果だけを変換元パス順に並べて報告する",
+			results: []converter.ConversionResult{
+				{SourcePath: "video/op.wmv", Status: converter.StatusFailed, Message: "ffmpegが失敗しました"},
+				{SourcePath: "first.ks", Status: converter.StatusSuccess},
+				{SourcePath: "image/bg.tlg", Status: converter.StatusFailed, Message: "TLG形式ではありません"},
+				{SourcePath: "image/ev.tlg", Status: converter.StatusSkipped, Message: "変換不要"},
+			},
+			wantErr: "アセットの変換に失敗しました: image/bg.tlg: TLG形式ではありません / " +
+				"video/op.wmv: ffmpegが失敗しました",
+		},
+		{
+			name: "異常系: 成功とスキップ以外の状態はConversionManagerの集計と同じく失敗として報告する",
+			results: []converter.ConversionResult{
+				{SourcePath: "first.ks", Status: "", Message: "状態不明"},
+			},
+			wantErr: "アセットの変換に失敗しました: first.ks: 状態不明",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := conversionFailureError(converter.ConversionSummary{Results: tt.results})
+
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+
+				return
+			}
+
+			require.ErrorIs(t, err, ErrAssetConversionFailed)
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
+}

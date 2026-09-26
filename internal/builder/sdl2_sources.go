@@ -132,35 +132,92 @@ func (c *SDL2SourceCache) GetCachedAt() (time.Time, bool) {
 	return cachedAt, true
 }
 
+// sdl2CacheTempPrefix はSaveが新しいキャッシュを組み立てる一時ディレクトリ名の接頭辞。
+const sdl2CacheTempPrefix = ".sdl2-cache-"
+
 // Save はソースをキャッシュに保存する。sourcesDirはorgディレクトリを含む
 // コピー元ディレクトリ。
+//
+// 既存キャッシュの削除より前（ディレクトリの作成、コピー、マーカー・バージョンの
+// 書き込み）で失敗した場合は、既存のキャッシュが残る。既存キャッシュの削除または
+// 置き換えで失敗した場合は、既存のキャッシュが消えているか一部だけ消えた状態に
+// なりうるため、有効なキャッシュが残るとは限らない。残ったキャッシュが無効なら、
+// 次回の取得で再ダウンロードされる。
+//
+// why not: キャッシュディレクトリへ直接書き込むと、書き込み中の不完全なキャッシュを
+// 並行するビルドが読み、保存の途中で落ちるとキャッシュ自体が失われる。そのため
+// 同じ親ディレクトリの一時ディレクトリに組み立ててからos.Renameで置き換える。
+// 同じ親に作るのは、Renameがファイルシステムをまたげないため。RemoveAllから
+// Renameまでの間はキャッシュが存在しないが、既存ディレクトリとの完全なアトミック
+// 入れ替えにはrenameat2(RENAME_EXCHANGE)などのOS固有機能が要り移植性が無いため採らない。
 func (c *SDL2SourceCache) Save(sourcesDir string) error {
+	parentDir := filepath.Dir(c.cacheDir)
+	if err := os.MkdirAll(parentDir, 0o750); err != nil {
+		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+	}
+
+	removeStaleSDL2CacheTempDirs(parentDir)
+
+	tmpDir, err := os.MkdirTemp(parentDir, sdl2CacheTempPrefix+"*")
+	if err != nil {
+		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+	}
+
+	if err := populateSDL2Cache(tmpDir, sourcesDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+	}
+
 	if err := os.RemoveAll(c.cacheDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
 		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
 	}
 
-	if err := os.MkdirAll(c.cacheDir, 0o750); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
-	}
-
-	srcOrgDir := filepath.Join(sourcesDir, "org")
-	if info, err := os.Stat(srcOrgDir); err == nil && info.IsDir() {
-		if err := copyDir(srcOrgDir, filepath.Join(c.cacheDir, "org")); err != nil {
-			return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
-		}
-	}
-
-	marker := filepath.Join(c.cacheDir, SDL2CacheMarkerFile)
-	if err := os.WriteFile(marker, []byte(time.Now().Format(sdl2CacheMarkerTimeLayout)), 0o600); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
-	}
-
-	versionFile := filepath.Join(c.cacheDir, SDL2CacheVersionFile)
-	if err := os.WriteFile(versionFile, []byte(SDL2CacheCurrentVersion), 0o600); err != nil {
+	if err := os.Rename(tmpDir, c.cacheDir); err != nil {
+		_ = os.RemoveAll(tmpDir)
 		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
 	}
 
 	return nil
+}
+
+// removeStaleSDL2CacheTempDirs はparentDirに残ったSave用の一時ディレクトリを削除する。
+//
+// why not: 保存の途中で落ちると一時ディレクトリが残り、放置すると保存のたびに溜まるため
+// 次の保存時に掃除する。parentDirはほかのキャッシュと共有するため、接頭辞が一致する
+// ものだけを消す。掃除に失敗しても今回の保存には影響しないため、エラーは返さない。
+// 同時に走る別のSaveが組み立て中の一時ディレクトリも消しうるが、ロックは設けない。
+// FetchはSaveの失敗を無視し、必須ファイルの欠けたキャッシュはIsValidが無効と判定して
+// 次回の取得で再ダウンロードされるため、この競合でビルドは失敗しない。
+func removeStaleSDL2CacheTempDirs(parentDir string) {
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), sdl2CacheTempPrefix) {
+			_ = os.RemoveAll(filepath.Join(parentDir, entry.Name()))
+		}
+	}
+}
+
+// populateSDL2Cache はdstDirにsourcesDir/orgのコピーとキャッシュのマーカー・バージョンを書き込む。
+func populateSDL2Cache(dstDir, sourcesDir string) error {
+	srcOrgDir := filepath.Join(sourcesDir, "org")
+	if info, err := os.Stat(srcOrgDir); err == nil && info.IsDir() {
+		if err := copyDir(srcOrgDir, filepath.Join(dstDir, "org")); err != nil {
+			return err
+		}
+	}
+
+	marker := filepath.Join(dstDir, SDL2CacheMarkerFile)
+	if err := os.WriteFile(marker, []byte(time.Now().Format(sdl2CacheMarkerTimeLayout)), 0o600); err != nil {
+		return err
+	}
+
+	versionFile := filepath.Join(dstDir, SDL2CacheVersionFile)
+	return os.WriteFile(versionFile, []byte(SDL2CacheCurrentVersion), 0o600)
 }
 
 // RestoreTo はキャッシュからソースを復元する。

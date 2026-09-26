@@ -22,7 +22,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 
 		dir := t.TempDir()
 
-		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t)))
+		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), nopLogger{}))
 
 		assert.DirExists(t, filepath.Join(dir, "system"))
 	})
@@ -32,7 +32,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 
 		dir := t.TempDir()
 
-		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t)))
+		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), nopLogger{}))
 
 		systemDir := filepath.Join(dir, "system")
 		for _, name := range resources.SystemPolyfillFiles {
@@ -53,10 +53,26 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 		dir := t.TempDir()
 		fetcher := builder.NewFontFetcher(t.TempDir(), &http.Client{Transport: alwaysFailRoundTripper{}})
 
-		err := copyPolyfillFilesUsing(dir, fetcher)
+		logger := &recordingLogger{}
+
+		err := copyPolyfillFilesUsing(dir, fetcher, logger)
 
 		require.NoError(t, err)
 		assert.NoFileExists(t, filepath.Join(dir, "system", "font.ttf"))
+		warnings := logger.messages("WARNING")
+		require.Len(t, warnings, 1, "フォント取得の失敗は警告として報告する")
+		assert.Contains(t, warnings[0], "フォント")
+	})
+
+	t.Run("正常系: フォントを取得できた場合は警告しない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		logger := &recordingLogger{}
+
+		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), logger))
+
+		assert.Empty(t, logger.messages("WARNING"))
 	})
 }
 
@@ -90,7 +106,7 @@ func TestCopyFontFile(t *testing.T) {
 		assert.Equal(t, []byte("existing"), got)
 	})
 
-	t.Run("正常系: フォント取得に失敗した場合はエラーを返さずスキップする", func(t *testing.T) {
+	t.Run("異常系: フォント取得に失敗した場合はエラーを返しfont.ttfを作らない", func(t *testing.T) {
 		t.Parallel()
 
 		systemDir := t.TempDir()
@@ -98,7 +114,7 @@ func TestCopyFontFile(t *testing.T) {
 
 		err := copyFontFile(systemDir, fetcher)
 
-		require.NoError(t, err)
+		require.Error(t, err)
 		assert.NoFileExists(t, filepath.Join(systemDir, "font.ttf"))
 	})
 }

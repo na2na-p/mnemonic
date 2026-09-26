@@ -4,6 +4,7 @@ package converter
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
@@ -11,11 +12,18 @@ import (
 var (
 	// ErrSourceNotFound は変換元ファイルが存在しない場合のエラー。
 	ErrSourceNotFound = errors.New("変換元ファイルが見つかりません")
+	// ErrSourceUnreadable は存在しない以外の理由で変換元ファイルを読み込めない場合のエラー。
+	// OSのエラーを%wで保持するため、呼び出し側はerrors.Isで原因を判別できる。
+	ErrSourceUnreadable = errors.New("変換元ファイルを読み込めません")
 	// ErrSourceIsDirectory は変換元がディレクトリの場合のエラー。
 	ErrSourceIsDirectory = errors.New("変換元はファイルである必要があります")
 	// ErrPermanentFailure は同じ入力を再試行しても解消しない変換失敗を表す。
-	// errorを返すConverterはこれを%wでラップし、呼び出し側にリトライ不要を伝える。
+	// Converterはこれを%wでラップしたerrを返し、呼び出し側にリトライ不要を伝える。
 	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
+	// ErrDestinationCollision は複数の変換元が同じ出力先へ変換される場合のエラー。
+	// ConversionManagerはこれをErrPermanentFailureでラップし、該当する変換元を
+	// いずれも変換しない。
+	ErrDestinationCollision = errors.New("出力先が重複しています")
 )
 
 // ConversionStatus は変換ステータスを表す。
@@ -30,7 +38,12 @@ const (
 
 // ConversionResult は単一ファイルの変換結果を表す不変値。
 //
-// DestPathが空文字列の場合は変換失敗・スキップ時を表す。
+// Converter.Convertがerr=nilで返す結果のStatusはStatusSuccessかStatusSkippedに
+// 限られる。StatusFailedはConversionManagerが組み立てる失敗の要約にだけ現れ、
+// DestPathは空文字列となる。そのMessageはConvertのerrの文言、出力先が重複した
+// 場合のErrDestinationCollisionを含むエラーの文言、または
+// RetryConfig.MaxAttemptsが0以下で一度も変換を試みなかった場合の
+// 「変換に失敗しました」となる。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
@@ -38,9 +51,6 @@ type ConversionResult struct {
 	Message     string
 	BytesBefore int64
 	BytesAfter  int64
-
-	// Permanent は同じ入力を再試行しても結果が変わらない失敗。trueのとき呼び出し側はリトライしない。
-	Permanent bool
 }
 
 // CompressionRatio は圧縮率（BytesAfter / BytesBefore）を計算する。
@@ -65,23 +75,53 @@ func (r ConversionResult) IsSuccess() bool {
 
 // validateSource は変換元ファイルの検証を行う。
 //
-// ファイルが存在しない場合はErrSourceNotFound、ディレクトリの場合は
-// ErrSourceIsDirectoryを返す。
-//
-// why not: EncodingConverter/ScriptAdjuster/VideoConverterは自前の
-// 存在チェックでConversionResult{Status: StatusFailed}を返す設計のため、
-// ここでのerror伝播は使わない。ImageConverterのみこの関数を使い、errorを
-// 呼び出し元へ伝播させる。
+// os.Statの失敗はclassifyStatErrorで分類して返す。変換元がディレクトリの場合は
+// ErrSourceIsDirectoryをErrPermanentFailureでラップして返す。
 func validateSource(source string) error {
 	info, err := os.Stat(source)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrSourceNotFound, source)
+		return classifyStatError(source, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("%w: %s", ErrSourceIsDirectory, source)
+		return permanentError(fmt.Errorf("%w: %s", ErrSourceIsDirectory, source))
 	}
 
 	return nil
+}
+
+// ensureSourceExists はsourceをos.Statで確認できない場合、その失敗を
+// classifyStatErrorで分類したエラーを返す。
+//
+// why not: validateSourceは使わない。validateSourceはディレクトリも拒否するが、
+// Encoding/Script/Video/Midiの各Converterはディレクトリをこの時点では弾かず、
+// 後続の読み込みや外部コマンドの失敗（再試行対象）として扱う。
+func ensureSourceExists(source string) error {
+	if _, err := os.Stat(source); err != nil {
+		return classifyStatError(source, err)
+	}
+
+	return nil
+}
+
+// classifyStatError はsourceに対するos.Statの失敗errを分類する。
+//
+// 存在しない場合はErrSourceNotFound、権限不足の場合はOSのエラーを包んだ
+// ErrSourceUnreadableを、いずれもErrPermanentFailureでラップして返す。
+// それ以外（親がファイル・パス名が長すぎる・I/Oエラーなど）はOSのエラーを包んだ
+// ErrSourceUnreadableを再試行対象として返す。
+//
+// why not: Statの失敗を一律にErrSourceNotFoundにはしない。権限不足まで
+// 「見つかりません」と報告すると利用者が原因を探せず、EIOなどの一時的な失敗まで
+// 恒久扱いになって再試行されなくなる。
+func classifyStatError(source string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
+	case errors.Is(err, fs.ErrPermission):
+		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+	default:
+		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+	}
 }
 
 // permanentError はerrをErrPermanentFailureでラップし、呼び出し側がerrors.Isで

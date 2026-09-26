@@ -20,7 +20,7 @@ import (
 // 旧ファイルを残しても新しい参照は解決できる（変換後ファイルが既に存在する
 // ため、削除の成否がスクリプト参照の解決可否には影響しない）。削除失敗を
 // エラーにしないのは、
-// convertMidiFileListのos.Remove(midiFile)と同じ理由: 変換自体は成功し
+// convertMidiFileListWith内のos.Remove(result.SourcePath)と同じ理由: 変換自体は成功し
 // スクリプト参照も解決できるため、残留は死蔵アセットとしてAPKサイズが
 // 増えるだけで実害が無い。
 //

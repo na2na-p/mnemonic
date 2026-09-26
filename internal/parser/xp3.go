@@ -21,7 +21,23 @@ var (
 	ErrXP3NotFound = errors.New("XP3ファイルが見つかりません")
 	// ErrInvalidXP3 は不正なXP3ファイル形式の場合のエラー。
 	ErrInvalidXP3 = errors.New("不正なXP3ファイル形式です")
+	// ErrDecompressedTooLarge はzlib解凍結果が許容サイズを超えた場合のエラー。
+	ErrDecompressedTooLarge = errors.New("zlib解凍結果が許容サイズを超えています")
 )
+
+// maxFileTableSize はファイルテーブルの解凍後サイズの上限。
+//
+// why not: 圧縮後サイズはファイル残量でクランプ済みだが、zlibは約1000:1まで
+// 膨張しうるため、それだけでは1MBのアーカイブで約1GBを確保させられる。
+// 実アーカイブの索引は数MBが上限で、64MiBなら細工されたzlibによる膨張だけを弾ける。
+const maxFileTableSize = 64 << 20
+
+// maxSegmentDecompressedSize はセグメントの解凍後サイズの絶対的な上限。
+//
+// why not: セグメントの宣言サイズ（OriginalSize）はアーカイブ自身の値なので、
+// 上限として信用しきれない。1GiBなら実素材（動画もzlib圧縮されることはまずない）を
+// 締め出さず、宣言サイズを偽ったTB級の膨張だけを弾ける。
+const maxSegmentDecompressedSize = 1 << 30
 
 // EncryptionType は検出可能な暗号化タイプを表す。
 //
@@ -143,85 +159,193 @@ func (a *XP3Archive) parseArchive() error {
 	if len(header) < len(XP3Magic) || !validateXP3Magic(header) {
 		return fmt.Errorf("%w: %s", ErrInvalidXP3, a.archivePath)
 	}
+	if len(header) < 19 {
+		return fmt.Errorf("%w: インデックスオフセットが途切れています: %s", ErrInvalidXP3, a.archivePath)
+	}
 
-	a.parseFileIndex(f, header)
-
-	return nil
+	return a.parseFileIndex(f, header)
 }
 
 // parseFileIndex はファイルインデックスをパースする。
 //
-// ヘッダーが19バイト未満（マジックの後にインデックスオフセットが続かない）の
-// 場合、パースエラーとはせず空のファイル一覧のまま処理を終える。
-func (a *XP3Archive) parseFileIndex(f io.ReadSeeker, header []byte) {
-	if len(header) < 19 {
-		return
-	}
-
-	a.parseStandardIndex(f, header)
+// headerはマジックとインデックスオフセットを含む19バイト以上であることを
+// 前提とする（parseArchiveが保証する）。
+func (a *XP3Archive) parseFileIndex(f io.ReadSeeker, header []byte) error {
+	return a.parseStandardIndex(f, header)
 }
 
-func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) {
-	infoOffset, ok := safeInt64(binary.LittleEndian.Uint64(header[11:19]))
+func (a *XP3Archive) invalidIndexError(what string) error {
+	return fmt.Errorf("%w: %s: %s", ErrInvalidXP3, what, a.archivePath)
+}
+
+// インデックスのフラグバイトの値。krkrz base/XP3Archive.h の
+// TVP_XP3_INDEX_ENCODE_METHOD_MASK / _RAW / _ZLIB / TVP_XP3_INDEX_CONTINUE と同じ。
+const (
+	indexEncodeMethodMask = 0x07
+	indexEncodeRaw        = 0x00
+	indexEncodeZlib       = 0x01
+	indexContinue         = 0x80
+)
+
+// maxIndexBlocks は継続フラグで連ねられるインデックスの最大数。
+//
+// why not: krkrz の tTVPXP3Archive は継続の連鎖に上限を持たないため、次インデックス
+// オフセットが自身を指すだけで無限ループする。krkrrel（krdevui RelSettingsUnit.cpp）
+// が書くのはクッションヘッダーと実インデックスの2つだけなので、16で打ち切っても
+// 実アーカイブは締め出さない。
+const maxIndexBlocks = 16
+
+// parseStandardIndex はインデックスオフセットが指す標準インデックスをパースする。
+//
+// インデックスオフセットがファイル末尾ちょうどを指す場合はインデックスを持たない
+// 空のアーカイブとして扱い、末尾より先を指す場合は壊れたアーカイブとして扱う。
+// why not: 末尾より先へのSeekは成功し、フラグの読み取りはどちらでもio.EOFになる
+// ため、読み取りエラーからは両者を区別できない。そのためファイルサイズと比較する。
+//
+// why not: フラグ0x80を「テーブルサイズとテーブル位置が続く形式」とは読まない。
+// krkrz の tTVPXP3Archive（base/XP3Archive.cpp）は0x80を継続フラグとして扱い、
+// 下位3ビットのエンコード方式でテーブルを読んだ直後の8バイトを次のインデックス
+// オフセットとして読む。krkrrel はインデックスオフセットの後ろに4バイトの
+// マイナーバージョンと継続フラグ付きの空の非圧縮インデックス（クッションヘッダー）
+// を置き、そこから実インデックスを指すため、この連鎖を辿らないと krkrrel 製の
+// アーカイブを読めない。マイナーバージョンはインデックスオフセットが飛び越える
+// 位置にあり、krkrz も読まないため検証しない。
+func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) error {
+	indexOffset, ok := safeInt64(binary.LittleEndian.Uint64(header[11:19]))
 	if !ok {
-		return
+		return a.invalidIndexError("インデックスオフセットが範囲外です")
 	}
 
-	if _, err := f.Seek(infoOffset, io.SeekStart); err != nil {
-		return
+	fileSize, err := streamSize(f)
+	if err != nil {
+		return fmt.Errorf("%w: %w: %s", ErrInvalidXP3, err, a.archivePath)
+	}
+	if indexOffset > fileSize {
+		return a.invalidIndexError("インデックスオフセットがファイル末尾を超えています")
+	}
+	if indexOffset == fileSize {
+		return nil
 	}
 
+	// why not: ファイルテーブルの上限はインデックスごとではなく全体に適用する。
+	// インデックスごとでは継続の連鎖でmaxIndexBlocks倍まで確保させられる。
+	budget := int64(maxFileTableSize)
+	for range maxIndexBlocks {
+		if _, err := f.Seek(indexOffset, io.SeekStart); err != nil {
+			return a.invalidIndexError("インデックスオフセットへシークできません")
+		}
+
+		continued, used, err := a.readIndexBlock(f, fileSize, budget)
+		if err != nil {
+			return err
+		}
+		budget -= used
+		if !continued {
+			return nil
+		}
+
+		// why not: ヘッダーのインデックスオフセットと違い、ファイル末尾ちょうどを
+		// 空のアーカイブとして扱わない。継続フラグは次のインデックスがあることを
+		// 示すため、末尾を指すのは途切れたアーカイブである。
+		next, ok := readUint64(f)
+		if !ok {
+			return a.invalidIndexError("次のインデックスオフセットを読み取れません")
+		}
+		indexOffset, ok = safeInt64(next)
+		if !ok || indexOffset >= fileSize {
+			return a.invalidIndexError("次のインデックスオフセットがファイルの範囲外です")
+		}
+	}
+
+	return a.invalidIndexError("継続するインデックスが多すぎます")
+}
+
+// readIndexBlock は現在位置のインデックス1つ（フラグとファイルテーブル）を読み取り、
+// エントリをパースする。戻り値のcontinuedは継続フラグの有無、usedはファイル
+// テーブルのバイト数。呼び出し後の位置はファイルテーブルの直後になる。
+func (a *XP3Archive) readIndexBlock(f io.ReadSeeker, fileSize, budget int64) (continued bool, used int64, err error) {
 	flagByte := make([]byte, 1)
 	if _, err := io.ReadFull(f, flagByte); err != nil {
-		return
+		return false, 0, a.invalidIndexError("インデックスフラグを読み取れません")
 	}
 	flag := flagByte[0]
 
-	if flag&0x80 != 0 {
-		// バージョン2: フラグの後に(table_size, table_offset)がある。
-		tableSize, ok := readUint64(f)
-		if !ok {
-			return
-		}
-		tableOffset, ok := readUint64(f)
-		if !ok {
-			return
-		}
-
-		tableOffsetInt64, ok := safeInt64(tableOffset)
-		if !ok {
-			return
-		}
-		tableSizeInt64, ok := safeInt64(tableSize)
-		if !ok {
-			return
-		}
-
-		if _, err := f.Seek(tableOffsetInt64, io.SeekStart); err != nil {
-			return
-		}
-		a.readFileTable(f, tableSizeInt64)
-
-		return
+	var tableData []byte
+	switch flag & indexEncodeMethodMask {
+	case indexEncodeZlib:
+		tableData, err = a.readZlibFileTable(f, fileSize, budget)
+	case indexEncodeRaw:
+		tableData, err = a.readRawFileTable(f, fileSize, budget)
+	default:
+		return false, 0, a.invalidIndexError("インデックスのエンコード方式が不明です")
+	}
+	if err != nil {
+		return false, 0, err
 	}
 
-	// バージョン1: フラグの後に(compressed_size, original_size)がある。
-	// original_sizeは解凍後サイズの検証に使える可能性があるが、
-	// 現時点では読み飛ばすのみで使用しない。
+	if err := a.parseFileEntries(tableData); err != nil {
+		return false, 0, err
+	}
+
+	return flag&indexContinue != 0, int64(len(tableData)), nil
+}
+
+// readRawFileTable はフラグ直後のindex_sizeと、それに続く非圧縮のファイル
+// テーブルを読み取る。
+//
+// why not: 非圧縮インデックスはzlib形式と違いoriginal_sizeを持たず、index_sizeの
+// 直後がテーブルになる（krkrz base/XP3Archive.cpp の TVP_XP3_INDEX_ENCODE_RAW 分岐、
+// krkrrel の書き出しも同じ）。そのためzlib形式と同じく2つのuint64を読むと
+// テーブルの先頭8バイトを読み飛ばしてしまう。
+//
+// why not: 宣言サイズを残量へ縮めて読まない。index_sizeは圧縮前のテーブル長
+// そのものなので、残量が足りないのは途切れたテーブルであり、krkrz も
+// ReadBuffer の読み取り不足（tjs2/tjs.cpp）としてエラーにする。
+func (a *XP3Archive) readRawFileTable(f io.ReadSeeker, fileSize, budget int64) ([]byte, error) {
+	indexSize, ok := readUint64(f)
+	if !ok {
+		return nil, a.invalidIndexError("非圧縮ファイルテーブルのサイズを読み取れません")
+	}
+
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, a.invalidIndexError("ファイルテーブルの位置を取得できません")
+	}
+	if indexSize > uint64(max(fileSize-offset, 0)) {
+		return nil, a.invalidIndexError("非圧縮ファイルテーブルのサイズがファイル残量を超えています")
+	}
+	if indexSize > uint64(budget) { //nolint:gosec // budgetはmaxFileTableSizeから使用量を引いた非負値
+		return nil, a.invalidIndexError("ファイルテーブルの合計が上限を超えています")
+	}
+
+	tableData := make([]byte, indexSize)
+	if _, err := io.ReadFull(f, tableData); err != nil {
+		return nil, a.invalidIndexError("非圧縮ファイルテーブルを読み取れません")
+	}
+
+	return tableData, nil
+}
+
+// readZlibFileTable はフラグ直後のcompressed_size、original_sizeと、それに続く
+// zlib圧縮のファイルテーブルを読み取って解凍する。
+//
+// original_sizeは解凍後サイズの検証に使える可能性があるが、現時点では読み飛ばす
+// のみで使用しない。
+func (a *XP3Archive) readZlibFileTable(f io.ReadSeeker, fileSize, budget int64) ([]byte, error) {
 	compressedSize, ok := readUint64(f)
 	if !ok {
-		return
+		return nil, a.invalidIndexError("ファイルテーブルの圧縮後サイズを読み取れません")
 	}
 	if _, ok := readUint64(f); !ok {
-		return
+		return nil, a.invalidIndexError("ファイルテーブルの元サイズを読み取れません")
 	}
 
 	compressedSizeInt64, ok := safeInt64(compressedSize)
 	if !ok {
-		return
+		return nil, a.invalidIndexError("ファイルテーブルの圧縮後サイズが範囲外です")
 	}
 
-	a.readFileTable(f, compressedSizeInt64)
+	return a.readFileTable(f, compressedSizeInt64, fileSize, budget)
 }
 
 func readUint64(f io.Reader) (uint64, bool) {
@@ -247,79 +371,100 @@ func safeInt64(v uint64) (int64, bool) {
 	return int64(v), true //nolint:gosec // 直前のv > math.MaxInt64チェックによりオーバーフローしないことを保証済み
 }
 
-func (a *XP3Archive) readFileTable(f io.Reader, tableSize int64) {
-	if tableSize < 0 {
-		return
+// readFileTable は現在位置からtableSizeバイトのzlib圧縮ファイルテーブルを
+// 読み取り、budgetバイトを上限に解凍して返す。解凍できない場合は読み取った
+// バイト列をそのまま返す。
+//
+// why not: tableSizeはアーカイブ由来の宣言値であり、そのまま確保すると細工された
+// アーカイブ1つで数GBを確保したり、makesliceの上限超過でpanicしたりする。
+// そのため現在位置以降の実際の残量へクランプしてから確保する。
+func (a *XP3Archive) readFileTable(f io.ReadSeeker, tableSize, fileSize, budget int64) ([]byte, error) {
+	offset, err := f.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, a.invalidIndexError("ファイルテーブルの位置を取得できません")
+	}
+
+	tableSize = min(tableSize, max(fileSize-offset, 0))
+	if tableSize <= 0 {
+		return nil, a.invalidIndexError("ファイルテーブルがありません")
 	}
 
 	compressed := make([]byte, tableSize)
 	n, err := io.ReadFull(f, compressed)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return
+		return nil, a.invalidIndexError("ファイルテーブルを読み取れません")
 	}
 	compressed = compressed[:n]
-	if len(compressed) == 0 {
-		return
-	}
 
-	tableData, err := decompressZlib(compressed)
+	tableData, err := decompressZlib(compressed, budget)
+	if errors.Is(err, ErrDecompressedTooLarge) {
+		return nil, fmt.Errorf("%w: ファイルテーブル: %w: %s", ErrInvalidXP3, err, a.archivePath)
+	}
 	if err != nil {
 		// 圧縮されていない場合はそのまま使用する。
 		tableData = compressed
 	}
+	if int64(len(tableData)) > budget {
+		return nil, a.invalidIndexError("ファイルテーブルの合計が上限を超えています")
+	}
 
-	a.parseFileEntries(tableData)
+	return tableData, nil
 }
 
-func decompressZlib(data []byte) ([]byte, error) {
+// decompressZlib はdataをzlib解凍する。解凍結果がlimitバイトを超える場合は
+// ErrDecompressedTooLargeを返す。
+func decompressZlib(data []byte, limit int64) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("zlib解凍に失敗しました: %w", err)
 	}
 	defer func() { _ = r.Close() }()
 
-	decompressed, err := io.ReadAll(r)
+	// why not: limitそのものを読み取り上限にすると、ちょうどlimitバイトで終わる
+	// ストリームと超過するストリームを区別できない。1バイト余分に読んで超過を検出する
+	// （limitがmath.MaxInt64でも加算が溢れないよう先に1減らす）。
+	decompressed, err := io.ReadAll(io.LimitReader(r, min(limit, math.MaxInt64-1)+1))
 	if err != nil {
 		return nil, fmt.Errorf("zlib解凍に失敗しました: %w", err)
+	}
+	if int64(len(decompressed)) > limit {
+		return nil, fmt.Errorf("%w: 上限%dバイト", ErrDecompressedTooLarge, limit)
 	}
 
 	return decompressed, nil
 }
 
-func (a *XP3Archive) parseFileEntries(tableData []byte) {
+func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 	stream := bytes.NewReader(tableData)
 
 	for {
 		chunkName := make([]byte, 4)
 		if _, err := io.ReadFull(stream, chunkName); err != nil {
-			return
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+
+			return a.invalidIndexError("ファイルテーブルのチャンク名が途切れています")
+		}
+
+		chunkSize, ok := readUint64(stream)
+		if !ok {
+			return a.invalidIndexError("ファイルテーブルのチャンクサイズを読み取れません")
+		}
+		if chunkSize > uint64(len(tableData)) { //nolint:gosec // len()は非負でuint64との比較として安全
+			return a.invalidIndexError("ファイルテーブルのチャンクサイズがテーブル長を超えています")
 		}
 
 		if !bytes.Equal(chunkName, []byte("File")) {
-			chunkSize, ok := readUint64(stream)
-			if !ok {
-				return
-			}
-			if chunkSize > uint64(len(tableData)) { //nolint:gosec // len()は非負でuint64との比較として安全
-				return
-			}
 			skipChunk(stream, chunkSize)
 
 			continue
 		}
 
-		chunkSize, ok := readUint64(stream)
-		if !ok {
-			return
-		}
-		if chunkSize > uint64(len(tableData)) { //nolint:gosec // len()は非負でuint64との比較として安全
-			return
-		}
-
 		entryData := make([]byte, chunkSize)
 		n, err := io.ReadFull(stream, entryData)
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return
+			return a.invalidIndexError("Fileチャンクを読み取れません")
 		}
 		entryData = entryData[:n]
 
@@ -457,21 +602,12 @@ func parseSegments(segmData []byte) []XP3Segment {
 // stream.Len()（残りバイト数）でsizeをクランプしてから確保し、「残っている
 // 分だけ読む」挙動にする。
 func readChunk(stream *bytes.Reader, size uint64) []byte {
-	remaining := stream.Len()
-	if remaining < 0 {
-		remaining = 0
-	}
-	if size > uint64(remaining) { //nolint:gosec // remainingはbytes.Reader.Len()の戻り値で常に非負
-		size = uint64(remaining)
-	}
+	buf := make([]byte, min(size, uint64(stream.Len()))) //nolint:gosec // bytes.Reader.Len()は常に非負
+	// why not: bufの長さは残量以下へクランプ済みのため、bytes.Readerからの読み取りは
+	// 失敗も不足もせず、エラーを確認する必要がない。
+	_, _ = io.ReadFull(stream, buf)
 
-	buf := make([]byte, size)
-	n, err := io.ReadFull(stream, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil
-	}
-
-	return buf[:n]
+	return buf
 }
 
 // skipChunk はstreamの現在位置からsizeバイト分を前方へスキップする。
@@ -483,15 +619,9 @@ func readChunk(stream *bytes.Reader, size uint64) []byte {
 // 失われる）。そのためsizeをstream.Len()でクランプし、Seekが常に成功する
 // ようにして「バッファ終端で止まるだけ」という安全な挙動にする。
 func skipChunk(stream *bytes.Reader, size uint64) {
-	remaining := stream.Len()
-	if remaining < 0 {
-		remaining = 0
-	}
-	if size > uint64(remaining) { //nolint:gosec // remainingはbytes.Reader.Len()の戻り値で常に非負
-		size = uint64(remaining)
-	}
+	size = min(size, uint64(stream.Len())) //nolint:gosec // bytes.Reader.Len()は常に非負
 
-	_, _ = stream.Seek(int64(size), io.SeekCurrent) //nolint:gosec // 直前にremaining(int)以下へクランプ済みでint64へ安全に変換可能
+	_, _ = stream.Seek(int64(size), io.SeekCurrent) //nolint:gosec // 直前にstream.Len()(int)以下へクランプ済みでint64へ安全に変換可能
 }
 
 // decodeUTF16LE はUTF-16LEバイト列をデコードする。
@@ -543,7 +673,7 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 			return err
 		}
 		if err := extractEntry(f, entry, outputPath); err != nil {
-			return err
+			return fmt.Errorf("%s: %s: %w", a.archivePath, entry.Name, err)
 		}
 	}
 
@@ -634,12 +764,29 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize, budget int64) ([
 	consumed := int64(n)
 
 	if segment.IsCompressed && segment.Size != segment.OriginalSize {
-		if decompressed, err := decompressZlib(buf); err == nil {
+		decompressed, err := decompressZlib(buf, segmentDecompressionLimit(segment))
+		if errors.Is(err, ErrDecompressedTooLarge) {
+			return nil, 0, fmt.Errorf("%w: セグメント: %w", ErrInvalidXP3, err)
+		}
+		if err == nil {
 			buf = decompressed
 		}
 	}
 
 	return buf, consumed, nil
+}
+
+// segmentDecompressionLimit はsegmentの解凍後サイズの上限を返す。
+//
+// why not: OriginalSizeはsafeInt64で範囲外と判定されるとゼロ値になり、宣言値が0の
+// 場合と区別できない。0を上限にすると範囲外を宣言したセグメントが一律に失敗するため、
+// 0の場合はファイルテーブルと同じ上限へフォールバックする。
+func segmentDecompressionLimit(segment XP3Segment) int64 {
+	if segment.OriginalSize > 0 {
+		return min(segment.OriginalSize, maxSegmentDecompressedSize)
+	}
+
+	return maxFileTableSize
 }
 
 // IsEncrypted は暗号化されているかを判定する。

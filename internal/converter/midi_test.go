@@ -180,7 +180,7 @@ func TestMidiConverter_IsFluidsynthAvailable(t *testing.T) {
 func TestMidiConverter_Convert(t *testing.T) {
 	t.Parallel()
 
-	t.Run("異常系: 変換元ファイルが存在しない場合FAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: 変換元ファイルが存在しない場合は再試行不要なエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -190,28 +190,49 @@ func TestMidiConverter_Convert(t *testing.T) {
 		c := converter.NewMidiConverter(filepath.Join(dir, "sf.sf2"), 0, "", 0, 0, nil)
 		result, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "変換元ファイルが見つかりません: "+source)
 		assert.Equal(t, source, result.SourcePath)
-		assert.Contains(t, result.Message, "見つかりません")
-		assert.True(t, result.Permanent)
 	})
 
-	t.Run("異常系: サウンドフォントが存在しない場合FAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: サウンドフォントが存在しない場合は再試行不要なエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		source := filepath.Join(dir, "input.mid")
 		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
 		dest := filepath.Join(dir, "output.ogg")
+		soundfont := filepath.Join(dir, "non_existent.sf2")
 
-		c := converter.NewMidiConverter(filepath.Join(dir, "non_existent.sf2"), 0, "", 0, 0, nil)
-		result, err := c.Convert(source, dest)
+		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, nil)
+		_, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "サウンドフォント")
-		assert.True(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrSoundfontNotFound)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Contains(t, err.Error(), "サウンドフォントが見つかりません: "+soundfont)
+	})
+
+	t.Run("異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		soundfont := filepath.Join(dir, "test.sf2")
+		writeFile(t, soundfont, []byte("soundfont data"))
+		source := filepath.Join(dir, "input.mid")
+		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+		blocker := filepath.Join(dir, "blocker")
+		writeFile(t, blocker, []byte("not a directory"))
+
+		ctrl := gomock.NewController(t)
+		runner := NewMockCommandRunner(ctrl)
+
+		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+		_, err := c.Convert(source, filepath.Join(blocker, "output.ogg"))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "MIDI変換に失敗しました: ")
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
 	})
 
 	t.Run("正常系: MIDI変換が成功する(末尾無音なし)", func(t *testing.T) {
@@ -354,7 +375,7 @@ func TestMidiConverter_Convert(t *testing.T) {
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 	})
 
-	t.Run("異常系: FluidSynthがエラーを返す場合FAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: FluidSynthがエラーを返す場合は再試行対象のエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -374,13 +395,13 @@ func TestMidiConverter_Convert(t *testing.T) {
 		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
 		result, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "FluidSynth")
-		assert.False(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrFluidsynthFailed)
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Equal(t, "FluidSynth変換に失敗しました: FluidSynth error", err.Error())
+		assert.Equal(t, source, result.SourcePath)
 	})
 
-	t.Run("異常系: FFmpegがエラーを返す場合FAILEDを返す", func(t *testing.T) {
+	t.Run("異常系: FFmpegがエラーを返す場合は再試行対象のエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
@@ -406,10 +427,10 @@ func TestMidiConverter_Convert(t *testing.T) {
 		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
 		result, err := c.Convert(source, dest)
 
-		require.NoError(t, err)
-		assert.Equal(t, converter.StatusFailed, result.Status)
-		assert.Contains(t, result.Message, "FFmpeg")
-		assert.False(t, result.Permanent)
+		require.ErrorIs(t, err, converter.ErrMidiFFmpegFailed)
+		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+		assert.Equal(t, "FFmpeg変換に失敗しました: FFmpeg error", err.Error())
+		assert.Equal(t, source, result.SourcePath)
 	})
 
 	t.Run("正常系: 出力先の親ディレクトリが存在しない場合作成する", func(t *testing.T) {

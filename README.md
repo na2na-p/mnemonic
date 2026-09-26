@@ -70,12 +70,12 @@ mnemonic build <input.exe> -o <output.apk>
 ```
   -o, --output string               出力APKパス
       --app-name string             アプリ表示名
-      --package-name string         Androidパッケージ名
+      --package-name string         Androidパッケージ名。例: com.example.game（英字始まりの 2 セグメント以上）
       --keystore string             署名用キーストア
       --soundfont string            MIDI変換に使うサウンドフォント(.sf2/.sf3)のパス
       --quality string              画像品質プリセット (default "high")
       --skip-video                  動画変換をスキップ
-      --clean                       キャッシュをクリア
+      --clean                       署名鍵以外のキャッシュ（テンプレート・フォント・プラグイン・SDL2 ソース）をクリアしてからビルドする
       --template-version string     テンプレートバージョン固定
       --template-refresh-days int   テンプレートキャッシュ期限（日）(default 7)
       --template-offline            オフラインモード

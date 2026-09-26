@@ -1,11 +1,13 @@
 package pipeline
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -63,7 +65,7 @@ func (b *BuildPipeline) newMidiConverter() *converter.MidiConverter {
 // 出力ファイル名は.mid/.midiを.oggに置換した形式にする
 // （例: bgm/sinone.mid → bgm/sinone.ogg）。変換成功後、元のMIDIファイルは
 // 削除する。
-func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter) error {
+func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConverter, logger Logger) error {
 	midiFiles, err := findMidiFiles(directory)
 	if err != nil {
 		return err
@@ -81,7 +83,7 @@ func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConver
 		return err
 	}
 
-	return convertMidiFileList(midiFiles, midiConverter)
+	return convertMidiFileList(midiFiles, midiConverter, logger)
 }
 
 // findMidiFiles はdirectory配下の.mid/.midiファイルを再帰的に列挙する。
@@ -121,7 +123,7 @@ func findMidiFiles(directory string) ([]string, error) {
 //
 // why not: サウンドフォントの実在確認をここで行うのは、converter.
 // GetDefaultSoundfontPathがFluidR3のパスへ実在確認なしにフォールバックし、
-// MidiConverter.Convertが不在をファイル単位のStatusFailedとしてしか報告
+// MidiConverter.Convertが不在をファイル単位の失敗としてしか報告
 // しないため。全ファイルを試して初めて原因が判明するより、着手前に一度だけ
 // 検査して単一のエラーへまとめる方が原因を特定しやすい。
 func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error {
@@ -143,38 +145,80 @@ func ensureMidiConversionAvailable(midiConverter *converter.MidiConverter) error
 	return nil
 }
 
-// convertMidiFileList はmidiFilesを順にOGGへ変換し、失敗を集約して返す。
+// maxMidiWorkers はMIDI変換で同時に走らせるワーカー数の上限。
+//
+// why not: CPU数だけで並列化しない。fluidsynthはワーカーごとにサウンド
+// フォント全体を常駐させるため、ワーカー数 × サウンドフォント分のメモリを
+// 使う。converter.CalculateWorkers(nil)はメモリを見ないので、
+// CPU数どおりに並列化すると小型機でメモリが枯渇する。2は並列の
+// 利点を残しつつ常駐メモリをサウンドフォント2つ分に抑える上限。
+const maxMidiWorkers = 2
+
+// why not: 下限の1を省かない。0以下をそのままNewConversionManagerへ渡すと
+// 「自動計算」と解釈されCPU数どおりのワーカー数に戻ってしまうため。
+func midiWorkerCount(cpuCount int) int {
+	return max(1, min(cpuCount, maxMidiWorkers))
+}
+
+// convertMidiFileList はmidiFilesをOGGへ変換し、失敗を集約して返す。
 //
 // why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
 // 失敗した全ファイルを把握できるようにするため。ただし1件でも失敗した場合は
 // エラーを返し、変換されなかったMIDIを指す.ogg参照がAPKへ混入するのを防ぐ。
-func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter) error {
+func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter, logger Logger) error {
+	return convertMidiFileListWith(midiFiles, midiConverter, nil, logger)
+}
+
+// convertMidiFileListWith はsleepがnilでなければConversionManagerのリトライ
+// 待機に使う。
+//
+// why not: 待機関数をパッケージ変数で差し替えられるようにしない。t.Parallel()
+// で並行に走るテストが同じ変数を書き換えるとデータ競合になるため、呼び出し
+// ごとの引数として受け取る。
+func convertMidiFileListWith(
+	midiFiles []string,
+	midiConverter *converter.MidiConverter,
+	sleep func(time.Duration),
+	logger Logger,
+) error {
+	tasks := make([]converter.FileTask, 0, len(midiFiles))
+	for _, midiFile := range midiFiles {
+		tasks = append(tasks, converter.FileTask{Source: midiFile, Dest: withSuffix(midiFile, ".ogg")})
+	}
+
+	manager := converter.NewConversionManager(
+		[]converter.Converter{midiConverter}, nil, midiWorkerCount(converter.CalculateWorkers(nil)), nil,
+	)
+	if sleep != nil {
+		manager.SleepFunc = sleep
+	}
+
+	results := manager.ConvertFiles(tasks).Results
+	// why not: ConvertFilesの結果は並列ワーカーの完了順に並び実行ごとに
+	// 変わるため、そのまま報告すると同じ失敗でもエラー文の並びが揺れる。
+	// 変換元パス順に並べ替えて報告を決定的にする。
+	slices.SortFunc(results, func(a, b converter.ConversionResult) int {
+		return cmp.Compare(a.SourcePath, b.SourcePath)
+	})
+
 	var failures []string
 
-	for _, midiFile := range midiFiles {
-		oggFile := withSuffix(midiFile, ".ogg")
-
-		result, err := midiConverter.Convert(midiFile, oggFile)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, err))
-
-			continue
-		}
+	for _, result := range results {
 		if result.Status != converter.StatusSuccess {
-			failures = append(failures, fmt.Sprintf("%s: %s", midiFile, result.Message))
+			failures = append(failures, fmt.Sprintf("%s: %s", result.SourcePath, result.Message))
 
 			continue
 		}
 
-		// why not: 削除失敗はビルドエラーに昇格させない。変換自体は成功して
-		// おり.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき無音に
-		// ならない（存在しないファイルを指す参照が残る不具合のクラスには該当
-		// しない）。残留した.midは再生されない死蔵アセットとしてAPKへ同梱
+		// why not: 削除失敗はビルドエラーに昇格させず警告に留める。変換自体は
+		// 成功しており.oggの実体が揃っているため、スクリプトの.ogg参照は解決でき
+		// 無音にならない（存在しないファイルを指す参照が残る不具合のクラスには
+		// 該当しない）。残留した.midは再生されない死蔵アセットとしてAPKへ同梱
 		// されるだけ（サイズ増のみ）であり、これでビルド全体を落とす方が
-		// 損害が大きい。本パッケージには
-		// ロガーの注入口が無いため警告出力も行わない（copyPolyfillFilesUsingの
-		// フォント取得失敗と同じ方針）。
-		_ = os.Remove(midiFile)
+		// 損害が大きい。
+		if err := os.Remove(result.SourcePath); err != nil {
+			logger.Warning(fmt.Sprintf("変換済みMIDIファイルを削除できませんでした（APKに残ります）: %v", err))
+		}
 	}
 
 	if len(failures) > 0 {
