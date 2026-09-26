@@ -1,6 +1,7 @@
 package charset_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,16 +61,34 @@ func TestDetect(t *testing.T) {
 		"正常系: UTF-8の日本語はutf-8と判定される": {
 			[]byte(japaneseText), "utf-8", true,
 		},
+		"正常系: 多バイト系候補が同じ信頼度で並ぶ短いShift_JISのｾｰﾌﾞはgb-18030と判定される": {
+			encodeShiftJIS(t, "ｾｰﾌﾞ"), "gb-18030", true,
+		},
+		"正常系: 多バイト系候補が同じ信頼度で並ぶ短いShift_JISのname=ｱｲﾃﾑはgb-18030と判定される": {
+			encodeShiftJIS(t, "name=ｱｲﾃﾑ"), "gb-18030", true,
+		},
+		"正常系: 多バイト系候補が同じ信頼度で並ぶ復号不能な短いバイト列はgb-18030と判定される": {
+			[]byte{0x6b, 0x3d, 0xca, 0xea, 0xba}, "gb-18030", true,
+		},
+		"異常系: chardetが推定できないバイト列はok=false": {
+			[]byte{0xff}, "", false,
+		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got, ok := charset.Detect(chardet.NewTextDetector(), tc.data)
+			detector := chardet.NewTextDetector()
 
-			assert.Equal(t, tc.expectedOK, ok)
-			assert.Equal(t, tc.expectedName, got)
+			// why: chardetは同じ信頼度の候補の順序が実行ごとに変わるため、1回の
+			// 一致だけでは推定結果が決定的であることを示せない。
+			for range 50 {
+				got, ok := charset.Detect(detector, tc.data)
+
+				require.Equal(t, tc.expectedOK, ok)
+				require.Equal(t, tc.expectedName, got)
+			}
 		})
 	}
 
@@ -84,4 +103,111 @@ func TestDetect(t *testing.T) {
 		assert.True(t, ok)
 		assert.NotEqual(t, "ascii", got)
 	})
+}
+
+func TestBestResult(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		results  []chardet.Result
+		expected chardet.Result
+		ok       bool
+	}{
+		"正常系: 信頼度が最も高い候補を選ぶ": {
+			results: []chardet.Result{
+				{Charset: "Shift_JIS", Confidence: 10},
+				{Charset: "Big5", Confidence: 30},
+				{Charset: "ISO-8859-1", Confidence: 20},
+			},
+			expected: chardet.Result{Charset: "Big5", Confidence: 30},
+			ok:       true,
+		},
+		"正常系: 同じ信頼度の多バイト系候補はShift_JIS・GB-18030・EUC-JP・EUC-KR・Big5の順で先頭を選ぶ": {
+			results: []chardet.Result{
+				{Charset: "Big5", Confidence: 10},
+				{Charset: "EUC-KR", Confidence: 10},
+				{Charset: "EUC-JP", Confidence: 10},
+				{Charset: "GB-18030", Confidence: 10},
+				{Charset: "Shift_JIS", Confidence: 10},
+			},
+			expected: chardet.Result{Charset: "Shift_JIS", Confidence: 10},
+			ok:       true,
+		},
+		"正常系: Shift_JISが無ければ同じ信頼度のGB-18030をEUC-JP・EUC-KR・Big5より優先する": {
+			results: []chardet.Result{
+				{Charset: "Big5", Confidence: 10},
+				{Charset: "EUC-KR", Confidence: 10},
+				{Charset: "EUC-JP", Confidence: 10},
+				{Charset: "GB-18030", Confidence: 10},
+			},
+			expected: chardet.Result{Charset: "GB-18030", Confidence: 10},
+			ok:       true,
+		},
+		"正常系: 同じ信頼度なら多バイト系候補をそれ以外の候補より優先する": {
+			results: []chardet.Result{
+				{Charset: "ISO-8859-1", Confidence: 10},
+				{Charset: "Shift_JIS", Confidence: 10},
+			},
+			expected: chardet.Result{Charset: "Shift_JIS", Confidence: 10},
+			ok:       true,
+		},
+		"正常系: 同じ信頼度の多バイト系以外の候補は名前の昇順で先頭を選ぶ": {
+			results: []chardet.Result{
+				{Charset: "windows-1252", Confidence: 10},
+				{Charset: "ISO-8859-1", Confidence: 10},
+			},
+			expected: chardet.Result{Charset: "ISO-8859-1", Confidence: 10},
+			ok:       true,
+		},
+		"異常系: 空の候補はok=falseになる": {
+			results: []chardet.Result{},
+		},
+		"異常系: nilの候補はok=falseになる": {
+			results: nil,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// why: chardetのDetectAllは同じ信頼度の候補を実行ごとに異なる順で返すため、
+			// 入力の並びを変えても同じ候補が選ばれることを確認する。
+			for _, results := range orderings(tc.results) {
+				got, ok := charset.BestResult(results)
+
+				require.Equal(t, tc.ok, ok, "入力順: %v", results)
+				require.Equal(t, tc.expected, got, "入力順: %v", results)
+			}
+		})
+	}
+}
+
+// orderings はresultsの全ローテーションとその逆順を返す。各候補が先頭と末尾の
+// 両方に来る並びを含む。
+func orderings(results []chardet.Result) [][]chardet.Result {
+	if len(results) == 0 {
+		return [][]chardet.Result{results}
+	}
+
+	reversed := slices.Clone(results)
+	slices.Reverse(reversed)
+
+	var all [][]chardet.Result
+	for _, base := range [][]chardet.Result{results, reversed} {
+		for i := range len(base) {
+			all = append(all, slices.Concat(base[i:], base[:i]))
+		}
+	}
+
+	return all
+}
+
+func encodeShiftJIS(t *testing.T, text string) []byte {
+	t.Helper()
+
+	encoded, err := japanese.ShiftJIS.NewEncoder().String(text)
+	require.NoError(t, err)
+
+	return []byte(encoded)
 }

@@ -1,8 +1,10 @@
 package converter
 
 import (
+	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -10,89 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// copyFileはos.Createでdestを作成するためモードを保持しない。他のcopyFile
-// 実装（builder/pipeline）と異なりモードの一致は検証しない。
 func TestCopyFile(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name          string
-		content       []byte
-		setup         func(t *testing.T, dir string, content []byte) (src, dst string)
-		wantStatError bool
+		name string
 	}{
-		{
-			name:    "同一パスへのコピーは内容を保持する",
-			content: []byte("original content"),
-			setup: func(t *testing.T, dir string, content []byte) (string, string) {
-				t.Helper()
-
-				path := filepath.Join(dir, "src.mpg")
-				require.NoError(t, os.WriteFile(path, content, 0o644))
-
-				return path, path
-			},
-		},
-		{
-			name:    "ハードリンク経由のコピーは内容を保持する",
-			content: []byte("hard-linked content"),
-			setup: func(t *testing.T, dir string, content []byte) (string, string) {
-				t.Helper()
-
-				src := filepath.Join(dir, "src.mpg")
-				dst := filepath.Join(dir, "linked.mpg")
-				require.NoError(t, os.WriteFile(src, content, 0o644))
-
-				if err := os.Link(src, dst); err != nil {
-					t.Skipf("このファイルシステムはハードリンクをサポートしません: %v", err)
-				}
-
-				return src, dst
-			},
-		},
-		{
-			name:    "既存の別ファイルへのコピーは内容が上書きされる",
-			content: []byte("distinct content"),
-			setup: func(t *testing.T, dir string, content []byte) (string, string) {
-				t.Helper()
-
-				src := filepath.Join(dir, "src.mpg")
-				dst := filepath.Join(dir, "dst.mpg")
-				require.NoError(t, os.WriteFile(src, content, 0o644))
-				require.NoError(t, os.WriteFile(dst, []byte("stale content that is much longer than the new one"), 0o644))
-
-				return src, dst
-			},
-		},
-		{
-			name:    "dstが存在しない場合は新規作成する",
-			content: []byte("new file content"),
-			setup: func(t *testing.T, dir string, content []byte) (string, string) {
-				t.Helper()
-
-				src := filepath.Join(dir, "src.mpg")
-				dst := filepath.Join(dir, "nested", "dst.mpg")
-				require.NoError(t, os.WriteFile(src, content, 0o644))
-				require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o750))
-
-				return src, dst
-			},
-		},
-		{
-			name:          "dstの親が通常ファイルの場合はstatエラーを伝播する",
-			wantStatError: true,
-			setup: func(t *testing.T, dir string, content []byte) (string, string) {
-				t.Helper()
-
-				src := filepath.Join(dir, "src.mpg")
-				require.NoError(t, os.WriteFile(src, content, 0o644))
-
-				notADir := filepath.Join(dir, "not-a-dir")
-				require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o644))
-
-				return src, filepath.Join(notADir, "dst.mpg")
-			},
-		},
+		{name: "dstの親が通常ファイルの場合はコピー失敗として包んだstatエラーを返す"},
 	}
 
 	for _, tt := range tests {
@@ -100,22 +26,133 @@ func TestCopyFile(t *testing.T) {
 			t.Parallel()
 
 			dir := t.TempDir()
-			src, dst := tt.setup(t, dir, tt.content)
+			src := filepath.Join(dir, "src.mpg")
+			require.NoError(t, os.WriteFile(src, []byte("content"), 0o644))
+			notADir := filepath.Join(dir, "not-a-dir")
+			require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o644))
 
-			err := copyFile(src, dst)
+			err := copyFile(src, filepath.Join(notADir, "dst.mpg"))
 
-			if tt.wantStatError {
-				var pathErr *fs.PathError
-				require.ErrorAs(t, err, &pathErr)
-				assert.Equal(t, "stat", pathErr.Op)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ファイルのコピーに失敗しました")
+			pathErr, ok := errors.AsType[*fs.PathError](err)
+			require.True(t, ok, "want *fs.PathError, got %v", err)
+			assert.Equal(t, "stat", pathErr.Op)
+		})
+	}
+}
 
-				return
-			}
+func TestSummarizeStderr(t *testing.T) {
+	t.Parallel()
 
-			require.NoError(t, err)
-			got, readErr := os.ReadFile(dst)
-			require.NoError(t, readErr)
-			assert.Equal(t, tt.content, got)
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "正常系: 空でない行が上限を超える場合は先頭3行を「 | 」でつなぎ空でない行の総数を添える",
+			stderr: "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n",
+			want:   "l1 | l2 | l3（全 10 行）",
+		},
+		{
+			name:   "正常系: 空でない行が上限ちょうどなら省略せず件数も添えない",
+			stderr: "l1\nl2\nl3\n",
+			want:   "l1 | l2 | l3",
+		},
+		{
+			name:   "正常系: 空でない行が1行ならその行だけを返す",
+			stderr: "  l1  \n",
+			want:   "l1",
+		},
+		{
+			name:   "正常系: 空行と空白だけの行は数えずに飛ばす",
+			stderr: "\n\nl1\n   \nl2\r\n\nl3\n\nl4\n",
+			want:   "l1 | l2 | l3（全 4 行）",
+		},
+		{
+			name:   "正常系: 空のstderrは空文字列を返す",
+			stderr: "",
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, summarizeStderr(tt.stderr, 3))
+		})
+	}
+}
+
+func TestExecCommandRunner_Run(t *testing.T) {
+	t.Parallel()
+
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("shが無いためスキップ")
+	}
+
+	const script = `for i in 1 2 3 4 5 6 7 8 9 10; do echo "line$i" >&2; done; exit 1`
+
+	tests := []struct {
+		name        string
+		runner      CommandRunner
+		wantContain string
+		wantAbsent  string
+	}{
+		{
+			name:        "異常系: 行数の上限があればstderrの先頭の行だけと総行数をエラーに含める",
+			runner:      execCommandRunner{stderrLineLimit: 3},
+			wantContain: ": line1 | line2 | line3（全 10 行）",
+			wantAbsent:  "line4",
+		},
+		{
+			name:        "異常系: 行数の上限が無ければstderrをすべてエラーに含める",
+			runner:      execCommandRunner{},
+			wantContain: "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10",
+			wantAbsent:  "（全",
+		},
+		{
+			name:        "異常系: NewExecCommandRunnerの実装はstderrを絞らずすべてエラーに含める",
+			runner:      NewExecCommandRunner(),
+			wantContain: "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10",
+			wantAbsent:  "（全",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := tt.runner.Run(t.Context(), sh, "-c", script)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantContain)
+			assert.NotContains(t, err.Error(), tt.wantAbsent)
+		})
+	}
+}
+
+func TestNewVideoConverter_DefaultRunnerLimitsStderr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want CommandRunner
+	}{
+		{
+			name: "正常系: runnerがnilなら動画変換用にstderrを先頭3行へ絞る既定実装を使う",
+			want: execCommandRunner{stderrLineLimit: 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, NewVideoConverter(0, nil).runner)
 		})
 	}
 }

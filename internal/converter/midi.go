@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +28,12 @@ var (
 var (
 	// ErrSoundfontNotFound はMidiConverterに設定されたサウンドフォントが存在しない場合のエラー。
 	ErrSoundfontNotFound = errors.New("サウンドフォントが見つかりません")
+	// ErrSoundfontUnreadable は存在しない以外の理由でMidiConverterに設定された
+	// サウンドフォントを確認できない場合のエラー。OSのエラーを%wで保持する。
+	//
+	// why not: ErrSourceUnreadableは流用しない。その文言は変換元ファイルを指し、
+	// 変換元ではなく設定されたサウンドフォントの問題であることが利用者に伝わらない。
+	ErrSoundfontUnreadable = errors.New("サウンドフォントを読み込めません")
 	// ErrFluidsynthFailed はFluidSynthによるMIDIからWAVへのレンダリングが失敗した場合のエラー。
 	// CommandRunnerが返したエラーを%wで保持する。
 	ErrFluidsynthFailed = errors.New("FluidSynth変換に失敗しました")
@@ -60,6 +68,9 @@ type MidiConverter struct {
 	timeout         time.Duration
 	runner          CommandRunner
 	silenceDetector trailingSilenceDetector
+	// dynamicSampleLoading はFluidSynthのバージョン確認結果を変換器ごとに1回だけ
+	// 求めて保持する。ConversionManagerのワーカーから並行に呼ばれる。
+	dynamicSampleLoading func() bool
 }
 
 // NewMidiConverter はMidiConverterを初期化する。
@@ -98,7 +109,7 @@ func NewMidiConverter(
 		runner = NewExecCommandRunner()
 	}
 
-	return &MidiConverter{
+	c := &MidiConverter{
 		soundfontPath:   soundfontPath,
 		sampleRate:      sampleRate,
 		audioCodec:      audioCodec,
@@ -107,6 +118,9 @@ func NewMidiConverter(
 		runner:          runner,
 		silenceDetector: newTrailingSilenceDetector(runner, timeout),
 	}
+	c.dynamicSampleLoading = sync.OnceValue(c.supportsDynamicSampleLoading)
+
+	return c
 }
 
 // SoundfontPath は使用するサウンドフォントのパスを返す。
@@ -156,15 +170,17 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // Convert はMIDIファイルをOGG Vorbis形式に変換し、destへ出力する。
 //
 // 実行される実効的なコマンドは以下の通り:
-// `fluidsynth -ni -g 1.0 -r <sampleRate> -F <一時WAV> <soundfont> <source>`
+// `fluidsynth -ni -g 1.0 -r <sampleRate> [-o synth.dynamic-sample-loading=1] -F <一時WAV> <soundfont> <source>`
 // に続けて
 // `ffmpeg -y -i <一時WAV> -c:a <audioCodec> -q:a <audioQuality> <dest>`
 //
 // 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
 // ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
 // それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
-// サウンドフォントが存在しない場合はErrSoundfontNotFoundを
-// ErrPermanentFailureでラップして返す。FluidSynthの失敗はErrFluidsynthFailed、
+// サウンドフォントが存在しない場合はErrSoundfontNotFoundを、権限不足で確認できない
+// 場合はOSのエラーを包んだErrSoundfontUnreadableを、いずれもErrPermanentFailureで
+// ラップして返し、それ以外の理由で確認できない場合はErrSoundfontUnreadableを
+// 再試行対象として返す。FluidSynthの失敗はErrFluidsynthFailed、
 // FFmpegの失敗はErrMidiFFmpegFailed、出力先ディレクトリ・一時WAVの作成失敗は
 // OSのエラーを%wで保持して返し、いずれも再試行対象とする。errがnilのとき、
 // StatusはStatusSuccessとなる。
@@ -180,7 +196,7 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	}
 
 	if _, err := os.Stat(c.soundfontPath); err != nil {
-		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %s", ErrSoundfontNotFound, c.soundfontPath))
+		return ConversionResult{SourcePath: source}, classifyPathError(c.soundfontPath, err, ErrSoundfontNotFound, ErrSoundfontUnreadable)
 	}
 
 	bytesBefore := getFileSize(source)
@@ -221,23 +237,117 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 // runFluidsynth はFluidSynthを実行してsourceをwavOutputへレンダリングする。
 // 失敗時はErrFluidsynthFailedでラップしたエラーを返す。
 func (c *MidiConverter) runFluidsynth(source, wavOutput string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-
 	args := []string{
 		"-ni",       // No interactive mode, no shell
 		"-g", "1.0", // Gain
 		"-r", strconv.Itoa(c.sampleRate), // Sample rate
+	}
+	// why not: レンダリング用のタイムアウトを作ってから確認しない。初回だけ
+	// バージョン確認の所要時間がレンダリングの持ち時間から差し引かれてしまう。
+	if c.dynamicSampleLoading() {
+		args = append(args, "-o", "synth.dynamic-sample-loading=1")
+	}
+	args = append(args,
 		"-F", wavOutput, // Output file
 		c.soundfontPath,
 		source,
-	}
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
 
 	if _, err := c.runner.Run(ctx, "fluidsynth", args...); err != nil {
 		return fmt.Errorf("%w: %w", ErrFluidsynthFailed, err)
 	}
 
 	return nil
+}
+
+// dynamicSampleLoadingMinVersion は synth.dynamic-sample-loading を有効にする
+// FluidSynthの下限バージョン。
+//
+// why not: この設定を無条件には付与しない。設定自体が2.0.0で導入されたもので
+// （FluidSynth#366）、有効時の不具合がその後の版で順に修正されてきた
+// （NULL参照のFluidSynth#635など）。2.4.4のリリースノートには、46サンプルの
+// ゼロ詰めを守らないサウンドフォントが有効時に正しく鳴らない不具合の修正
+// （FluidSynth#1484）が載っており、それより前の版では音が崩れうる。
+var dynamicSampleLoadingMinVersion = fluidsynthVersion{major: 2, minor: 4, patch: 4}
+
+// DynamicSampleLoadingMinVersion はMidiConverterが動的サンプル読み込みを有効にする
+// FluidSynthの下限バージョンを "x.y.z" 形式で返す。
+func DynamicSampleLoadingMinVersion() string {
+	return dynamicSampleLoadingMinVersion.String()
+}
+
+// fluidsynthVersionPattern は fluidsynth --version の出力から最初の x.y.z を
+// 取り出す。先頭行が実際に使われるライブラリの版（FluidSynth runtime version）である。
+var fluidsynthVersionPattern = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
+
+// fluidsynthVersion はFluidSynthのバージョン番号を表す値。
+type fluidsynthVersion struct {
+	major, minor, patch int
+}
+
+// parseFluidsynthVersion は fluidsynth --version の出力からバージョンを読み取る。
+// 読み取れない場合はokがfalseとなる。
+func parseFluidsynthVersion(output string) (fluidsynthVersion, bool) {
+	m := fluidsynthVersionPattern.FindStringSubmatch(output)
+	if m == nil {
+		return fluidsynthVersion{}, false
+	}
+
+	var parts [3]int
+	for i, digits := range m[1:] {
+		n, err := strconv.Atoi(digits)
+		if err != nil {
+			return fluidsynthVersion{}, false
+		}
+		parts[i] = n
+	}
+
+	return fluidsynthVersion{major: parts[0], minor: parts[1], patch: parts[2]}, true
+}
+
+func (v fluidsynthVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d", v.major, v.minor, v.patch)
+}
+
+func (v fluidsynthVersion) atLeast(minVersion fluidsynthVersion) bool {
+	return cmp.Or(
+		cmp.Compare(v.major, minVersion.major),
+		cmp.Compare(v.minor, minVersion.minor),
+		cmp.Compare(v.patch, minVersion.patch),
+	) >= 0
+}
+
+// supportsDynamicSampleLoading はFluidSynthのバージョンを確認し、
+// synth.dynamic-sample-loading を有効にできるかを返す。
+//
+// FluidSynthは既定では1プロセスごとにサウンドフォントの全サンプルをメモリへ
+// 読み込む。動的サンプル読み込みはプリセットの選択時に必要なサンプルだけを
+// 読み込む。公式の設定ドキュメント（doc/fluidsettings.xml）は、メモリ確保を
+// 伴うためリアルタイム用途には安全でないとしたうえで、有効にする場面として
+// "when rendering to a WAVE file using the fast-file-renderer" を挙げており、
+// -F によるファイルレンダリングはこれに当たる。
+//
+// why not: MIDI変換のワーカー数の上限だけでメモリ使用量を抑えることはしない。
+// 上限が抑えるのは同時に動くプロセスの数であり、1プロセスあたりの使用量は
+// 変わらない。
+//
+// why not: バージョン確認の失敗や読み取れない出力を変換の失敗として扱わない。
+// 確認できないときは既定の読み込み方式でレンダリングすれば変換自体は成立する。
+func (c *MidiConverter) supportsDynamicSampleLoading() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+
+	out, err := c.runner.Run(ctx, "fluidsynth", "--version")
+	if err != nil {
+		return false
+	}
+
+	version, ok := parseFluidsynthVersion(string(out))
+
+	return ok && version.atLeast(dynamicSampleLoadingMinVersion)
 }
 
 // runFFmpeg はFFmpegを実行してwavInputをoggOutputへ変換する。

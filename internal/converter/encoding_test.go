@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +32,48 @@ func TestSupportedEncodings(t *testing.T) {
 
 	for _, want := range []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949", "utf-16le", "utf-16be"} {
 		assert.Contains(t, converter.SupportedEncodings, want)
+	}
+}
+
+func TestSelectableSourceEncodings(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949"}, converter.SelectableSourceEncodings)
+}
+
+func TestIsSelectableSourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		enc  string
+		want bool
+	}{
+		{name: "正常系: shift_jisは指定できる", enc: "shift_jis", want: true},
+		{name: "正常系: 大文字とハイフン区切りのShift-JISも指定できる", enc: "Shift-JIS", want: true},
+		{name: "正常系: 別名sjisも指定できる", enc: "sjis", want: true},
+		{name: "正常系: Windowsのコードページ名cp932も指定できる", enc: "cp932", want: true},
+		{name: "正常系: Windowsのコードページ名windows-31jも指定できる", enc: "windows-31j", want: true},
+		{name: "正常系: euc-jpは指定できる", enc: "euc-jp", want: true},
+		{name: "正常系: utf-8は指定できる", enc: "utf-8", want: true},
+		{name: "正常系: 別名utf8も指定できる", enc: "utf8", want: true},
+		{name: "正常系: gb2312は指定できる", enc: "gb2312", want: true},
+		{name: "正常系: gb18030は指定できる", enc: "gb18030", want: true},
+		{name: "正常系: big5は指定できる", enc: "big5", want: true},
+		{name: "正常系: cp949は指定できる", enc: "cp949", want: true},
+		{name: "異常系: utf-16leは変換元としての指定を受け付けない", enc: "utf-16le", want: false},
+		{name: "異常系: utf-16beは変換元としての指定を受け付けない", enc: "utf-16be", want: false},
+		{name: "異常系: 別名utf-16も変換元としての指定を受け付けない", enc: "utf-16", want: false},
+		{name: "異常系: 空文字列は指定できない", enc: "", want: false},
+		{name: "異常系: 未知の名前は指定できない", enc: "klingon", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, converter.IsSelectableSourceEncoding(tt.enc))
+		})
 	}
 }
 
@@ -231,6 +276,9 @@ func TestEncodingDetector_IsTextFile(t *testing.T) {
 		{"正常系: simple crypt mode 1はNULを含んでもテキストファイル", encodeSimpleCrypt(t, "[playbgm storage=\"bgm.mid\"]", 1), true},
 		{"正常系: simple crypt mode 2はNULを含んでもテキストファイル", encodeSimpleCryptCompressed(t, "[playbgm storage=\"bgm.mid\"]"), true},
 		{"正常系: 未対応モードのsimple cryptは通常判定に落ちNULを含むためバイナリファイル", []byte{0xfe, 0xfe, 0x03, 0xff, 0xfe, 0x41, 0x00}, false},
+		{"正常系: 文字コードを推定できないShift_JISの1文字もNULを含まなければテキストファイル", encodeWith(t, japanese.ShiftJIS, "猫"), true},
+		{"正常系: 文字コードを推定できないバイト列もNULを含まなければテキストファイル", []byte{0x94}, true},
+		{"正常系: NULを含むデータはバイナリファイル", []byte("[l]\x00[r]"), false},
 	}
 
 	for _, tc := range utf16Cases {
@@ -325,6 +373,212 @@ func TestEncodingConverter_CanConvert(t *testing.T) {
 
 		assert.False(t, c.CanConvert(binaryPath))
 	})
+
+	t.Run("正常系: 対応拡張子でもNULを含む内容はFalse", func(t *testing.T) {
+		t.Parallel()
+
+		path := filepath.Join(t.TempDir(), "bin.ks")
+		writeFile(t, path, []byte{'a', 0x00, 'b'})
+		c := converter.NewEncodingConverter("", "")
+
+		assert.False(t, c.CanConvert(path))
+	})
+
+	readFailureCases := []struct {
+		name       string
+		skipAsRoot bool
+		setup      func(t *testing.T) string
+		expected   bool
+	}{
+		{
+			name: "正常系: 対応拡張子で存在しないファイルは変換時に失敗を報告させるためTrue",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return filepath.Join(t.TempDir(), "missing.ks")
+			},
+			expected: true,
+		},
+		{
+			name:       "正常系: 対応拡張子で探索権限の無いディレクトリ配下のファイルはTrue",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return writeFileInLockedDir(t, "script.ks", []byte("test content"))
+			},
+			expected: true,
+		},
+		{
+			name:       "正常系: 対応拡張子で読み込み権限の無いファイルはTrue",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "script.ks")
+				writeFile(t, path, []byte("test content"))
+				require.NoError(t, os.Chmod(path, 0o000))
+
+				return path
+			},
+			expected: true,
+		},
+		{
+			name: "正常系: 非対応拡張子で存在しないファイルはFalse",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return filepath.Join(t.TempDir(), "missing.png")
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range readFailureCases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			path := tt.setup(t)
+			c := converter.NewEncodingConverter("", "")
+
+			assert.Equal(t, tt.expected, c.CanConvert(path))
+		})
+	}
+}
+
+func TestEncodingConverter_CanConvert_ThroughManager(t *testing.T) {
+	t.Parallel()
+
+	t.Run("異常系: 探索権限の無いディレクトリ配下の.ksはスキップせず読み込めない失敗として報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		source := writeFileInLockedDir(t, "script.ks", []byte("test content"))
+		m := converter.NewConversionManager([]converter.Converter{converter.NewEncodingConverter("", "")}, nil, 1, nil)
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(t.TempDir(), "script.ks")}})
+
+		require.Len(t, summary.Results, 1)
+		result := summary.Results[0]
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Contains(t, result.Message, "読み込めません")
+		assert.Contains(t, result.Message, "permission denied")
+		assert.Contains(t, result.Message, source)
+	})
+
+	t.Run("異常系: 読み込み権限の無い.ksファイルは再試行せず読み込めない失敗として報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		source := filepath.Join(t.TempDir(), "script.ks")
+		writeFile(t, source, []byte("test content"))
+		require.NoError(t, os.Chmod(source, 0o000))
+
+		conv := &countingConverter{Converter: converter.NewEncodingConverter("", "")}
+		rc := converter.RetryConfig{MaxAttempts: 3, BackoffBase: 1, BackoffMultiplier: 2}
+		m := converter.NewConversionManager([]converter.Converter{conv}, &rc, 1, nil)
+		m.SleepFunc = func(time.Duration) {}
+
+		summary := m.ConvertFiles([]converter.FileTask{{Source: source, Dest: filepath.Join(t.TempDir(), "script.ks")}})
+
+		require.Len(t, summary.Results, 1)
+		result := summary.Results[0]
+		assert.Equal(t, converter.StatusFailed, result.Status)
+		assert.Contains(t, result.Message, "読み込めません")
+		assert.Contains(t, result.Message, "permission denied")
+		assert.Equal(t, 1, strings.Count(result.Message, source))
+		assert.NotContains(t, result.Message, "最大リトライ回数超過")
+		assert.Equal(t, int32(1), conv.calls.Load())
+	})
+}
+
+// countingConverter はConvertの呼び出し回数を数えるConverter。
+type countingConverter struct {
+	converter.Converter
+
+	calls atomic.Int32
+}
+
+func (c *countingConverter) Convert(source, dest string) (converter.ConversionResult, error) {
+	c.calls.Add(1)
+
+	return c.Converter.Convert(source, dest)
+}
+
+func TestEncodingConverter_Convert_ReadFailure(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		skipAsRoot    bool
+		setup         func(t *testing.T) string
+		wantOSErr     error
+		wantPermanent bool
+	}{
+		{
+			name:       "異常系: 読み込み権限の無い変換元は再試行不要なErrSourceUnreadableになる",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "source.txt")
+				writeFile(t, path, []byte("plain ascii text"))
+				require.NoError(t, os.Chmod(path, 0o000))
+
+				return path
+			},
+			wantOSErr:     fs.ErrPermission,
+			wantPermanent: true,
+		},
+		{
+			name: "異常系: ディレクトリの変換元は再試行対象のErrSourceUnreadableになる",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "source.txt")
+				mkdirAll(t, path)
+
+				return path
+			},
+			wantOSErr:     syscall.EISDIR,
+			wantPermanent: false,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			source := tt.setup(t)
+			c := converter.NewEncodingConverter("", "")
+			result, err := c.Convert(source, filepath.Join(t.TempDir(), "dest.txt"))
+
+			require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+			require.ErrorIs(t, err, tt.wantOSErr)
+			require.NotErrorIs(t, err, converter.ErrSourceNotFound)
+			assert.Equal(t, 1, strings.Count(err.Error(), source))
+			if tt.wantPermanent {
+				require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			} else {
+				require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			}
+			assert.Equal(t, source, result.SourcePath)
+		})
+	}
 }
 
 func TestEncodingConverter_Convert(t *testing.T) {
@@ -437,6 +691,23 @@ func TestEncodingConverter_Convert(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, converter.StatusSuccess, result.Status)
 		assertFileUTF8Equals(t, dest, text)
+	})
+
+	t.Run("正常系: 自動検出ではutf-8と推定される半角カナだけのShift_JISも指定されたshift_jisで変換する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "config.ini")
+		dest := filepath.Join(dir, "dest.ini")
+		// Shift_JISの"title=ﾀｲ"。chardetはC0 B2を有効なUTF-8の並びと数え、utf-8と推定する。
+		writeFile(t, source, []byte("title=\xc0\xb2"))
+
+		c := converter.NewEncodingConverter("", "shift_jis")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSuccess, result.Status)
+		assertFileUTF8Equals(t, dest, "title=ﾀｲ")
 	})
 
 	t.Run("正常系: 変換前後のバイト数が記録される", func(t *testing.T) {
@@ -611,6 +882,83 @@ func TestEncodingConverter_Convert_UTF16(t *testing.T) {
 		require.ErrorIs(t, err, converter.ErrPermanentFailure)
 		assert.NoFileExists(t, dest)
 	})
+}
+
+// TestEncodingConverter_Convert_ExplicitSourceWithBOM は、変換元エンコーディングを
+// 明示した場合でも、BOMで始まるデータはBOMが示すエンコーディングで復号することを検証する。
+func TestEncodingConverter_Convert_ExplicitSourceWithBOM(t *testing.T) {
+	t.Parallel()
+
+	const text = "title=名前"
+
+	bom := []byte{0xef, 0xbb, 0xbf}
+
+	tests := []struct {
+		name     string
+		fileName string
+		content  []byte
+		want     []byte
+		// wantUndecodable が真なら、変換は不正なUTF-8として失敗する。
+		wantUndecodable bool
+	}{
+		{
+			name:     "正常系: UTF-8 BOM付きのファイルはshift_jisの指定によらずUTF-8として読む",
+			fileName: "config.ini",
+			content:  append(append([]byte{}, bom...), text...),
+			want:     []byte(text),
+		},
+		{
+			name:     "正常系: UTF-16LE BOM付きのファイルはshift_jisの指定によらずUTF-16LEとして読む",
+			fileName: "config.ini",
+			content:  encodeUTF16(text, false, true),
+			want:     append(append([]byte{}, bom...), text...),
+		},
+		{
+			name:     "正常系: UTF-16BE BOM付きのファイルはshift_jisの指定によらずUTF-16BEとして読む",
+			fileName: "config.ini",
+			content:  encodeUTF16(text, true, true),
+			want:     append(append([]byte{}, bom...), text...),
+		},
+		{
+			name:     "正常系: BOM無しのUTF-8は指定どおりShift_JISとして読む",
+			fileName: "config.ini",
+			content:  []byte(text),
+			// UTF-8の"名前"(E5 90 8D E5 89 8D)をShift_JISとして読んだ結果。
+			want: []byte("title=蜷榊燕"),
+		},
+		{
+			name:            "異常系: UTF-8 BOMの後ろが不正なUTF-8ならShift_JISとして読み直さず失敗する",
+			fileName:        "config.ini",
+			content:         append(append([]byte{}, bom...), "title=\xc0\xb2"...),
+			wantUndecodable: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.content)
+
+			c := converter.NewEncodingConverter("", "shift_jis")
+			result, err := c.Convert(source, dest)
+
+			if tt.wantUndecodable {
+				require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+				require.ErrorContains(t, err, "不正なUTF-8バイト列です")
+				assert.NoFileExists(t, dest)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, converter.StatusSuccess, result.Status)
+			assert.Equal(t, tt.want, readFile(t, dest))
+		})
+	}
 }
 
 func TestEncodingConverter_Convert_SimpleCrypt(t *testing.T) {
@@ -1079,6 +1427,53 @@ func TestEncodingDetector_DetectBytes_ChardetLabels(t *testing.T) {
 			wantSupported:  true,
 		},
 		{
+			name:           "前提: Shift_JISの1文字の猫はどの文字コードとも推定されない",
+			data:           encodeWith(t, japanese.ShiftJIS, "猫"),
+			wantEncoding:   "",
+			wantConfidence: 0,
+		},
+		{
+			name:           "前提: 不正なUTF-8であるLatin-1のcaf\\xe9は低信頼度のutf-8と推定される",
+			data:           []byte("caf\xe9"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 0.1,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: UTF-8 BOMの後ろが不正なUTF-8のcaf\\xe9は高信頼度のutf-8と推定される",
+			data:           []byte("\xef\xbb\xbfcaf\xe9"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 1.0,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: UTF-8 BOMに続く短いShift_JISの[config]\\ntitle=猫はwindows-1252と推定される",
+			data:           append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫")...),
+			wantEncoding:   "windows-1252",
+			wantConfidence: 0.7,
+		},
+		{
+			name:           "前提: UTF-8 BOMに続くShift_JISの1文字の猫は低信頼度のshift_jisと推定される",
+			data:           append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "猫")...),
+			wantEncoding:   "shift_jis",
+			wantConfidence: 0.1,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: 末尾の文字が途切れたUTF-8は途切れた並びが数えられず高信頼度のutf-8と推定される",
+			data:           []byte("猫猫猫猫\xe7\x8c"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 1.0,
+			wantSupported:  true,
+		},
+		{
+			name:           "前提: 半角カナだけの短いShift_JISのtitle=ﾀｲはC0 B2が有効な並びと数えられutf-8と推定される",
+			data:           encodeWith(t, japanese.ShiftJIS, "title=ﾀｲ"),
+			wantEncoding:   "utf-8",
+			wantConfidence: 0.8,
+			wantSupported:  true,
+		},
+		{
 			name:           "前提: 非ASCIIが少ない正しいUTF-8のtitle=名前はwindows-1252と推定される",
 			data:           []byte("title=名前"),
 			wantEncoding:   "windows-1252",
@@ -1179,6 +1574,12 @@ func TestEncodingConverter_Convert_AutoDetectedSource(t *testing.T) {
 			want:     []byte("name=ｱｲﾃﾑ"),
 		},
 		{
+			name:     "正常系: 文字コードを推定できないShift_JISの1文字の.csvはShift_JISとして変換される",
+			fileName: "name.csv",
+			data:     encodeWith(t, japanese.ShiftJIS, "猫"),
+			want:     []byte("猫"),
+		},
+		{
 			name:     "正常系: gb18030と推定されるGBKの中国語はGB18030として変換される",
 			fileName: "readme.txt",
 			data:     encodeWith(t, simplifiedchinese.GBK, "这是一个中文测试文本，用于检测编码。"),
@@ -1258,12 +1659,112 @@ func TestEncodingConverter_Convert_AutoDetectedSource(t *testing.T) {
 		assert.Equal(t, converter.StatusSkipped, result.Status)
 	})
 
+	t.Run("正常系: 空の.txtはSKIPPEDになる", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "empty.txt")
+		dest := filepath.Join(dir, "out", "empty.txt")
+		writeFile(t, source, []byte{})
+
+		c := converter.NewEncodingConverter("", "")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+
+	t.Run("正常系: 変換先と同じ指定のShift_JISはUTF-8として不正でもSKIPPEDになる", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		source := filepath.Join(dir, "readme.txt")
+		dest := filepath.Join(dir, "out", "readme.txt")
+		writeFile(t, source, encodeWith(t, japanese.ShiftJIS, "猫"))
+
+		c := converter.NewEncodingConverter("shift_jis", "shift_jis")
+		result, err := c.Convert(source, dest)
+
+		require.NoError(t, err)
+		assert.Equal(t, converter.StatusSkipped, result.Status)
+	})
+
+	invalidUTF8Tests := []struct {
+		name           string
+		fileName       string
+		sourceEncoding string
+		data           []byte
+	}{
+		{
+			name:           "異常系: 変換元にutf-8を指定されても不正なUTF-8バイト列はSKIPPEDにせず再試行不要なエラーにする",
+			fileName:       "readme.txt",
+			sourceEncoding: "utf-8",
+			data:           []byte("caf\xe9"),
+		},
+		{
+			name:     "異常系: utf-8と推定される不正なUTF-8のLatin-1はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     []byte("caf\xe9"),
+		},
+		{
+			name:     "異常系: 末尾の文字が途切れたUTF-8はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "first.ks",
+			data:     []byte("猫猫猫猫\xe7\x8c"),
+		},
+		{
+			name:     "既知の制限: 半角カナだけの短いShift_JISはutf-8と推定され変換できない",
+			fileName: "config.ini",
+			data:     encodeWith(t, japanese.ShiftJIS, "title=ﾀｲ"),
+		},
+		{
+			name:     "異常系: utf-8と推定されるUTF-8 BOM付きの不正なUTF-8はShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     []byte("\xef\xbb\xbfcaf\xe9"),
+		},
+		{
+			name:     "異常系: windows-1252と推定されるUTF-8 BOM付きのShift_JISもShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫")...),
+		},
+		{
+			name:     "異常系: shift_jisと推定されるUTF-8 BOM付きのShift_JISもShift_JISとして読まず再試行不要なエラーにする",
+			fileName: "readme.txt",
+			data:     append([]byte("\xef\xbb\xbf"), encodeWith(t, japanese.ShiftJIS, "猫")...),
+		},
+	}
+
+	for _, tt := range invalidUTF8Tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			_, err := c.Convert(source, dest)
+
+			require.ErrorIs(t, err, converter.ErrEncodingConversionFailed)
+			require.ErrorIs(t, err, converter.ErrPermanentFailure)
+			require.ErrorContains(t, err, "不正なUTF-8")
+			assert.NotContains(t, err.Error(), "有効なUTF-8ではなく")
+			assert.NotContains(t, err.Error(), "Shift_JIS")
+			assert.NoFileExists(t, dest)
+		})
+	}
+
 	errorTests := []struct {
 		name           string
 		sourceEncoding string
 		data           []byte
 		wantInMessage  []string
 	}{
+		{
+			name:          "異常系: 文字コードを推定できずShift_JISとしても復号できないバイト列は検出結果なしを示して失敗する",
+			data:          []byte{0x94},
+			wantInMessage: []string{"検出結果なし", "Shift_JIS"},
+		},
 		{
 			name:          "異常系: 未対応と推定されShift_JISとしても復号できないバイト列は推定名を示して失敗する",
 			data:          []byte("id,name\n1,\xfd\xfe\xff\xfd"),
@@ -1332,6 +1833,12 @@ func TestEncodingConverter_ConvertBytes_AutoDetectedSource(t *testing.T) {
 			wantEncoding: "shift_jis",
 		},
 		{
+			name:         "正常系: 文字コードを推定できないShift_JISの1文字はshift_jisを返す",
+			data:         encodeWith(t, japanese.ShiftJIS, "猫"),
+			want:         "猫",
+			wantEncoding: "shift_jis",
+		},
+		{
 			name:         "正常系: 未対応と推定された正しいUTF-8はutf-8を返す",
 			data:         []byte("title=名前"),
 			want:         "title=名前",
@@ -1366,4 +1873,128 @@ func TestEncodingConverter_ConvertBytes_AutoDetectedSource(t *testing.T) {
 
 		require.ErrorIs(t, err, converter.ErrUndecodableSource)
 	})
+}
+
+func TestEncodingConverter_Convert_DetectionOverrideMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		fileName       string
+		data           []byte
+		sourceEncoding string
+		wantStatus     converter.ConversionStatus
+		wantMessage    string
+	}{
+		{
+			name:        "正常系: 未対応のwindows-1252と推定されたShift_JISの.csvは推定と復号に使った文字コードを示す",
+			fileName:    "config.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 windows-1252（信頼度 0.75）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 未対応のiso-8859-1と推定されたShift_JISの.csvは推定と復号に使った文字コードを示す",
+			fileName:    "items.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "id,name\n1,ｱｲﾃﾑ"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 iso-8859-1（信頼度 0.27）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 推定結果が無くShift_JISとして復号した場合は推定が無かったことを示す",
+			fileName:    "name.csv",
+			data:        encodeWith(t, japanese.ShiftJIS, "猫"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定結果なし、shift_jis として復号",
+		},
+		{
+			name:        "正常系: 低信頼度のgb18030と推定されShift_JISで復号した場合は両方を示す",
+			fileName:    "save.ini",
+			data:        encodeWith(t, japanese.ShiftJIS, "ｾｰﾌﾞ"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 gb18030（信頼度 0.10）を shift_jis として復号",
+		},
+		{
+			name:        "正常系: 未対応と推定された正しいUTF-8の.ksはUTF-8として復号したことを示す",
+			fileName:    "title.ks",
+			data:        []byte("title=名前"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "推定 windows-1252（信頼度 0.90）を utf-8 として復号",
+		},
+		{
+			name:        "正常系: 空の.ksは復号する内容が無いため推定結果なしでも示さない",
+			fileName:    "empty.ks",
+			data:        []byte{},
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 低信頼度のgb18030と推定されShift_JISで復号できないEUC-JPは推定どおりなので示さない",
+			fileName:    "kanji.txt",
+			data:        encodeWith(t, japanese.EUCJP, "漢字"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 推定どおりのgb18030で復号したGBKは示さない",
+			fileName:    "readme.txt",
+			data:        encodeWith(t, simplifiedchinese.GBK, "这是一个中文测试文本，用于检测编码。"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: 推定どおりのutf-8で復号したASCIIの.ksは示さない",
+			fileName:    "first.ks",
+			data:        []byte("*start\n@wait time=100\n"),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:        "正常系: BOM付きUTF-16LEは推定によらず復号するため示さない",
+			fileName:    "readme.txt",
+			data:        encodeUTF16("本文", false, true),
+			wantStatus:  converter.StatusSuccess,
+			wantMessage: "",
+		},
+		{
+			name:           "正常系: 変換元の文字コードを指定した場合は推定を使わないため示さない",
+			fileName:       "config.csv",
+			data:           encodeWith(t, japanese.ShiftJIS, "[config]\ntitle=猫"),
+			sourceEncoding: "shift_jis",
+			wantStatus:     converter.StatusSuccess,
+			wantMessage:    "",
+		},
+		{
+			name:        "正常系: 未対応と推定された正しいUTF-8の.iniは復号しないためSKIPPEDの文言のままにする",
+			fileName:    "title.ini",
+			data:        []byte("title=名前"),
+			wantStatus:  converter.StatusSkipped,
+			wantMessage: "既にターゲットエンコーディングです",
+		},
+		{
+			name:        "正常系: utf-8と推定された正しいUTF-8の.txtはSKIPPEDの文言のままにする",
+			fileName:    "readme.txt",
+			data:        []byte("これはUTF-8で書かれた説明文です。文字コードの検出を確認します。"),
+			wantStatus:  converter.StatusSkipped,
+			wantMessage: "既にターゲットエンコーディングです",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			result, err := c.Convert(source, dest)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, result.Status)
+			assert.Equal(t, tt.wantMessage, result.Message)
+		})
+	}
 }

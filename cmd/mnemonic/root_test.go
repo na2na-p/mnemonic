@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,6 +90,43 @@ func TestBuildCommand_Help(t *testing.T) {
 	assert.Equal(t, 0, result.exitCode)
 	lower := strings.ToLower(result.stdout)
 	assert.True(t, strings.Contains(result.stdout, "ビルド") || strings.Contains(lower, "build"))
+}
+
+// TestBuildCommand_HelpMatchesREADME は、README.mdのbuild-helpマーカー間の
+// コードブロックが`mnemonic build --help`の出力と一字一句一致することを検証する。
+//
+// why not(部分一致にしない理由): フラグの追加・説明変更・既定値表記の差分は
+// 行単位の小さなずれとして現れ、特定の文字列を含むかどうかの検査では
+// READMEの写しが古くなっても検出できない。
+func TestBuildCommand_HelpMatchesREADME(t *testing.T) {
+	t.Parallel()
+
+	const (
+		startMarker = "<!-- build-help:start -->"
+		endMarker   = "<!-- build-help:end -->"
+		fenceOpen   = "\n```\n"
+		fenceClose  = "```\n"
+	)
+
+	result := invoke(t, []string{"build", "--help"})
+	require.Equal(t, 0, result.exitCode)
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	require.NoError(t, err)
+
+	_, afterStart, found := strings.Cut(string(readme), startMarker)
+	require.True(t, found, "README.mdに%sがありません", startMarker)
+
+	block, _, found := strings.Cut(afterStart, endMarker)
+	require.True(t, found, "README.mdに%sがありません", endMarker)
+
+	body, found := strings.CutPrefix(block, fenceOpen)
+	require.True(t, found, "%sの直後がコードブロックの開始になっていません", startMarker)
+
+	body, found = strings.CutSuffix(body, fenceClose)
+	require.True(t, found, "%sの直前がコードブロックの終了になっていません", endMarker)
+
+	assert.Equal(t, result.stdout, body, "README.mdのbuild --help写しが実際の出力と一致しません。`go run ./cmd/mnemonic build --help`の出力で置き換えてください")
 }
 
 // TestBuildCommand_MissingInput / TestBuildCommand_InvalidInputType は
@@ -234,6 +273,58 @@ func TestBuildCommand_CleanFlag(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_SourceEncodingFlag(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	tests := []struct {
+		name      string
+		extraArgs []string
+		want      string
+	}{
+		{
+			name:      "正常系: --source-encoding指定時はその名前がConfigへ渡る",
+			extraArgs: []string{"--source-encoding", "shift_jis"},
+			want:      "shift_jis",
+		},
+		{
+			name:      "正常系: --source-encoding未指定時は空文字列（自動検出に委ねる）",
+			extraArgs: nil,
+			want:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			captured := withCapturingBuildPipeline(t, &stubBuildRunner{
+				runResult: pipeline.Result{Success: true, OutputPath: &outputFile},
+			})
+
+			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
+			result := invoke(t, args)
+
+			require.Equal(t, 0, result.exitCode)
+			assert.Equal(t, tt.want, captured.SourceEncoding)
+		})
+	}
+}
+
+// TestBuildCommand_InvalidSourceEncoding は既定のnewBuildPipelineを読み出すため
+// t.Parallel()を呼ばない（TestBuildCommand_MissingInputと同じ理由）。
+func TestBuildCommand_InvalidSourceEncoding(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+
+	result := invoke(t, []string{"build", inputFile, "-o", filepath.Join(dir, "output.apk"), "--source-encoding", "klingon"})
+
+	assert.Equal(t, int(apperr.ExitError), result.exitCode)
+	assert.Contains(t, result.stdout, "Error: --source-encoding に指定できない文字コード名です: klingon")
+	assert.NoFileExists(t, filepath.Join(dir, "output.apk"))
+}
+
 func TestBuildCommand_Success(t *testing.T) {
 	dir := t.TempDir()
 	inputFile := filepath.Join(dir, "game.exe")
@@ -367,8 +458,8 @@ func TestBuildCommand_LogFile_PipelineLogger(t *testing.T) {
 			name:           "正常系: -v無しでは詳細ログを端末へ出さずファイルへは全て記録する",
 			runResult:      pipeline.Result{Success: true, OutputPath: &outputFile},
 			wantExitCode:   int(apperr.ExitSuccess),
-			wantFile:       []string{"WARNING: パイプライン警告", "VERBOSE: パイプライン詳細"},
-			wantStdout:     []string{"警告: パイプライン警告", "ビルド完了"},
+			wantFile:       []string{"WARNING: パイプライン警告", "VERBOSE: パイプライン詳細", "INFO: ビルド完了: " + outputFile},
+			wantStdout:     []string{"警告: パイプライン警告", "ビルド完了: " + outputFile},
 			wantStdoutNone: []string{"パイプライン詳細"},
 		},
 		{
@@ -378,6 +469,14 @@ func TestBuildCommand_LogFile_PipelineLogger(t *testing.T) {
 			wantExitCode: int(apperr.ExitSuccess),
 			wantFile:     []string{"VERBOSE: パイプライン詳細"},
 			wantStdout:   []string{"パイプライン詳細"},
+		},
+		{
+			name:         "正常系: 負の--verboseでも完了を端末へ1回出す",
+			extraArgs:    []string{"--verbose=-1"},
+			runResult:    pipeline.Result{Success: true, OutputPath: &outputFile},
+			wantExitCode: int(apperr.ExitSuccess),
+			wantFile:     []string{"INFO: ビルド完了: " + outputFile},
+			wantStdout:   []string{"ビルド完了: " + outputFile},
 		},
 		{
 			name:         "異常系: ビルド失敗の理由をファイルへ記録する",
@@ -419,8 +518,97 @@ func TestBuildCommand_LogFile_PipelineLogger(t *testing.T) {
 			for _, unwanted := range tt.wantStdoutNone {
 				assert.NotContains(t, result.stdout, unwanted)
 			}
+			assert.LessOrEqual(t, strings.Count(result.stdout, "ビルド完了"), 1, "完了を端末へ二重に出さない")
+			assert.NotContains(t, result.stderr, "ログの書き込みに失敗しました")
 		})
 	}
+}
+
+// failingLogFile は書き込みを常にsyscall.ENOSPCで失敗させる出力先のテスト用実装。
+type failingLogFile struct{}
+
+func (failingLogFile) Write([]byte) (int, error) { return 0, syscall.ENOSPC }
+
+func (failingLogFile) Close() error { return nil }
+
+func withOpenLogFile(t *testing.T, file io.WriteCloser) {
+	t.Helper()
+
+	original := openLogFile
+	openLogFile = func(string) (io.WriteCloser, error) { return file, nil }
+	t.Cleanup(func() { openLogFile = original })
+}
+
+// TestBuildCommand_LogFile_WriteError はログファイルへの書き込みに失敗しても
+// ビルドの終了コードを変えず、標準エラー出力へ警告することを検証する。
+// newBuildPipelineとopenLogFileを差し替えるためt.Parallel()を呼ばない。
+func TestBuildCommand_LogFile_WriteError(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	tests := []struct {
+		name         string
+		stub         *stubBuildRunner
+		wantExitCode int
+		wantStdout   string
+	}{
+		{
+			name:         "正常系: ビルドに成功した場合は警告しても終了コードを成功のままにする",
+			stub:         &stubBuildRunner{runResult: pipeline.Result{Success: true, OutputPath: &outputFile}},
+			wantExitCode: int(apperr.ExitSuccess),
+			wantStdout:   "ビルド完了: " + outputFile,
+		},
+		{
+			name:         "異常系: ビルドに失敗した場合は警告しても終了コードをビルド失敗のままにする",
+			stub:         &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"}},
+			wantExitCode: int(apperr.ExitError),
+			wantStdout:   "ビルド失敗: Gradleビルドに失敗しました",
+		},
+		{
+			name:         "異常系: 入力検証に失敗した場合も警告する",
+			stub:         &stubBuildRunner{validateErrs: []string{"入力ファイルが不正です"}},
+			wantExitCode: int(apperr.ExitError),
+			wantStdout:   "Error: 入力ファイルが不正です",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withStubBuildPipeline(t, tt.stub)
+			withOpenLogFile(t, failingLogFile{})
+
+			result := invoke(t, []string{"build", inputFile, "-o", outputFile, "--log-file", filepath.Join(dir, "build.log")})
+
+			assert.Equal(t, tt.wantExitCode, result.exitCode)
+			assert.Contains(t, result.stdout, tt.wantStdout)
+			assert.Equal(t, "警告: ログの書き込みに失敗しました: "+syscall.ENOSPC.Error()+"\n", result.stderr, "警告は1回だけ出す")
+		})
+	}
+}
+
+// failingWriter は書き込みを常にsyscall.EPIPEで失敗させるio.Writerのテスト用実装。
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
+// TestBuildCommand_StdoutWriteErrorWithoutLogFile は--log-file未指定時に標準出力への
+// 書き込みに失敗しても、ログファイルの警告を出さないことを検証する。
+// newBuildPipelineを差し替えるためt.Parallel()を呼ばない。
+func TestBuildCommand_StdoutWriteErrorWithoutLogFile(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+
+	withStubBuildPipeline(t, &stubBuildRunner{runResult: pipeline.Result{Success: true, OutputPath: &outputFile}})
+
+	var stderr bytes.Buffer
+	code := run([]string{"build", inputFile, "-o", outputFile}, strings.NewReader(""), failingWriter{}, &stderr)
+
+	assert.Equal(t, int(apperr.ExitSuccess), code)
+	assert.NotContains(t, stderr.String(), "ログの書き込みに失敗しました")
 }
 
 // verboseRecorder はVerboseのメッセージだけを記録するpipeline.Loggerのテスト用実装。

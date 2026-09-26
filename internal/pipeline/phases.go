@@ -132,7 +132,7 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 	}
 
 	converters := []converter.Converter{
-		converter.NewEncodingConverter("", ""),
+		converter.NewEncodingConverter("", b.config.SourceEncoding),
 		converter.NewImageConverter(),
 	}
 	if !b.config.SkipVideo {
@@ -159,25 +159,62 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		"アセット変換: 成功 %d件 / 失敗 %d件 / スキップ %d件",
 		summary.Success, summary.Failed, summary.Skipped,
 	))
+	logConversionNotes(b.log(), a.extractDir, summary.Results)
+
+	logPreferredSourceSkips(b.log(), a.extractDir, summary)
 
 	// why not: 変換に失敗したアセットがあってもビルドを続けると、素材が欠けた
 	// り未変換のまま残ったりしたAPKができ、原因は後段の別エラー（スクリプト
 	// 調整の失敗など）として現れて特定しにくい。後処理に進む前に、失敗した
 	// 全ファイルとその原因を報告して止める。
-	if err := conversionFailureError(summary); err != nil {
+	if err := conversionFailureError(a.extractDir, summary); err != nil {
 		return a, err
 	}
 
 	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter())
 }
 
+// maxReportedAssets はアセットごとの報告で1件1行に列挙する最大件数。
+// 超えた分は件数だけを示す。
+const maxReportedAssets = 20
+
+// skipVideoHint は動画の変換に失敗したときに付ける、--skip-videoの案内。
+const skipVideoHint = "動画を変換しない場合は --skip-video を指定してください"
+
+// logConversionNotes は、成功した変換のうちMessageを持つ結果を1件ずつ
+// 「sourceDirからの相対パス: Message」としてVerboseで記録する。
+//
+// why not: resultsの順に記録しない。ConvertDirectoryの結果は並列ワーカーの
+// 完了順に並び実行ごとに変わるため、変換元パス順に並べ替えてログを決定的にする。
+func logConversionNotes(log Logger, sourceDir string, results []converter.ConversionResult) {
+	noted := slices.DeleteFunc(slices.Clone(results), func(result converter.ConversionResult) bool {
+		return result.Status != converter.StatusSuccess || result.Message == ""
+	})
+	slices.SortFunc(noted, func(a, b converter.ConversionResult) int {
+		return cmp.Compare(a.SourcePath, b.SourcePath)
+	})
+
+	for _, result := range noted {
+		path := result.SourcePath
+		if rel, err := filepath.Rel(sourceDir, result.SourcePath); err == nil {
+			path = rel
+		}
+
+		log.Verbose(fmt.Sprintf("%s: %s", path, result.Message))
+	}
+}
+
 // conversionFailureError はsummaryに失敗した結果が含まれる場合、
 // ErrAssetConversionFailedをラップしたエラーを返す。
+//
+// エラー文は失敗件数の見出しに続けて、変換元パス順に1件1行で
+// 「extractDirからの相対パス: 原因」を最大maxReportedAssets件並べる。
+// 失敗に動画が含まれる場合は末尾にskipVideoHintを1回だけ付ける。
 //
 // why not: StatusFailedとの一致だけで判定しない。ConversionManagerは
 // StatusSuccess/StatusSkipped以外の状態をすべてFailedとして集計するため、
 // 一致判定だとsummary.Failedに数えられた失敗を見逃しうる。
-func conversionFailureError(summary converter.ConversionSummary) error {
+func conversionFailureError(extractDir string, summary converter.ConversionSummary) error {
 	var failed []converter.ConversionResult
 	for _, result := range summary.Results {
 		if result.Status != converter.StatusSuccess && result.Status != converter.StatusSkipped {
@@ -189,19 +226,114 @@ func conversionFailureError(summary converter.ConversionSummary) error {
 		return nil
 	}
 
-	// why not: ConvertDirectoryの結果は並列ワーカーの完了順に並び実行ごとに
-	// 変わるため、そのまま報告すると同じ失敗でもエラー文の並びが揺れる。
-	// 変換元パス順に並べ替えて報告を決定的にする。
-	slices.SortFunc(failed, func(a, b converter.ConversionResult) int {
+	entries, omitted := assetReportEntries(extractDir, failed)
+
+	var report strings.Builder
+	for _, entry := range entries {
+		report.WriteString("\n  - ")
+		report.WriteString(entry)
+	}
+	if omitted > 0 {
+		fmt.Fprintf(&report, "\n  %s", omittedAssetsLine(omitted))
+	}
+
+	if hasVideoSource(failed) {
+		report.WriteString("\n")
+		report.WriteString(skipVideoHint)
+	}
+
+	return fmt.Errorf("%w（%d 件）%s", ErrAssetConversionFailed, len(failed), report.String())
+}
+
+// logPreferredSourceSkips は出力先が重複し、同名の別の変換元を優先したため
+// 変換しなかった変換元を、1件1行で「extractDirからの相対パス: 理由」として
+// INFOで報告する。列挙はmaxReportedAssets件までとする。
+//
+// why not: WARNINGにはしない。出力先には優先した変換元が変換されて入る
+// （その変換に失敗すればconversionFailureErrorがビルドを止める）ため出力先が
+// 欠けることは無く、利用者が対処する必要が無い。
+func logPreferredSourceSkips(logger Logger, extractDir string, summary converter.ConversionSummary) {
+	var skipped []converter.ConversionResult
+	for _, result := range summary.Results {
+		if preferredOtherSource(result) {
+			skipped = append(skipped, result)
+		}
+	}
+
+	entries, omitted := assetReportEntries(extractDir, skipped)
+	for _, entry := range entries {
+		logger.Info(entry)
+	}
+	if omitted > 0 {
+		logger.Info(omittedAssetsLine(omitted))
+	}
+}
+
+// preferredOtherSource はresultが、出力先の重複で同名の別の変換元を優先した
+// ため変換しなかったスキップかどうかを返す。
+//
+// why not: DestPathを持つStatusSkippedだけでは判定しない。EncodingConverterは
+// 既にターゲットエンコーディングのファイルを、DestPathを持つStatusSkippedとして
+// 返す。ConversionManagerが優先するのは出力先と拡張子が一致する唯一の変換元で
+// あり、優先されなかった変換元の拡張子は出力先と一致しない。一方EncodingConverterは
+// 拡張子を変えないため、拡張子の不一致で両者を区別できる。
+func preferredOtherSource(result converter.ConversionResult) bool {
+	return result.Status == converter.StatusSkipped &&
+		result.DestPath != "" &&
+		!strings.EqualFold(filepath.Ext(result.SourcePath), filepath.Ext(result.DestPath))
+}
+
+// hasVideoSource はresultsにVideoConverterの対象とする動画を変換元とする結果が
+// 含まれるかどうかを返す。
+//
+// why not: ConversionResultは原因をerrではなくMessageの文字列でしか持たないため、
+// errors.Is(ErrVideoConversionFailed)では判定できない。拡張子で判定すれば、
+// --skip-videoを指定したときに変換対象から外れるファイルとも一致する。
+func hasVideoSource(results []converter.ConversionResult) bool {
+	videoExts := converter.NewVideoConverter(0, nil).SupportedExtensions()
+
+	return slices.ContainsFunc(results, func(result converter.ConversionResult) bool {
+		return slices.Contains(videoExts, strings.ToLower(filepath.Ext(result.SourcePath)))
+	})
+}
+
+// assetReportEntries はresultsを変換元パス順に並べ、先頭maxReportedAssets件を
+// 「extractDirからの相対パス: Message」の形にしたものと、列挙しなかった件数を返す。
+//
+// why not: ConvertDirectoryの結果は並列ワーカーの完了順に並び実行ごとに
+// 変わるため、そのまま報告すると同じ結果でも報告の並びや省略される項目が揺れる。
+// 変換元パス順に並べ替えてから切り詰め、報告を決定的にする。
+func assetReportEntries(extractDir string, results []converter.ConversionResult) (entries []string, omitted int) {
+	sorted := slices.SortedFunc(slices.Values(results), func(a, b converter.ConversionResult) int {
 		return cmp.Compare(a.SourcePath, b.SourcePath)
 	})
 
-	failures := make([]string, 0, len(failed))
-	for _, result := range failed {
-		failures = append(failures, fmt.Sprintf("%s: %s", result.SourcePath, result.Message))
+	shown := sorted[:min(len(sorted), maxReportedAssets)]
+	entries = make([]string, 0, len(shown))
+	for _, result := range shown {
+		entries = append(entries, fmt.Sprintf("%s: %s", relativeToExtractDir(extractDir, result.SourcePath), result.Message))
 	}
 
-	return fmt.Errorf("%w: %s", ErrAssetConversionFailed, strings.Join(failures, " / "))
+	return entries, len(sorted) - len(shown)
+}
+
+// omittedAssetsLine はassetReportEntriesが列挙しなかった件数を示す行を返す。
+func omittedAssetsLine(omitted int) string {
+	return fmt.Sprintf("…ほか %d 件", omitted)
+}
+
+// relativeToExtractDir はpathをextractDirからの相対パスにして返す。
+// 相対パスにできない場合はpathをそのまま返す。
+//
+// why not: 絶対パスのまま報告しない。extractDirはRunの終了時に削除される
+// 一時ディレクトリであり、その絶対パスは利用者が参照できず、行を長くするだけである。
+func relativeToExtractDir(extractDir, path string) string {
+	rel, err := filepath.Rel(extractDir, path)
+	if err != nil {
+		return path
+	}
+
+	return rel
 }
 
 // finalizeConvertedTree はアセット変換済みのdirectoryへ後処理を順に適用する。
@@ -296,10 +428,9 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 		return a, err
 	}
 
-	// krkrsdl2プラグイン(extrans/wuvorbis)を取得（失敗してもビルドは継続する）
 	plugins := b.fetchPlugins()
 
-	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
+	preparer := b.newTemplatePreparer(projectDir)
 	if err := preparer.Prepare(packageName, appName, a.convertDir, b.findGameIcon(a.extractDir), plugins); err != nil {
 		return a, err
 	}
@@ -322,6 +453,15 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 	a.unsignedAPK = *result.APKPath
 
 	return a, nil
+}
+
+// newTemplatePreparer はprojectDirのテンプレートを準備するTemplatePreparerを返す。
+// SDL2ソースキャッシュの復元・保存の失敗はパイプラインのLoggerへ警告として報告する。
+func (b *BuildPipeline) newTemplatePreparer(projectDir string) *builder.TemplatePreparer {
+	preparer := builder.NewTemplatePreparer(projectDir, newSDL2SourceCache())
+	preparer.Warn = b.log().Warning
+
+	return preparer
 }
 
 // newSDL2SourceCache はSDL2ソースキャッシュを返す。キャッシュディレクトリを

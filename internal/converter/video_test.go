@@ -3,8 +3,10 @@ package converter_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -167,6 +169,56 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		assert.ErrorIs(t, err, converter.ErrVideoSourceNotFound)
 	})
 
+	statFailures := []struct {
+		name       string
+		skipAsRoot bool
+		setup      func(t *testing.T) string
+		wantOSErr  error
+	}{
+		{
+			name:       "異常系: 探索権限の無いディレクトリ配下のファイルは見つからないとは報告せずOSのエラーを返す",
+			skipAsRoot: true,
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				return writeFileInLockedDir(t, "video.mpg", []byte("dummy"))
+			},
+			wantOSErr: fs.ErrPermission,
+		},
+		{
+			name: "異常系: 親がファイルの場合は見つからないとは報告せずOSのエラーを返す",
+			setup: func(t *testing.T) string {
+				t.Helper()
+
+				parent := filepath.Join(t.TempDir(), "parent.mpg")
+				writeFile(t, parent, []byte("not a directory"))
+
+				return filepath.Join(parent, "video.mpg")
+			},
+			wantOSErr: syscall.ENOTDIR,
+		},
+	}
+
+	for _, tt := range statFailures {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.skipAsRoot && os.Geteuid() == 0 {
+				t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+			}
+
+			path := tt.setup(t)
+			c := converter.NewVideoConverter(0, nil)
+			_, err := c.GetVideoInfo(path)
+
+			require.ErrorIs(t, err, converter.ErrVideoInfoUnavailable)
+			require.ErrorIs(t, err, tt.wantOSErr)
+			require.NotErrorIs(t, err, converter.ErrVideoSourceNotFound)
+			assert.NotContains(t, err.Error(), "見つかりません")
+			assert.Contains(t, err.Error(), path)
+		})
+	}
+
 	t.Run("正常系: 動画情報を正しく取得する", func(t *testing.T) {
 		t.Parallel()
 
@@ -185,7 +237,7 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", videoFile).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", videoFile).
 			Return([]byte(probeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
@@ -220,7 +272,7 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", videoFile).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", videoFile).
 			Return([]byte(probeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
@@ -250,7 +302,7 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", videoFile).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", videoFile).
 			Return([]byte(probeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
@@ -270,7 +322,7 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", invalidFile).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", invalidFile).
 			Return(nil, errors.New("Invalid video file"))
 
 		c := converter.NewVideoConverter(0, runner)
@@ -292,7 +344,7 @@ func TestVideoConverter_GetVideoInfo(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", videoFile).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", videoFile).
 			Return([]byte(probeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
@@ -344,7 +396,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(mpeg1Mp2ProbeJSON), nil)
 		// why: パススルー時はffmpegを一切呼び出さないことを保証する
 		// (呼び出されたらこのテストはunexpected callで失敗する)。
@@ -379,7 +431,7 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)
@@ -409,10 +461,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "25", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "25", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest+".tmp", []byte("converted mpeg-ps content"))
@@ -448,10 +500,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest+".tmp", []byte("converted video content larger than input"))
@@ -488,10 +540,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "24000/1001", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "24000/1001", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest+".tmp", []byte("converted content"))
@@ -517,10 +569,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return(nil, errors.New("ffprobe not found"))
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "25", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "25", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest+".tmp", []byte("converted content"))
@@ -555,10 +607,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			Return(nil, ffmpegErr)
 
@@ -595,10 +647,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				// why: エンコーダがストリームを開けず何も書き込まなかったケースを再現する
@@ -637,10 +689,10 @@ func TestVideoConverter_Convert(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(probeJSON), nil)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffmpeg", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
+			Run(gomock.Any(), "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-r", "30", "-c:v", "mpeg1video",
 				"-q:v", "4", "-c:a", "mp2", "-b:a", "224k", "-f", "mpeg", dest+".tmp").
 			DoAndReturn(func(context.Context, string, ...string) ([]byte, error) {
 				writeFile(t, dest+".tmp", []byte("converted content"))
@@ -706,7 +758,7 @@ func TestCopyFile_ErrorPaths(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		runner := NewMockCommandRunner(ctrl)
 		runner.EXPECT().
-			Run(gomock.Any(), "ffprobe", "-show_format", "-show_streams", "-of", "json", source).
+			Run(gomock.Any(), "ffprobe", "-hide_banner", "-show_format", "-show_streams", "-of", "json", source).
 			Return([]byte(mpeg1Mp2ProbeJSON), nil)
 
 		c := converter.NewVideoConverter(0, runner)

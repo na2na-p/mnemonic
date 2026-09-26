@@ -103,6 +103,47 @@ func TestBuildPipeline_Validate(t *testing.T) {
 			errContain: "--template-offline",
 		},
 		{
+			name: "異常系: --source-encodingに未対応の文字コード名を指定すると指定できる名前を示す",
+			setupFn: func(t *testing.T, dir string) pipeline.Config {
+				t.Helper()
+				input := filepath.Join(dir, "game.exe")
+				writeFile(t, input, make([]byte, 100))
+				cfg := pipeline.NewConfig(input, filepath.Join(dir, "output.apk"))
+				cfg.SourceEncoding = "klingon"
+
+				return cfg
+			},
+			wantErr:    true,
+			errContain: "--source-encoding に指定できない文字コード名です: klingon（指定できる名前: shift_jis, euc-jp, utf-8, gb2312, gb18030, big5, cp949）",
+		},
+		{
+			name: "異常系: --source-encodingにutf-16leは指定できない",
+			setupFn: func(t *testing.T, dir string) pipeline.Config {
+				t.Helper()
+				input := filepath.Join(dir, "game.exe")
+				writeFile(t, input, make([]byte, 100))
+				cfg := pipeline.NewConfig(input, filepath.Join(dir, "output.apk"))
+				cfg.SourceEncoding = "utf-16le"
+
+				return cfg
+			},
+			wantErr:    true,
+			errContain: "--source-encoding に指定できない文字コード名です: utf-16le",
+		},
+		{
+			name: "正常系: --source-encodingに対応済みの文字コード名を指定した有効な設定",
+			setupFn: func(t *testing.T, dir string) pipeline.Config {
+				t.Helper()
+				input := filepath.Join(dir, "game.exe")
+				writeFile(t, input, make([]byte, 100))
+				cfg := pipeline.NewConfig(input, filepath.Join(dir, "output.apk"))
+				cfg.SourceEncoding = "cp932"
+
+				return cfg
+			},
+			wantErr: false,
+		},
+		{
 			name: "正常系: 有効な設定",
 			setupFn: func(t *testing.T, dir string) pipeline.Config {
 				t.Helper()

@@ -29,8 +29,17 @@ var (
 // （独自の不変条件を持たない）であるため、他の協力者と同格の型を新設するほどの
 // 実装がない。
 type TemplatePreparer struct {
+	// Warn はビルドを止めない失敗の報告先で、SDL2SourceFetcher.Warnへ渡す。
+	// nilの場合は報告しない。
+	Warn func(message string)
+
 	projectDir string
 	sdl2Cache  *SDL2SourceCache
+	// sdl2BaseURL はSDL2SourceFetcher.BaseURLへ渡す取得元。空文字列なら既定の取得元を使う。
+	//
+	// why not: キャッシュの復元・保存に失敗する経路はダウンロードへ進むため、取得元を
+	// httptestサーバーに差し替えられないとテストが実ネットワークに出てしまう。
+	sdl2BaseURL string
 
 	jniLibsExtractor    *jniLibsExtractor
 	pluginPlacer        *pluginPlacer
@@ -122,6 +131,8 @@ func (p *TemplatePreparer) fetchSDL2Sources() error {
 	}
 
 	fetcher := NewSDL2SourceFetcher(0, p.sdl2Cache)
+	fetcher.BaseURL = p.sdl2BaseURL
+	fetcher.Warn = p.Warn
 	if err := fetcher.Fetch(javaDir); err != nil {
 		return fmt.Errorf("%w: %w: %w", ErrTemplatePreparer, ErrSDL2SourceFetch, err)
 	}

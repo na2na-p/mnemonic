@@ -686,6 +686,8 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 		files       map[string]string
 		wantFailed  string
 		wantSummary string
+		// wantConverted は変換後ツリー(convertDir)で期待するファイルの内容。
+		wantConverted map[string]string
 	}{
 		{
 			name: "異常系: TLGとして解釈できない画像があれば変換元パスと原因を含むエラーを返す",
@@ -712,6 +714,17 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 				// Shift_JISの"id,name\n1,ｱｲﾃﾑ"。chardetはiso-8859-1と推定する。
 				"data/items.csv": "id,name\n1,\xb1\xb2\xc3\xd1",
 			},
+		},
+		{
+			name: "正常系: chardetが文字コードを推定できないShift_JISの1文字の.csvはUTF-8に変換される",
+			files: map[string]string{
+				"first.ks":        "*start\n吾輩は猫である。名前はまだ無い。\n",
+				"system/font.ttf": "stub font",
+				// Shift_JISの"猫"。chardetは候補を1つも返さない。
+				"data/name.csv": "\x94\x4c",
+			},
+			wantSummary:   "成功 2件",
+			wantConverted: map[string]string{"data/name.csv": "猫"},
 		},
 	}
 
@@ -740,17 +753,114 @@ func TestBuildPipeline_ExecuteConvert_AssetConversionFailure(t *testing.T) {
 			if tt.wantFailed == "" {
 				require.NoError(t, err)
 
+				for name, want := range tt.wantConverted {
+					got, readErr := os.ReadFile(filepath.Join(a.convertDir, name))
+					require.NoError(t, readErr)
+					assert.Equal(t, want, string(got))
+				}
+
 				return
 			}
 
 			require.ErrorIs(t, err, ErrAssetConversionFailed)
-			require.ErrorContains(t, err, filepath.Join(extractDir, tt.wantFailed))
-			require.ErrorContains(t, err, "TLG形式ではありません")
+			assert.True(t, strings.HasSuffix(err.Error(),
+				"\n  - "+tt.wantFailed+": 再試行しても解消しない変換失敗です: TLG形式ではありません"), err.Error())
+			assert.NotContains(t, err.Error(), extractDir)
 			// system/はcopyPolyfillFilesが作るため、これが無いことで変換失敗時に
 			// finalizeConvertedTreeへ進んでいないことを確かめる。
 			assert.NoDirExists(t, filepath.Join(a.convertDir, "system"))
 		})
 	}
+}
+
+// TestBuildPipeline_ExecuteConvert_SourceEncoding は、Config.SourceEncodingが
+// CONVERTフェーズの文字コード変換に変換元として渡ることを検証する。
+func TestBuildPipeline_ExecuteConvert_SourceEncoding(t *testing.T) {
+	t.Parallel()
+
+	// Shift_JISの"title=ﾀｲ"。chardetはC0 B2を有効なUTF-8の並びと数え、utf-8と推定する。
+	const shiftJISConfig = "title=\xc0\xb2"
+
+	tests := []struct {
+		name           string
+		sourceEncoding string
+		wantFailed     bool
+		wantConverted  string
+	}{
+		{
+			name:           "正常系: shift_jisを指定するとutf-8と推定されるShift_JISもUTF-8に変換される",
+			sourceEncoding: "shift_jis",
+			wantConverted:  "title=ﾀｲ",
+		},
+		{
+			name:           "異常系: 未指定なら自動検出でutf-8として復号し変換に失敗する",
+			sourceEncoding: "",
+			wantFailed:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			extractDir := t.TempDir()
+			path := filepath.Join(extractDir, "data", "config.ini")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+			require.NoError(t, os.WriteFile(path, []byte(shiftJISConfig), 0o600))
+
+			p := newTestPipeline(t)
+			t.Cleanup(p.cleanupTempDirs)
+			p.config.SourceEncoding = tt.sourceEncoding
+
+			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+			if tt.wantFailed {
+				require.ErrorIs(t, err, ErrAssetConversionFailed)
+				require.ErrorContains(t, err, "  - "+filepath.Join("data", "config.ini")+": ")
+
+				return
+			}
+
+			require.NoError(t, err)
+
+			got, readErr := os.ReadFile(filepath.Join(a.convertDir, "data", "config.ini"))
+			require.NoError(t, readErr)
+			assert.Equal(t, tt.wantConverted, string(got))
+		})
+	}
+}
+
+// TestBuildPipeline_ExecuteConvert_ReportsPreferredSourceAndVideoHint は、出力先が
+// 重複して変換しなかった動画をINFOで報告し、動画の変換失敗には--skip-videoを
+// 案内することを検証する。
+//
+// why not: 変換に失敗させる動画は、ffmpeg/ffprobeが入っていない環境では実行
+// できずに、入っている環境では動画として読めずに失敗する中身にする。どちらの
+// 環境でも同じ結果になり、実行環境のffmpegの有無にテストが左右されない。
+func TestBuildPipeline_ExecuteConvert_ReportsPreferredSourceAndVideoHint(t *testing.T) {
+	t.Parallel()
+
+	extractDir := t.TempDir()
+	for _, name := range []string{"video/op.wmv", "video/op.mpg"} {
+		path := filepath.Join(extractDir, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+		require.NoError(t, os.WriteFile(path, []byte("not a video"), 0o600))
+	}
+
+	p := newTestPipeline(t)
+	t.Cleanup(p.cleanupTempDirs)
+	logger := &recordingLogger{}
+	p.SetLogger(logger)
+
+	a, err := p.executeConvert(buildArtifacts{extractDir: extractDir})
+
+	require.ErrorIs(t, err, ErrAssetConversionFailed)
+	require.ErrorContains(t, err, "  - "+filepath.Join("video", "op.mpg")+": ")
+	assert.True(t, strings.HasSuffix(err.Error(), "\n動画を変換しない場合は --skip-video を指定してください"), err.Error())
+	assert.NotContains(t, err.Error(), extractDir)
+	assert.NotContains(t, err.Error(), a.convertDir)
+	assert.Contains(t, logger.messages("INFO"),
+		filepath.Join("video", "op.wmv")+": 同名の "+filepath.Join("video", "op.mpg")+" を優先したため変換しません")
 }
 
 func TestBuildPipeline_ExecuteConvert_ReturnsErrorWhenExtractPhaseNotDone(t *testing.T) {

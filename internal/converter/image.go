@@ -24,6 +24,11 @@ var ErrUnsupportedImageFormat = errors.New("サポートされていない画像
 
 // ErrTLGInvalidFormat はTLG5/TLG6/SDSのいずれのマジックバイトにも一致しない
 // データに対するエラー。
+//
+// why not: TLGImageDecoderはこのエラーにファイルパスを付けない。呼び出し側は
+// 渡したパスを知っており、ConversionManagerの結果もSourcePathを持つため、
+// パスを付けると報告で同じパスが重なる。デコード中の失敗（tlgパッケージの
+// エラー）もパスを含まず、それと揃う。
 var ErrTLGInvalidFormat = errors.New("TLG形式ではありません")
 
 var (
@@ -149,7 +154,7 @@ func (d *TLGImageDecoder) GetInfo(filePath string) (TLGInfo, error) {
 
 		return TLGInfo{Version: TLGVersionTLG6, Width: header.Width, Height: header.Height, HasAlpha: header.Colors == 4}, nil
 	default:
-		return TLGInfo{}, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
+		return TLGInfo{}, ErrTLGInvalidFormat
 	}
 }
 
@@ -176,7 +181,7 @@ func (d *TLGImageDecoder) Decode(filePath string) (image.Image, error) {
 
 		return img, nil
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrTLGInvalidFormat, filePath)
+		return nil, ErrTLGInvalidFormat
 	}
 }
 

@@ -39,7 +39,7 @@ func TestEscapeLavfiPathForAmovie(t *testing.T) {
 
 // identifiableRunner は同一性を比較できるCommandRunner。
 //
-// why not: NewExecCommandRunnerは空の構造体値を返すため、値の比較では
+// why not: NewExecCommandRunnerはフィールドがゼロ値の構造体値を返すため、値の比較では
 // 「渡したrunnerがそのまま使われたか」と「既定のrunnerへ差し替わったか」を
 // 区別できない。ポインタで同一性を比較する（ゼロサイズ型のポインタは別の値でも
 // 同じアドレスになり得るため、フィールドを持たせている）。

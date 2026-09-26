@@ -14,9 +14,10 @@ import (
 
 // センチネルエラー群。
 //
-// ErrSDL2SourceFetchNetwork / ErrSDL2SourceFetchTimeout / ErrSDL2SourceCache は
-// いずれもErrSDL2SourceFetcherと二重にラップする。
-// これによりerrors.Is(err, ErrSDL2SourceFetcher)がすべての具体エラーで真になる。
+// ErrSDL2SourceFetchNetwork / ErrSDL2SourceFetchTimeout / ErrSDL2SourceCache を
+// 満たすエラーは、いずれもerrors.Is(err, ErrSDL2SourceFetcher)も真になる。
+// ネットワーク・タイムアウトのエラーはErrSDL2SourceFetcherと二重にラップし、
+// キャッシュのエラーはsdl2CacheErrorのIsで両方を満たす。
 var (
 	// ErrSDL2SourceFetcher はSDL2 Javaソース取得に関する基本エラー。
 	ErrSDL2SourceFetcher = errors.New("SDL2ソースの取得に失敗しました")
@@ -27,6 +28,46 @@ var (
 	// ErrSDL2SourceCache はキャッシュ操作に関するエラー。
 	ErrSDL2SourceCache = errors.New("キャッシュ操作に失敗しました")
 )
+
+// sdl2CacheError はSDL2ソースキャッシュの保存・復元の失敗を表す。
+//
+// why not: fmt.Errorfの%wでErrSDL2SourceFetcherとErrSDL2SourceCacheを二重に
+// ラップすると、両センチネルの文言がメッセージに連結され、キャッシュの失敗が
+// 「SDL2ソースの取得に失敗しました」と表示される。Isで両センチネルを満たす型に
+// すれば、errors.Isの関係を保ったままメッセージにはキャッシュ操作の文脈だけを残せる。
+type sdl2CacheError struct {
+	op    string
+	cause error
+}
+
+func (e *sdl2CacheError) Error() string {
+	if e.cause == nil {
+		return e.op
+	}
+
+	return e.op + ": " + e.cause.Error()
+}
+
+func (e *sdl2CacheError) Unwrap() error {
+	return e.cause
+}
+
+func (e *sdl2CacheError) Is(target error) bool {
+	return target == ErrSDL2SourceCache || target == ErrSDL2SourceFetcher
+}
+
+// sdl2CacheFailureDetail はキャッシュの失敗を警告に添える文言を返す。原因となった
+// エラーがあればその文言だけを返す。
+//
+// why not: 警告の定型文が既に保存・復元のどちらに失敗したかを述べるため、
+// sdl2CacheErrorの操作名まで添えると同じ内容を二度書くことになる。
+func sdl2CacheFailureDetail(err error) string {
+	if cacheErr, ok := errors.AsType[*sdl2CacheError](err); ok && cacheErr.cause != nil {
+		return cacheErr.cause.Error()
+	}
+
+	return err.Error()
+}
 
 // sdlCommit はkrkrsdl2が使用しているSDLコミット。このコミットのJavaソースは
 // krkrsdl2のネイティブライブラリ(libSDL2.so)と互換性がある。
@@ -153,29 +194,29 @@ const sdl2CacheTempPrefix = ".sdl2-cache-"
 func (c *SDL2SourceCache) Save(sourcesDir string) error {
 	parentDir := filepath.Dir(c.cacheDir)
 	if err := os.MkdirAll(parentDir, 0o750); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ保存に失敗しました", cause: err}
 	}
 
 	removeStaleSDL2CacheTempDirs(parentDir)
 
 	tmpDir, err := os.MkdirTemp(parentDir, sdl2CacheTempPrefix+"*")
 	if err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ保存に失敗しました", cause: err}
 	}
 
 	if err := populateSDL2Cache(tmpDir, sourcesDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ保存に失敗しました", cause: err}
 	}
 
 	if err := os.RemoveAll(c.cacheDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ保存に失敗しました", cause: err}
 	}
 
 	if err := os.Rename(tmpDir, c.cacheDir); err != nil {
 		_ = os.RemoveAll(tmpDir)
-		return fmt.Errorf("%w: %w: キャッシュ保存に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ保存に失敗しました", cause: err}
 	}
 
 	return nil
@@ -187,8 +228,9 @@ func (c *SDL2SourceCache) Save(sourcesDir string) error {
 // 次の保存時に掃除する。parentDirはほかのキャッシュと共有するため、接頭辞が一致する
 // ものだけを消す。掃除に失敗しても今回の保存には影響しないため、エラーは返さない。
 // 同時に走る別のSaveが組み立て中の一時ディレクトリも消しうるが、ロックは設けない。
-// FetchはSaveの失敗を無視し、必須ファイルの欠けたキャッシュはIsValidが無効と判定して
-// 次回の取得で再ダウンロードされるため、この競合でビルドは失敗しない。
+// FetchはSaveの失敗を警告に留めてビルドを続け、必須ファイルの欠けたキャッシュは
+// IsValidが無効と判定して次回の取得で再ダウンロードされるため、この競合でビルドは
+// 失敗しない。
 func removeStaleSDL2CacheTempDirs(parentDir string) {
 	entries, err := os.ReadDir(parentDir)
 	if err != nil {
@@ -224,14 +266,14 @@ func populateSDL2Cache(dstDir, sourcesDir string) error {
 // コピーの途中で失敗した場合は、コピー済みのdestDir/orgの削除を試みてからエラーを返す。
 func (c *SDL2SourceCache) RestoreTo(destDir string) error {
 	if !c.IsValid() {
-		return fmt.Errorf("%w: %w: 有効なキャッシュがありません", ErrSDL2SourceFetcher, ErrSDL2SourceCache)
+		return &sdl2CacheError{op: "有効なキャッシュがありません"}
 	}
 
 	srcOrgDir := filepath.Join(c.cacheDir, "org")
 	destOrgDir := filepath.Join(destDir, "org")
 
 	if err := os.RemoveAll(destOrgDir); err != nil {
-		return fmt.Errorf("%w: %w: キャッシュ復元に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ復元に失敗しました", cause: err}
 	}
 
 	if err := copyDir(srcOrgDir, destOrgDir); err != nil {
@@ -241,7 +283,7 @@ func (c *SDL2SourceCache) RestoreTo(destDir string) error {
 		// 削除に失敗しても、上書きを妨げる残骸はダウンロード側の書き込みエラーとして
 		// 表面化するため、ここではコピーのエラーだけを返す。
 		_ = os.RemoveAll(destOrgDir)
-		return fmt.Errorf("%w: %w: キャッシュ復元に失敗しました: %w", ErrSDL2SourceFetcher, ErrSDL2SourceCache, err)
+		return &sdl2CacheError{op: "キャッシュ復元に失敗しました", cause: err}
 	}
 
 	return nil
@@ -281,6 +323,14 @@ type SDL2SourceFetcher struct {
 	// （TemplateDownloader.APIBaseURLと同じ方針）。空文字列の場合は
 	// defaultSDL2BaseURLを使用する。
 	BaseURL string
+	// Warn はキャッシュの復元・保存の失敗など、ビルドを止めない失敗の報告先。
+	// nilの場合は報告しない。
+	//
+	// why not: 報告先にinternal/pipelineのLoggerは使えない。pipelineが本パッケージを
+	// importしているため、逆向きのimportは循環importになる。本パッケージ側に
+	// Warningだけを持つインターフェースを定義する手もあるが、必要な操作は1つだけ
+	// なので、型を増やさない関数型にする（呼び出し側はLogger.Warningのメソッド値を渡す）。
+	Warn func(message string)
 }
 
 // NewSDL2SourceFetcher はSDL2SourceFetcherを初期化する。
@@ -328,13 +378,16 @@ func (f *SDL2SourceFetcher) baseURL() string {
 
 // Fetch はSDL2 Javaソースをダウンロードまたはキャッシュから復元して配置する。
 // 有効なキャッシュの復元に失敗した場合はダウンロードへフォールバックする。
+// キャッシュの復元・保存の失敗はエラーにせずWarnへ報告する。
 func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	if f.Cache != nil && f.Cache.IsValid() {
 		// why not: キャッシュは最適化に過ぎないため、復元や保存の失敗で
 		// ソースを取得できるビルドまで失敗させるより、再ダウンロードを選ぶ。
-		if err := f.Cache.RestoreTo(destDir); err == nil {
+		err := f.Cache.RestoreTo(destDir)
+		if err == nil {
 			return nil
 		}
+		f.warn("SDL2 Javaソースをキャッシュから復元できなかったため再ダウンロードします: " + sdl2CacheFailureDetail(err))
 	}
 
 	sdlAppDir := filepath.Join(destDir, "org", "libsdl", "app")
@@ -354,10 +407,18 @@ func (f *SDL2SourceFetcher) Fetch(destDir string) error {
 	}
 
 	if f.Cache != nil {
-		_ = f.Cache.Save(destDir)
+		if err := f.Cache.Save(destDir); err != nil {
+			f.warn("SDL2 Javaソースをキャッシュに保存できませんでしたが、ビルドは続けます: " + sdl2CacheFailureDetail(err))
+		}
 	}
 
 	return nil
+}
+
+func (f *SDL2SourceFetcher) warn(message string) {
+	if f.Warn != nil {
+		f.Warn(message)
+	}
 }
 
 func (f *SDL2SourceFetcher) downloadJavaFile(filename string) ([]byte, error) {

@@ -2,8 +2,12 @@ package parser
 
 import (
 	"bytes"
+	"compress/zlib"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,17 +127,181 @@ func TestReadSegment(t *testing.T) {
 			t.Parallel()
 
 			var (
-				got      []byte
-				consumed int64
-				err      error
+				got []byte
+				err error
 			)
+			budget := entryBudget{raw: fileSize, inflated: maxSegmentDecompressedSize, inflatedLimit: maxSegmentDecompressedSize}
 			require.NotPanics(t, func() {
-				got, consumed, err = readSegment(bytes.NewReader(data), tc.segment, fileSize, fileSize)
+				got, err = readSegment(bytes.NewReader(data), tc.segment, fileSize, &budget)
 			})
 
 			require.NoError(t, err)
 			assert.Empty(t, got)
-			assert.Equal(t, tc.wantConsumed, consumed)
+			assert.Equal(t, fileSize-tc.wantConsumed, budget.raw)
+		})
+	}
+}
+
+// entrySegmentSpec はextractEntryに渡すセグメント1件分の実データを表す。
+// compressedがtrueならdataをzlib圧縮して配置し、OriginalSizeにはlen(data)を宣言する。
+type entrySegmentSpec struct {
+	data       []byte
+	compressed bool
+}
+
+// buildEntrySource はspecsを先頭から順に配置したバイト列と、それを指すセグメント列を返す。
+func buildEntrySource(t *testing.T, specs []entrySegmentSpec) ([]byte, []XP3Segment) {
+	t.Helper()
+
+	var (
+		source   bytes.Buffer
+		segments []XP3Segment
+	)
+	for _, spec := range specs {
+		stored := spec.data
+		if spec.compressed {
+			var compressed bytes.Buffer
+			w := zlib.NewWriter(&compressed)
+			_, err := w.Write(spec.data)
+			require.NoError(t, err)
+			require.NoError(t, w.Close())
+			stored = compressed.Bytes()
+		}
+		segments = append(segments, XP3Segment{
+			Offset:       int64(source.Len()),
+			Size:         int64(len(stored)),
+			OriginalSize: int64(len(spec.data)),
+			IsCompressed: spec.compressed,
+		})
+		source.Write(stored)
+	}
+
+	return source.Bytes(), segments
+}
+
+// extractEntryはエントリ全体の解凍後サイズの上限を引数で受け取る。1GiBの既定値を
+// 超えるフィクスチャを作らずに上限を検証するため、KiB単位の上限を渡せる
+// ホワイトボックステストとする。
+func TestExtractEntry_InflatedLimit(t *testing.T) {
+	t.Parallel()
+
+	const segmentSize = 1024
+
+	compressedA := entrySegmentSpec{data: bytes.Repeat([]byte{'A'}, segmentSize), compressed: true}
+	compressedB := entrySegmentSpec{data: bytes.Repeat([]byte{'B'}, segmentSize), compressed: true}
+	raw := entrySegmentSpec{data: bytes.Repeat([]byte{'R'}, 100)}
+
+	cases := []struct {
+		name    string
+		specs   []entrySegmentSpec
+		limit   int64
+		wantErr bool
+	}{
+		{"正常系: 解凍後サイズの合計が上限ちょうどなら展開できる", []entrySegmentSpec{compressedA, compressedB}, 2 * segmentSize, false},
+		{"正常系: 非圧縮セグメントの生バイトは解凍後サイズの合計に数えない", []entrySegmentSpec{compressedA, raw, compressedB}, 2 * segmentSize, false},
+		{"異常系: 各セグメントは宣言サイズ内でも合計が上限を1バイト超えればErrDecompressedTooLarge", []entrySegmentSpec{compressedA, compressedB}, 2*segmentSize - 1, true},
+		{"異常系: 先頭セグメントで上限を使い切った後に膨張するセグメントはErrDecompressedTooLarge", []entrySegmentSpec{compressedA, compressedB}, segmentSize, true},
+		{"異常系: 単独のセグメントが上限を超えて膨張する場合はErrDecompressedTooLarge", []entrySegmentSpec{compressedA}, segmentSize / 2, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			source, segments := buildEntrySource(t, tc.specs)
+			outputPath := filepath.Join(t.TempDir(), "entry.bin")
+
+			err := extractEntry(bytes.NewReader(source), XP3FileEntry{Name: "entry.bin", Segments: segments}, outputPath, tc.limit)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrInvalidXP3)
+				require.ErrorIs(t, err, ErrDecompressedTooLarge)
+				assert.Contains(t, err.Error(), strconv.FormatInt(tc.limit, 10))
+				assert.NoFileExists(t, outputPath)
+				return
+			}
+			require.NoError(t, err)
+			var want []byte
+			for _, spec := range tc.specs {
+				want = append(want, spec.data...)
+			}
+			got, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestExtractEntry_OutputFileError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+	}{
+		{"異常系: 出力先が既存の空ディレクトリならファイルを開けずにエラーを返し、ディレクトリは削除しない"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			source, segments := buildEntrySource(t, []entrySegmentSpec{{data: []byte("payload")}})
+			outputPath := filepath.Join(t.TempDir(), "entry.bin")
+			require.NoError(t, os.Mkdir(outputPath, 0o750))
+
+			err := extractEntry(bytes.NewReader(source), XP3FileEntry{Name: "entry.bin", Segments: segments}, outputPath, maxSegmentDecompressedSize)
+
+			require.Error(t, err)
+			require.NotErrorIs(t, err, ErrInvalidXP3)
+			assert.DirExists(t, outputPath)
+		})
+	}
+}
+
+// TestExtractEntry_ExistingOutputFile は、同名エントリの上書きなどで出力先に既に
+// ファイルがある場合の挙動を検証する。
+func TestExtractEntry_ExistingOutputFile(t *testing.T) {
+	t.Parallel()
+
+	const segmentSize = 1024
+
+	compressedA := entrySegmentSpec{data: bytes.Repeat([]byte{'A'}, segmentSize), compressed: true}
+	compressedB := entrySegmentSpec{data: bytes.Repeat([]byte{'B'}, segmentSize), compressed: true}
+	existing := bytes.Repeat([]byte{'X'}, 4*segmentSize)
+
+	cases := []struct {
+		name    string
+		specs   []entrySegmentSpec
+		limit   int64
+		wantErr bool
+	}{
+		{"正常系: 既存のより長いファイルは切り詰められ、展開結果だけが残る", []entrySegmentSpec{compressedA}, segmentSize, false},
+		{"異常系: 展開に失敗した場合は既存のファイルも残さない", []entrySegmentSpec{compressedA, compressedB}, 2*segmentSize - 1, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			source, segments := buildEntrySource(t, tc.specs)
+			outputPath := filepath.Join(t.TempDir(), "entry.bin")
+			require.NoError(t, os.WriteFile(outputPath, existing, 0o600))
+
+			err := extractEntry(bytes.NewReader(source), XP3FileEntry{Name: "entry.bin", Segments: segments}, outputPath, tc.limit)
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrDecompressedTooLarge)
+				assert.NoFileExists(t, outputPath)
+				return
+			}
+			require.NoError(t, err)
+			var want []byte
+			for _, spec := range tc.specs {
+				want = append(want, spec.data...)
+			}
+			got, err := os.ReadFile(outputPath) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
 		})
 	}
 }

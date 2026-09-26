@@ -21,8 +21,8 @@ var (
 	// Converterはこれを%wでラップしたerrを返し、呼び出し側にリトライ不要を伝える。
 	ErrPermanentFailure = errors.New("再試行しても解消しない変換失敗です")
 	// ErrDestinationCollision は複数の変換元が同じ出力先へ変換される場合のエラー。
-	// ConversionManagerはこれをErrPermanentFailureでラップし、該当する変換元を
-	// いずれも変換しない。
+	// 出力先と同じ拡張子の変換元がちょうど1件でない場合、ConversionManagerは
+	// これをErrPermanentFailureでラップし、該当する変換元をいずれも変換しない。
 	ErrDestinationCollision = errors.New("出力先が重複しています")
 )
 
@@ -44,6 +44,12 @@ const (
 // 場合のErrDestinationCollisionを含むエラーの文言、または
 // RetryConfig.MaxAttemptsが0以下で一度も変換を試みなかった場合の
 // 「変換に失敗しました」となる。
+//
+// 出力先が重複し別の変換元を優先したためConversionManagerが変換しなかった
+// 変換元は、DestPathに優先した変換元の出力先を持つStatusSkippedとなる。
+//
+// ConversionManager.ConvertDirectoryの結果では、Messageの文頭か空白の直後に
+// 置かれた変換元・出力先のパスは、それぞれのルートからの相対パスとなる。
 type ConversionResult struct {
 	SourcePath  string
 	DestPath    string
@@ -103,24 +109,30 @@ func ensureSourceExists(source string) error {
 	return nil
 }
 
-// classifyStatError はsourceに対するos.Statの失敗errを分類する。
+// classifyStatError はsourceに対するos.Statの失敗errを、変換元のセンチネル
+// (ErrSourceNotFound/ErrSourceUnreadable)でclassifyPathErrorに従って分類する。
+func classifyStatError(source string, err error) error {
+	return classifyPathError(source, err, ErrSourceNotFound, ErrSourceUnreadable)
+}
+
+// classifyPathError はpathに対するos.Statの失敗errを分類する。
 //
-// 存在しない場合はErrSourceNotFound、権限不足の場合はOSのエラーを包んだ
-// ErrSourceUnreadableを、いずれもErrPermanentFailureでラップして返す。
+// 存在しない場合はnotFoundをpathとともに、権限不足の場合はOSのエラーを包んだ
+// unreadableを、いずれもErrPermanentFailureでラップして返す。
 // それ以外（親がファイル・パス名が長すぎる・I/Oエラーなど）はOSのエラーを包んだ
-// ErrSourceUnreadableを再試行対象として返す。
+// unreadableを再試行対象として返す。
 //
-// why not: Statの失敗を一律にErrSourceNotFoundにはしない。権限不足まで
+// why not: Statの失敗を一律にnotFoundにはしない。権限不足まで
 // 「見つかりません」と報告すると利用者が原因を探せず、EIOなどの一時的な失敗まで
 // 恒久扱いになって再試行されなくなる。
-func classifyStatError(source string, err error) error {
+func classifyPathError(path string, err, notFound, unreadable error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return permanentError(fmt.Errorf("%w: %s", ErrSourceNotFound, source))
+		return permanentError(fmt.Errorf("%w: %s", notFound, path))
 	case errors.Is(err, fs.ErrPermission):
-		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
+		return permanentError(fmt.Errorf("%w: %w", unreadable, err))
 	default:
-		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
+		return fmt.Errorf("%w: %w", unreadable, err)
 	}
 }
 

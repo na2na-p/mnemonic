@@ -772,22 +772,31 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 	})
 }
 
-// buildXP3ArchiveWithRawTable はrawTableをそのままファイルテーブル領域
-// （非圧縮、zlib解凍失敗時のフォールバック経路）に配置したXP3アーカイブを
+// buildXP3ArchiveWithUncompressedTable はtableをそのまま非圧縮インデックス
+// （フラグ0x00）のファイルテーブルとしてヘッダー直後に配置したXP3アーカイブを
 // 構築する。buildXP3Archive（xp3EntrySpec経由）では表現できない、
 // 意図的に壊れた／攻撃者制御のサブチャンクサイズを持つエントリを直接
 // 検証するための低レベルビルダー。
-func buildXP3ArchiveWithRawTable(rawTable []byte) []byte {
-	const headerSize = 19 // 11(magic) + 8(info_offset)
-
+func buildXP3ArchiveWithUncompressedTable(table []byte) []byte {
 	var buf bytes.Buffer
 	buf.Write(parser.XP3Magic)
-	writeUint64(&buf, uint64(headerSize)) // info_offset: ヘッダー直後（データ領域なし）
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8)) // info_offset: ヘッダー直後（データ領域なし）
+	writeRawIndex(&buf, 0x00, table)
 
-	buf.WriteByte(0x01)                      // flag: zlib圧縮インデックス
-	writeUint64(&buf, uint64(len(rawTable))) // compressed_size相当（実際は非圧縮のrawTableをそのまま使う）
-	writeUint64(&buf, uint64(len(rawTable))) // original_size（読み飛ばされるのみ）
-	buf.Write(rawTable)
+	return buf.Bytes()
+}
+
+// buildXP3ArchiveWithZlibTable はzlib圧縮済みのcompressedと宣言上の解凍後サイズ
+// originalSizeを持つzlib圧縮インデックス（フラグ0x01）をヘッダー直後に配置した
+// XP3アーカイブを構築する。compressed_sizeにはcompressedの長さを書き込む。
+func buildXP3ArchiveWithZlibTable(compressed []byte, originalSize uint64) []byte {
+	var buf bytes.Buffer
+	buf.Write(parser.XP3Magic)
+	writeUint64(&buf, uint64(len(parser.XP3Magic)+8)) // info_offset: ヘッダー直後（データ領域なし）
+	buf.WriteByte(0x01)
+	writeUint64(&buf, uint64(len(compressed)))
+	writeUint64(&buf, originalSize)
+	buf.Write(compressed)
 
 	return buf.Bytes()
 }
@@ -810,7 +819,7 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		var table bytes.Buffer
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 
-		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+		archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 		t.Logf("crafted archive size: %d bytes", len(archiveBytes))
 
 		path := filepath.Join(t.TempDir(), "malicious.xp3")
@@ -836,7 +845,7 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		var table bytes.Buffer
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 
-		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+		archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 
 		path := filepath.Join(t.TempDir(), "malicious_segm.xp3")
 		writeFile(t, path, archiveBytes)
@@ -885,7 +894,7 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
 
-	archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+	archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 
 	path := filepath.Join(t.TempDir(), "corrupt_segm_offset.xp3")
 	writeFile(t, path, archiveBytes)
@@ -940,7 +949,7 @@ func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *test
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
 
-	archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+	archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 
 	path := filepath.Join(t.TempDir(), "corrupt_segm.xp3")
 	writeFile(t, path, archiveBytes)
@@ -1210,7 +1219,7 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		var table bytes.Buffer
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 
-		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+		archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 
 		path := filepath.Join(t.TempDir(), "no_segm.xp3")
 		writeFile(t, path, archiveBytes)
@@ -1232,7 +1241,7 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		var table bytes.Buffer
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 
-		archiveBytes := buildXP3ArchiveWithRawTable(table.Bytes())
+		archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
 
 		path := filepath.Join(t.TempDir(), "short_segm.xp3")
 		writeFile(t, path, archiveBytes)
@@ -1460,46 +1469,38 @@ func TestXP3Archive_HugeDeclaredTableSize_BoundedByFileSize(t *testing.T) {
 		trailingSize   = 8
 	)
 
-	// 全ゼロの8バイトはzlib解凍に失敗して生データとして扱われ、チャンク名の後に
-	// chunk_size（8バイト）を読み切れない。宣言サイズが残量（8バイト）へクランプ
-	// されて実際に読み取られる経路を通しつつ、壊れたファイルテーブルとして
-	// ErrInvalidXP3になることを確認できる。
 	trailing := make([]byte, trailingSize)
 
-	// ファイルテーブルは残量ちょうどの長さのため、宣言サイズを残量へクランプして
-	// 読み取らなければ（読み飛ばすと）このエントリはListFilesに現れない。
 	entryTable := buildUncompressedSingleEntryTable("clamped.txt")
+	compressedEntryTable := compressZlib(t, entryTable)
 
 	cases := map[string]struct {
-		content   []byte
-		wantLen   int
-		wantErr   bool
-		wantFiles []string
+		content []byte
+		wantLen int
 	}{
 		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言し残量が無い場合はErrInvalidXP3": {
 			content: buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, nil),
 			wantLen: int(indexHeaderEnd),
-			wantErr: true,
 		},
 		"異常系: 非圧縮インデックスのindex_sizeが1TiBを宣言する場合は残量ぶんに縮めずErrInvalidXP3": {
 			content: buildXP3ArchiveWithHugeTableSize(0x00, 0, entryTable),
 			wantLen: int(indexHeaderEnd) + len(entryTable),
-			wantErr: true,
 		},
 		"異常系: 継続フラグ付き非圧縮インデックスのindex_sizeが1TiBを宣言する場合はErrInvalidXP3": {
 			content: buildXP3ArchiveWithHugeTableSize(0x80, 0, entryTable),
 			wantLen: int(indexHeaderEnd) + len(entryTable),
-			wantErr: true,
 		},
-		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言し残り8バイトが壊れたテーブルの場合はErrInvalidXP3": {
+		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言し残り8バイトしか無い場合はErrInvalidXP3": {
 			content: buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, trailing),
 			wantLen: int(indexHeaderEnd) + trailingSize,
-			wantErr: true,
 		},
-		"正常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言しても残量ぶんのファイルテーブルを読んでエントリを返す": {
-			content:   buildXP3ArchiveWithHugeTableSize(0x01, hugeDeclaredTableSize, entryTable),
-			wantLen:   int(indexHeaderEnd) + len(entryTable),
-			wantFiles: []string{"clamped.txt"},
+		// 残りはちょうど正しいzlibテーブルのため、宣言サイズを残量へ縮めて
+		// 読み取る実装ではこのエントリがListFilesに現れてしまう。
+		"異常系: zlib圧縮インデックスのcompressed_sizeが1TiBを宣言する場合は残量が正しいzlibテーブルでも残量ぶんに縮めずErrInvalidXP3": {
+			content: buildXP3ArchiveWithHugeTableSize(
+				0x01, uint64(len(entryTable)), compressedEntryTable,
+			),
+			wantLen: int(indexHeaderEnd) + len(compressedEntryTable),
 		},
 	}
 
@@ -1514,12 +1515,9 @@ func TestXP3Archive_HugeDeclaredTableSize_BoundedByFileSize(t *testing.T) {
 
 			archive, err := parser.NewXP3Archive(path)
 
-			if tc.wantErr {
-				require.ErrorIs(t, err, parser.ErrInvalidXP3)
-				return
-			}
-			require.NoError(t, err)
-			assert.ElementsMatch(t, tc.wantFiles, archive.ListFiles())
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			assert.Equal(t, 1, strings.Count(err.Error(), path))
+			assert.Nil(t, archive)
 		})
 	}
 }
@@ -1615,6 +1613,16 @@ func TestNewXP3Archive_CorruptIndex(t *testing.T) {
 	// 末尾のテーブルを1バイト削り、index_sizeが残量を1バイト超えるようにする。
 	cushionWithRawOverrun = cushionWithRawOverrun[:len(cushionWithRawOverrun)-1]
 
+	// zlib圧縮インデックス（flag 0x01、compressed_size、original_size）の直後にbodyを置く。
+	zlibIndexWith := func(compressedSize, originalSize uint64, body []byte) []byte {
+		return buildXP3ArchiveWithIndex(
+			append(append([]byte{0x01}, uint64Bytes(compressedSize, originalSize)...), body...),
+		)
+	}
+	validTableSize := uint64(len(validEntryTable))
+	compressedValidTable := compressZlib(t, validEntryTable)
+	compressedValidTableSize := uint64(len(compressedValidTable))
+
 	var oversizedFileChunk bytes.Buffer
 	oversizedFileChunk.WriteString("File")
 	writeUint64(&oversizedFileChunk, 1000)
@@ -1656,6 +1664,24 @@ func TestNewXP3Archive_CorruptIndex(t *testing.T) {
 		"異常系: zlib圧縮インデックスのcompressed_sizeが0を宣言する": buildXP3ArchiveWithIndex(
 			append(append([]byte{0x01}, uint64Bytes(0, 0)...), validEntryTable...),
 		),
+		"異常系: zlib圧縮インデックスの本体がzlibストリームでなく非圧縮のファイルテーブル": zlibIndexWith(
+			validTableSize, validTableSize, validEntryTable,
+		),
+		"異常系: zlib圧縮インデックスのcompressed_sizeが残量を1バイト超える": zlibIndexWith(
+			compressedValidTableSize+1, validTableSize, compressedValidTable,
+		),
+		"異常系: zlib圧縮インデックスのcompressed_sizeがzlibストリームより1バイト短い": zlibIndexWith(
+			compressedValidTableSize-1, validTableSize, compressedValidTable,
+		),
+		"異常系: zlib圧縮インデックスの解凍後サイズがoriginal_sizeより1バイト長い": zlibIndexWith(
+			compressedValidTableSize, validTableSize-1, compressedValidTable,
+		),
+		"異常系: zlib圧縮インデックスの解凍後サイズがoriginal_sizeより1バイト短い": zlibIndexWith(
+			compressedValidTableSize, validTableSize+1, compressedValidTable,
+		),
+		"異常系: zlib圧縮インデックスのoriginal_sizeが0なのに解凍後のテーブルが空でない": zlibIndexWith(
+			compressedValidTableSize, 0, compressedValidTable,
+		),
 		"異常系: 非圧縮インデックスのindex_sizeが途切れている": buildXP3ArchiveWithIndex(
 			[]byte{0x00, 0x01, 0x02, 0x03},
 		),
@@ -1683,16 +1709,19 @@ func TestNewXP3Archive_CorruptIndex(t *testing.T) {
 		"異常系: 継続フラグ付きインデックスの次インデックスオフセットが自身を指して循環する": continuedIndex(
 			uint64Bytes(continuedIndexStart)...,
 		),
-		"異常系: ファイルテーブル末尾のチャンク名が途切れている": buildXP3ArchiveWithRawTable(
+		"異常系: ファイルテーブル末尾のチャンク名が途切れている": buildXP3ArchiveWithUncompressedTable(
 			append(bytes.Clone(validEntryTable), 'F', 'i'),
 		),
-		"異常系: Fileチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithRawTable(
+		"異常系: ファイルテーブル末尾のチャンクサイズが途切れている": buildXP3ArchiveWithUncompressedTable(
+			append(bytes.Clone(validEntryTable), 'F', 'i', 'l', 'e', 0x00, 0x00),
+		),
+		"異常系: Fileチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithUncompressedTable(
 			oversizedFileChunk.Bytes(),
 		),
-		"異常系: 未知のチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithRawTable(
+		"異常系: 未知のチャンクのサイズがテーブル長を超える": buildXP3ArchiveWithUncompressedTable(
 			oversizedUnknownChunk.Bytes(),
 		),
-		"異常系: Fileチャンクの本体が1バイトも残っていない": buildXP3ArchiveWithRawTable(
+		"異常系: Fileチャンクの本体が1バイトも残っていない": buildXP3ArchiveWithUncompressedTable(
 			emptyFileChunk.Bytes(),
 		),
 	}
@@ -1717,6 +1746,7 @@ func TestNewXP3Archive_IndexAtEOF(t *testing.T) {
 	t.Parallel()
 
 	v1Archive := buildXP3Archive(t, []xp3EntrySpec{{name: "v1.txt", data: []byte("v1")}})
+	compressedEmptyTable := compressZlib(t, nil)
 
 	cases := map[string]struct {
 		content   []byte
@@ -1734,6 +1764,9 @@ func TestNewXP3Archive_IndexAtEOF(t *testing.T) {
 		},
 		"正常系: index_sizeが0の非圧縮インデックスは空のファイル一覧": {
 			content: buildXP3ArchiveWithIndex(append([]byte{0x00}, uint64Bytes(0)...)),
+		},
+		"正常系: 空のテーブルを圧縮したoriginal_sizeが0のzlib圧縮インデックスは空のファイル一覧": {
+			content: buildXP3ArchiveWithZlibTable(compressedEmptyTable, 0),
 		},
 	}
 
@@ -1966,16 +1999,6 @@ func TestNewXP3Archive_ContinuedIndexTableLimit(t *testing.T) {
 				writeRawIndex(buf, 0x00, secondRawTable.Bytes())
 			},
 		},
-		"異常系: 2つ目のzlib圧縮インデックスが解凍できず生データとして合計の上限を超える場合はErrInvalidXP3": {
-			writeSecond: func(t *testing.T, buf *bytes.Buffer) {
-				t.Helper()
-
-				buf.WriteByte(0x01)
-				writeUint64(buf, secondTableSize)
-				writeUint64(buf, secondTableSize)
-				buf.Write(secondRawTable.Bytes())
-			},
-		},
 	}
 
 	for name, tc := range cases {
@@ -2044,27 +2067,27 @@ func TestNewXP3Archive_FileTableDecompressionLimit(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
-		table     func(t *testing.T) []byte
+		archive   func(t *testing.T) []byte
 		wantErr   bool
 		wantFiles []string
 	}{
-		"異常系: 64MiBを超えて膨張するファイルテーブルはErrDecompressedTooLarge": {
-			table: func(t *testing.T) []byte {
+		"異常系: original_sizeどおり64MiBを超えて膨張するファイルテーブルはErrDecompressedTooLarge": {
+			archive: func(t *testing.T) []byte {
 				t.Helper()
 
-				return zlibZeroStream(t, 65<<20)
+				return buildXP3ArchiveWithZlibTable(zlibZeroStream(t, 65<<20), 65<<20)
 			},
 			wantErr: true,
 		},
 		"正常系: 数KBへ膨張するファイルテーブルは解析できる": {
-			table: func(t *testing.T) []byte {
+			archive: func(t *testing.T) []byte {
 				t.Helper()
 
 				var table bytes.Buffer
 				table.Write(buildUncompressedSingleEntryTable("small.txt"))
 				writeChunkHeader(&table, "pad ", make([]byte, 4096))
 
-				return compressZlib(t, table.Bytes())
+				return buildXP3ArchiveWithZlibTable(compressZlib(t, table.Bytes()), uint64(table.Len()))
 			},
 			wantFiles: []string{"small.txt"},
 		},
@@ -2075,7 +2098,7 @@ func TestNewXP3Archive_FileTableDecompressionLimit(t *testing.T) {
 			t.Parallel()
 
 			path := filepath.Join(t.TempDir(), "table.xp3")
-			writeFile(t, path, buildXP3ArchiveWithRawTable(tc.table(t)))
+			writeFile(t, path, tc.archive(t))
 
 			archive, err := parser.NewXP3Archive(path)
 
@@ -2213,7 +2236,7 @@ func TestNewXP3Archive_FileTableDecompression_AllocationBounded(t *testing.T) {
 	)
 
 	path := filepath.Join(t.TempDir(), "table-bomb-256mib.xp3")
-	writeFile(t, path, buildXP3ArchiveWithRawTable(zlibZeroStream(t, inflatedSize)))
+	writeFile(t, path, buildXP3ArchiveWithZlibTable(zlibZeroStream(t, inflatedSize), inflatedSize))
 
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)

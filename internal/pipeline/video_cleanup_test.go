@@ -214,6 +214,34 @@ func TestRemoveStaleVideoSourceFiles(t *testing.T) {
 		assert.Equal(t, "converted mpeg-ps", string(got))
 	})
 
+	t.Run("正常系: 同名の.mpgを優先してスキップした.wmvの複製を削除する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		skippedCopy := filepath.Join(dir, "op.wmv")
+		winnerDest := filepath.Join(dir, "op.mpg")
+		require.NoError(t, os.WriteFile(skippedCopy, []byte("raw copy from copyTree"), 0o600))
+		require.NoError(t, os.WriteFile(winnerDest, []byte("mpeg-ps passthrough"), 0o600))
+
+		summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+			{
+				SourcePath: filepath.Join(dir, "extract", "op.mpg"),
+				DestPath:   winnerDest,
+				Status:     converter.StatusSuccess,
+			},
+			{
+				SourcePath: filepath.Join(dir, "extract", "op.wmv"),
+				DestPath:   winnerDest,
+				Status:     converter.StatusSkipped,
+			},
+		}}
+
+		removeStaleVideoSourceFiles(summary)
+
+		assert.NoFileExists(t, skippedCopy)
+		assert.FileExists(t, winnerDest)
+	})
+
 	t.Run("正常系: 動画結果を含まないsummaryでは何もしない（--skip-video相当）", func(t *testing.T) {
 		t.Parallel()
 
@@ -240,4 +268,29 @@ func TestRemoveStaleVideoSourceFiles(t *testing.T) {
 
 		assert.FileExists(t, scriptDest)
 	})
+}
+
+// TestRemoveStaleVideoSourceFiles_SkippedWithoutDestPath はDestPathが空の
+// スキップ結果から削除パスを組み立てないことを検証する。DestPathが空のまま
+// 削除パスを組み立てると、カレントディレクトリ相対の".wmv"が削除対象になる。
+//
+// why not: t.Parallel()を付けない。t.Chdirはプロセス全体のカレントディレクトリを
+// 変更するため、並列テストから呼ぶとpanicする。
+func TestRemoveStaleVideoSourceFiles_SkippedWithoutDestPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	bareExtFile := filepath.Join(dir, ".wmv")
+	require.NoError(t, os.WriteFile(bareExtFile, []byte("unrelated file"), 0o600))
+
+	summary := converter.ConversionSummary{Results: []converter.ConversionResult{
+		{
+			SourcePath: filepath.Join(dir, "extract", "movie.wmv"),
+			Status:     converter.StatusSkipped,
+		},
+	}}
+
+	removeStaleVideoSourceFiles(summary)
+
+	assert.FileExists(t, bareExtFile)
 }

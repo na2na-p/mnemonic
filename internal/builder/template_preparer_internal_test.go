@@ -2,6 +2,8 @@ package builder
 
 import (
 	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +130,35 @@ func TestTemplatePreparer_FetchSDL2Sources(t *testing.T) {
 		content, err := os.ReadFile(sdlActivity) //nolint:gosec // テストで自身が生成した一時ファイルを読む用途のため妥当
 		require.NoError(t, err)
 		assert.Equal(t, "dummy content", string(content))
+	})
+
+	t.Run("正常系: キャッシュ保存の失敗をWarnへ報告する", func(t *testing.T) {
+		t.Parallel()
+
+		cacheParent := filepath.Join(t.TempDir(), "cache-parent")
+		require.NoError(t, os.WriteFile(cacheParent, []byte("not a directory"), 0o600))
+		osErr := os.MkdirAll(cacheParent, 0o750)
+		require.Error(t, osErr)
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("downloaded content: " + r.URL.Path))
+		}))
+		t.Cleanup(server.Close)
+
+		var warnings []string
+		p := NewTemplatePreparer(t.TempDir(), NewSDL2SourceCache(cacheParent))
+		p.sdl2BaseURL = server.URL
+		p.Warn = func(message string) { warnings = append(warnings, message) }
+
+		require.NoError(t, p.fetchSDL2Sources())
+
+		sdlActivity := filepath.Join(p.projectDir, "app", "src", "main", "java", "org", "libsdl", "app", "SDLActivity.java")
+		content, err := os.ReadFile(sdlActivity) //nolint:gosec // テストで自身が生成した一時ファイルを読む用途のため妥当
+		require.NoError(t, err)
+		assert.Equal(t, "downloaded content: /SDLActivity.java", string(content), "差し替えた取得元からダウンロードする")
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], osErr.Error())
+		assert.NotContains(t, warnings[0], "取得に失敗しました")
 	})
 
 	t.Run("異常系: SDL2ソースの取得に失敗した場合ErrTemplatePreparerとErrSDL2SourceFetchの両方を満たす", func(t *testing.T) {

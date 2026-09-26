@@ -273,23 +273,3 @@ func (c *TemplateCache) SaveTemplate(templatePath, version string) (string, erro
 
 	return destination, nil
 }
-
-// isSameFile はsrcInfoのファイルとdstが同じファイル実体を指すかを返す。dstが存在
-// しない場合は同一になり得ないためfalseを返す。
-//
-// why not: パス文字列の正規化（Abs + EvalSymlinks）で比べると、ハードリンクや
-// 大文字小文字を区別しないファイルシステム上の表記違いを別ファイルと誤判定し、
-// コピーで内容を消してしまう。os.SameFileはデバイスとinodeで比べるため、
-// これらも同一と判定できる。
-func isSameFile(srcInfo os.FileInfo, dst string) (bool, error) {
-	dstInfo, err := os.Stat(dst)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	return os.SameFile(srcInfo, dstInfo), nil
-}
