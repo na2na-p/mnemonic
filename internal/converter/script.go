@@ -255,6 +255,7 @@ func applyLayoptAlphaRule(content string) (string, int) {
 type ScriptAdjuster struct {
 	rules                []AdjustmentRule
 	addEncodingDirective bool
+	about                AboutDialog
 }
 
 // NewScriptAdjuster はScriptAdjusterを初期化する。
@@ -563,9 +564,13 @@ func (a *ScriptAdjuster) ApplyMessageLayerCompat(content string) (string, int) {
 }
 
 // ApplyMainWindowCompat はMainWindow.tjs向けのkrkrsdl2互換調整を
-// contentへ適用し、(調整後の内容, 調整回数)を返す。
+// contentへ適用し、(調整後の内容, 調整回数)を返す。「このソフトについて」の
+// 標準ハンドラはWithAboutDialogで渡した内容を表示する実装へ置き換える。
 func (a *ScriptAdjuster) ApplyMainWindowCompat(content string) (string, int) {
-	return applyRules(content, mainWindowCompatRules)
+	guarded, guardCount := applyRules(content, mainWindowCompatRules)
+	replaced, aboutCount := a.replaceAboutHandler(guarded)
+
+	return replaced, guardCount + aboutCount
 }
 
 // AddStartupDirective はstartup.tjs向けのポリフィル初期化ディレクティブを

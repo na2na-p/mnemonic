@@ -277,3 +277,73 @@ func TestBuildPipeline_AdjustScripts_SkipVideo(t *testing.T) {
 		assert.Contains(t, string(content), `"op.mpg"`)
 	})
 }
+
+func TestBuildPipeline_AdjustScripts_AboutHandler(t *testing.T) {
+	t.Parallel()
+
+	const handler = "\tfunction onHelpAboutMenuItemClick(sender)\n" +
+		"\t{\n" +
+		"\t\tvar win = new global.KAGWindow(false, aboutWidth, aboutHeight);\n" +
+		"\t\twin.setPos(left + ((width - win.width)>>1), top + ((height - win.height)>>1));\n" +
+		"\t\twin.process('about.ks' ,,, true);\n" +
+		"\t\twin.showModal();\n" +
+		"\t\tinvalidate win;\n" +
+		"\t}\n"
+
+	tests := []struct {
+		name  string
+		about string
+		want  string
+	}{
+		{
+			name:  "正常系: about.ksの本文とキャプションでハンドラを置き換える",
+			about: "[title name=\"バージョン情報\"]\\\nVer.1.05\n[s]",
+			want:  `System.inform("Ver.1.05", "バージョン情報");`,
+		},
+		{
+			name: "正常系: about.ksが無ければSystem.titleで置き換える",
+			want: "System.inform(System.title, System.title);",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newTestPipeline(t)
+			dir := t.TempDir()
+			systemDir := filepath.Join(dir, "system")
+			scenarioDir := filepath.Join(dir, "scenario")
+			require.NoError(t, os.MkdirAll(systemDir, 0o750))
+			require.NoError(t, os.MkdirAll(scenarioDir, 0o750))
+			mainWindow := filepath.Join(systemDir, "MainWindow.tjs")
+			require.NoError(t, os.WriteFile(mainWindow, []byte(handler), 0o600))
+			if tt.about != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(scenarioDir, "About.ks"), []byte(tt.about), 0o600))
+			}
+
+			require.NoError(t, p.adjustScripts(dir))
+
+			content, err := os.ReadFile(mainWindow) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+			require.NoError(t, err)
+			assert.Contains(t, string(content), tt.want)
+			assert.NotContains(t, string(content), "KAGWindow")
+		})
+	}
+
+	t.Run("異常系: UTF-8として読めないabout.ksは走査したディレクトリからの相対パスで報告する", func(t *testing.T) {
+		t.Parallel()
+
+		p := newTestPipeline(t)
+		dir := t.TempDir()
+		scenarioDir := filepath.Join(dir, "scenario")
+		require.NoError(t, os.MkdirAll(scenarioDir, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(scenarioDir, "about.ks"), []byte{0x82, 0xa0, 0xff}, 0o600))
+
+		err := p.adjustScripts(dir)
+
+		require.ErrorIs(t, err, converter.ErrScriptNotUTF8)
+		assert.Contains(t, err.Error(), filepath.FromSlash("scenario/about.ks"))
+		assert.NotContains(t, err.Error(), dir)
+	})
+}
