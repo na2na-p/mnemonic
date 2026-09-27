@@ -19,10 +19,16 @@ type ProgressCallback func(progress Progress)
 // OutputPathは失敗時の未設定を表現するためポインタとする。Statisticsは
 // フェーズごとの所要時間（float64、秒）と処理件数（int）等、値の型が
 // 混在するためmap[string]anyとする。
+//
+// ErrorMessageは利用者へ表示する失敗の理由で、Errは失敗の原因をerrors.Is /
+// errors.Asで判定するためのエラー値。Errを持つ失敗ではErrorMessageは
+// Err.Error()と一致する。入力の検証（Validate）の失敗はエラー値を持たない
+// ため、ErrorMessageだけを設定しErrはnilのままにする。
 type Result struct {
 	Success         bool
 	OutputPath      *string
 	ErrorMessage    string
+	Err             error
 	PhasesCompleted []Phase
 	Statistics      map[string]any
 }

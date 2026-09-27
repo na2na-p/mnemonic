@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -157,7 +158,7 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "ビルド失敗: %s\n", result.ErrorMessage) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
-			if hint := gradleOutputHint(result.ErrorMessage, logFile, verboseLevel(verbose)); hint != "" {
+			if hint := gradleOutputHint(result.Err, logFile, verboseLevel(verbose)); hint != "" {
 				fmt.Fprintln(cmd.OutOrStdout(), hint) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 			}
 			log.Error(result.ErrorMessage)
@@ -223,19 +224,14 @@ func closeLogFile(cmd *cobra.Command, log *logger.BuildLogger, file io.Closer) {
 // gradleOutputHint はGradleの失敗時に、Gradleの出力全文の在りかを示す1行を返す。
 // Gradleの失敗でない場合と、全文がすでに端末へ出ている-vv以上の場合は空文字列を返す。
 //
-// why not: エラーの型ではなくメッセージの先頭で判定する。pipeline.Resultは
-// エラーを文字列でしか持たず、errors.Asで*builder.GradleBuildErrorを取り出せない。
-// GradleBuildErrorとAPK未検出のエラー文はどちらもセンチネルの文言で始まる。
-//
 // why not: ログファイルが無い場合に「確認できます」とだけ書かない。パイプラインは
 // 全文をDebugでロガーへ渡すだけで、ログファイルも-vvも無い実行では全文はどこにも
 // 残っていないため、再実行を案内する。
-func gradleOutputHint(errorMessage, logFile string, level logger.VerboseLevel) string {
+func gradleOutputHint(err error, logFile string, level logger.VerboseLevel) string {
 	if level >= logger.Debug {
 		return ""
 	}
-	if !strings.HasPrefix(errorMessage, builder.ErrGradleBuildFailed.Error()) &&
-		!strings.HasPrefix(errorMessage, pipeline.ErrGradleAPKMissing.Error()) {
+	if !errors.Is(err, builder.ErrGradleBuildFailed) && !errors.Is(err, pipeline.ErrGradleAPKMissing) {
 		return ""
 	}
 	if logFile != "" {

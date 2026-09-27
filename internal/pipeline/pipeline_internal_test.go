@@ -161,6 +161,7 @@ func TestBuildPipeline_Run_CleanCache(t *testing.T) {
 
 			assert.Equal(t, tt.wantSuccess, result.Success)
 			assert.Contains(t, result.ErrorMessage, tt.wantErrContains)
+			require.NoError(t, result.Err, "成功時と入力の検証の失敗時はErrを設定しない")
 			for _, path := range others {
 				if tt.wantRemoved {
 					assert.NoFileExists(t, path)
@@ -204,6 +205,8 @@ func TestBuildPipeline_Run_CleanCacheFailure(t *testing.T) {
 
 	assert.False(t, result.Success)
 	assert.Contains(t, result.ErrorMessage, ErrCacheClean.Error())
+	require.ErrorIs(t, result.Err, ErrCacheClean)
+	assert.Equal(t, result.Err.Error(), result.ErrorMessage)
 	assert.Empty(t, phases)
 }
 
@@ -272,6 +275,8 @@ func TestBuildPipeline_Run_PhaseFailure(t *testing.T) {
 	assert.False(t, result.Success)
 	assert.Nil(t, result.OutputPath)
 	assert.NotEmpty(t, result.ErrorMessage)
+	require.ErrorIs(t, result.Err, assert.AnError)
+	assert.Equal(t, result.Err.Error(), result.ErrorMessage)
 	assert.Equal(t, []Phase{PhaseAnalyze, PhaseExtract}, result.PhasesCompleted)
 }
 

@@ -1,7 +1,6 @@
 package pipeline
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -81,27 +80,26 @@ func TestRunGradleBuild(t *testing.T) {
 	}
 }
 
-// TestBuildPipeline_Run_GradleFailureMessage はGradleの失敗がResult.ErrorMessageの
-// 先頭にセンチネルの文言を残したまま届くことを検証する。CLIはこの先頭の文言で
-// Gradleの失敗を見分け、出力全文の在りかを案内する。
-func TestBuildPipeline_Run_GradleFailureMessage(t *testing.T) {
+// TestBuildPipeline_Run_GradleFailureErr はGradleの失敗がResult.Errのエラー連鎖に
+// センチネルを残したまま届き、ErrorMessageがその文言と一致することを検証する。
+func TestBuildPipeline_Run_GradleFailureErr(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		result     builder.BuildResult
-		buildErr   error
-		wantPrefix string
+		name     string
+		result   builder.BuildResult
+		buildErr error
+		wantErr  error
 	}{
 		{
-			name:       "異常系: Gradleビルドの失敗はErrGradleBuildFailedの文言で始まる",
-			buildErr:   &builder.GradleBuildError{ExitCode: 1, Output: "* What went wrong:\nboom\n\n* Try:\n"},
-			wantPrefix: builder.ErrGradleBuildFailed.Error(),
+			name:     "異常系: Gradleビルドの失敗はErrGradleBuildFailedをResult.Errに残す",
+			buildErr: &builder.GradleBuildError{ExitCode: 1, Output: "* What went wrong:\nboom\n\n* Try:\n"},
+			wantErr:  builder.ErrGradleBuildFailed,
 		},
 		{
-			name:       "異常系: APKが見つからない失敗はErrGradleAPKMissingの文言で始まる",
-			result:     builder.BuildResult{Success: true, OutputLog: "BUILD SUCCESSFUL"},
-			wantPrefix: ErrGradleAPKMissing.Error(),
+			name:    "異常系: APKが見つからない失敗はErrGradleAPKMissingをResult.Errに残す",
+			result:  builder.BuildResult{Success: true, OutputLog: "BUILD SUCCESSFUL"},
+			wantErr: ErrGradleAPKMissing,
 		},
 	}
 
@@ -126,7 +124,8 @@ func TestBuildPipeline_Run_GradleFailureMessage(t *testing.T) {
 			result := p.Run(nil)
 
 			assert.False(t, result.Success)
-			assert.True(t, strings.HasPrefix(result.ErrorMessage, tt.wantPrefix), "ErrorMessage = %q", result.ErrorMessage)
+			require.ErrorIs(t, result.Err, tt.wantErr)
+			assert.Equal(t, result.Err.Error(), result.ErrorMessage)
 		})
 	}
 }
