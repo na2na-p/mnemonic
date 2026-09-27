@@ -1,0 +1,79 @@
+Downloading https://services.gradle.org/distributions/gradle-7.5-all.zip
+................................................................................
+Unzipping /root/.gradle/wrapper/dists/gradle-7.5-all/6qsw290k5lz422uaf8jf6m7co/gradle-7.5-all.zip to /root/.gradle/wrapper/dists/gradle-7.5-all/6qsw290k5lz422uaf8jf6m7co
+Set executable permissions for: /root/.gradle/wrapper/dists/gradle-7.5-all/6qsw290k5lz422uaf8jf6m7co/gradle-7.5/bin/gradle
+
+Welcome to Gradle 7.5!
+
+Here are the highlights of this release:
+ - Support for Java 18
+ - Support for building with Groovy 4
+ - Much more responsive continuous builds
+ - Improved diagnostics for dependency resolution
+
+For more details see https://docs.gradle.org/7.5/release-notes.html
+
+To honour the JVM settings for this build a single-use Daemon process will be forked. See https://docs.gradle.org/7.5/userguide/gradle_daemon.html#sec:disabling_the_daemon.
+"Install Android SDK Build-Tools 30.0.3 (revision: 30.0.3)" finished.
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :app:compileReleaseAidl NO-SOURCE
+> Task :app:compileReleaseRenderscript NO-SOURCE
+> Task :app:generateReleaseBuildConfig
+> Task :app:javaPreCompileRelease
+> Task :app:checkReleaseAarMetadata
+> Task :app:generateReleaseResValues
+> Task :app:mapReleaseSourceSetPaths
+> Task :app:generateReleaseResources
+> Task :app:mergeReleaseResources FAILED
+> Task :app:createReleaseCompatibleScreenManifests
+7 actionable tasks: 7 executed
+AAPT2 aapt2-7.4.2-8841542-linux Daemon #3: Unexpected error output: OrbStack ERROR: Dynamic loader not found: /lib64/ld-linux-x86-64.so.2
+(Daemon #0..#4 の同種の行 38 行を省略)
+AAPT2 aapt2-7.4.2-8841542-linux Daemon #3: Unexpected error output:
+AAPT2 aapt2-7.4.2-8841542-linux Daemon #3: Unexpected error output: For more details and instructions, see https://orb.cx/multiarch
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:mergeReleaseResources'.
+> Multiple task action failures occurred:
+   > A failure occurred while executing com.android.build.gradle.internal.res.Aapt2CompileRunnable
+      > AAPT2 aapt2-7.4.2-8841542-linux Daemon #2: Daemon startup failed
+        This should not happen under normal circumstances, please file an issue if it does.
+   > A failure occurred while executing com.android.build.gradle.internal.res.Aapt2CompileRunnable
+      > AAPT2 aapt2-7.4.2-8841542-linux Daemon #3: Daemon startup failed
+        This should not happen under normal circumstances, please file an issue if it does.
+   > A failure occurred while executing com.android.build.gradle.internal.res.Aapt2CompileRunnable
+      > AAPT2 aapt2-7.4.2-8841542-linux Daemon #0: Daemon startup failed
+        This should not happen under normal circumstances, please file an issue if it does.
+   > A failure occurred while executing com.android.build.gradle.internal.res.Aapt2CompileRunnable
+      > AAPT2 aapt2-7.4.2-8841542-linux Daemon #4: Daemon startup failed
+        This should not happen under normal circumstances, please file an issue if it does.
+   > A failure occurred while executing com.android.build.gradle.internal.res.Aapt2CompileRunnable
+      > AAPT2 aapt2-7.4.2-8841542-linux Daemon #1: Daemon startup failed
+        This should not happen under normal circumstances, please file an issue if it does.
+
+* Try:
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+
+* Exception is:
+org.gradle.api.tasks.TaskExecutionException: Execution failed for task ':app:mergeReleaseResources'.
+	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.lambda$executeIfValid$1(ExecuteActionsTaskExecuter.java:142)
+	at org.gradle.internal.Try$Failure.ifSuccessfulOrElse(Try.java:282)
+	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.executeIfValid(ExecuteActionsTaskExecuter.java:140)
+	at org.gradle.api.internal.tasks.execution.ExecuteActionsTaskExecuter.execute(ExecuteActionsTaskExecuter.java:128)
+	at org.gradle.api.internal.tasks.execution.CleanupStaleOutputsExecuter.execute(CleanupStaleOutputsExecuter.java:77)
+(スタックトレース 1000 行余りを省略)
+	at com.android.builder.internal.aapt.v2.Aapt2DaemonImpl.startProcess(Aapt2DaemonImpl.kt:113)
+	at com.android.builder.internal.aapt.v2.Aapt2Daemon.checkStarted(Aapt2Daemon.kt:56)
+	... 42 more
+Caused by: java.io.IOException: Process unexpectedly exit.
+	at com.android.builder.internal.aapt.v2.Aapt2DaemonImpl.startProcess(Aapt2DaemonImpl.kt:114)
+	... 43 more
+
+
+* Get more help at https://help.gradle.org
+
+BUILD FAILED in 22s

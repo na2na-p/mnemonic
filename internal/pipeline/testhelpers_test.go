@@ -82,6 +82,7 @@ func (r *recordingLogger) record(level, message string) {
 func (r *recordingLogger) Info(message string)    { r.record("INFO", message) }
 func (r *recordingLogger) Warning(message string) { r.record("WARNING", message) }
 func (r *recordingLogger) Verbose(message string) { r.record("VERBOSE", message) }
+func (r *recordingLogger) Debug(message string)   { r.record("DEBUG", message) }
 
 // messages はlevelのログのメッセージを記録順に返す。
 func (r *recordingLogger) messages(level string) []string {

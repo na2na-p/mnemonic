@@ -73,6 +73,8 @@ type Logger interface {
 	Info(message string)
 	Warning(message string)
 	Verbose(message string)
+	// Debug は利用者が詳しく調べる時だけ読む診断情報を報告する。
+	Debug(message string)
 }
 
 // nopLogger はロガー未設定時に使う、何も出力しないLogger。
@@ -81,6 +83,7 @@ type nopLogger struct{}
 func (nopLogger) Info(string)    {}
 func (nopLogger) Warning(string) {}
 func (nopLogger) Verbose(string) {}
+func (nopLogger) Debug(string)   {}
 
 // buildArtifacts はフェーズ間で引き渡すビルド成果物。値として次のフェーズへ渡す。
 //

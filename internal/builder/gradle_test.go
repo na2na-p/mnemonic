@@ -3,6 +3,7 @@ package builder_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -451,4 +452,152 @@ func TestExecCommandRunner_Run(t *testing.T) {
 
 		assert.Error(t, err)
 	})
+}
+
+func TestGradleBuildError_Error(t *testing.T) {
+	t.Parallel()
+
+	aapt2Failure, err := os.ReadFile(filepath.Join("testdata", "gradle_failure_aapt2.txt"))
+	require.NoError(t, err)
+
+	longBlock := make([]string, 0, 40)
+	for i := range 40 {
+		longBlock = append(longBlock, fmt.Sprintf("cause%02d", i+1))
+	}
+
+	noBlock := make([]string, 0, 50)
+	for i := range 25 {
+		noBlock = append(noBlock, fmt.Sprintf("line%02d", i+1), "")
+	}
+
+	tests := []struct {
+		name        string
+		exitCode    int
+		output      string
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name:     "異常系: What went wrongブロックを終了コードとともに示し、ダウンロード進捗やスタックトレースは含めない",
+			exitCode: 1,
+			output:   string(aapt2Failure),
+			wantContain: []string{
+				"Gradleビルドに失敗しました: exit code 1:\n",
+				"Execution failed for task ':app:mergeReleaseResources'.",
+				"AAPT2 aapt2-7.4.2-8841542-linux Daemon #1: Daemon startup failed",
+			},
+			wantAbsent: []string{
+				"....",
+				"Welcome to Gradle",
+				"Unexpected error output",
+				"* What went wrong:",
+				"* Try:",
+				"ExecuteActionsTaskExecuter",
+				"Caused by",
+				"BUILD FAILED",
+			},
+		},
+		{
+			name:        "異常系: 失敗が複数あれば各What went wrongブロックを示す",
+			exitCode:    1,
+			output:      "FAILURE: Build completed with 2 failures.\n\n1: Task failed with an exception.\n-----------\n* What went wrong:\nfirst cause\n\n* Try:\n> Run with --info\n==============\n\n2: Task failed with an exception.\n-----------\n* What went wrong:\nsecond cause\n\n* Try:\n> Run with --info\n",
+			wantContain: []string{"exit code 1:\nfirst cause\n\nsecond cause"},
+			wantAbsent:  []string{"Run with --info"},
+		},
+		{
+			name:        "異常系: CRLFの出力でもブロックを抽出し、CRを残さない",
+			exitCode:    1,
+			output:      "* What went wrong:\r\ncrlf cause\r\n\r\n* Try:\r\n> Run with --info\r\n",
+			wantContain: []string{"crlf cause"},
+			wantAbsent:  []string{"\r", "Run with --info"},
+		},
+		{
+			name:        "異常系: 長いブロックは先頭30行に切り詰め、省略した行数を示す",
+			exitCode:    1,
+			output:      "* What went wrong:\n" + strings.Join(longBlock, "\n") + "\n\n* Try:\n",
+			wantContain: []string{"cause01\n", "cause30\n", "ほか10行を省略"},
+			wantAbsent:  []string{"cause31"},
+		},
+		{
+			name:        "異常系: 出力が空白だけなら出力が無いことを示す",
+			exitCode:    1,
+			output:      " \n\n",
+			wantContain: []string{"Gradleビルドに失敗しました: exit code 1: （Gradleの出力なし）"},
+			wantAbsent:  []string{":\n"},
+		},
+		{
+			name:        "異常系: ブロックが無ければ空行を除く末尾20行を示す",
+			exitCode:    2,
+			output:      strings.Join(noBlock, "\n"),
+			wantContain: []string{"Gradleビルドに失敗しました: exit code 2:\n", "line06\nline07", "line25"},
+			wantAbsent:  []string{"line05", "\n\n"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := &builder.GradleBuildError{ExitCode: tt.exitCode, Output: tt.output}
+
+			require.ErrorIs(t, err, builder.ErrGradleBuildFailed)
+			for _, want := range tt.wantContain {
+				assert.Contains(t, err.Error(), want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, err.Error(), absent)
+			}
+		})
+	}
+}
+
+func TestGradleBuilder_Build_Failure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		result      builder.RunResult
+		wantOutput  string
+		wantContain string
+	}{
+		{
+			name:        "異常系: 失敗時は標準出力と標準エラーを結合した全出力をエラーから取り出せる",
+			result:      builder.RunResult{ExitCode: 1, Stdout: "> Task :app:a\n", Stderr: "* What went wrong:\nboom\n\n* Try:\n"},
+			wantOutput:  "> Task :app:a\n* What went wrong:\nboom\n\n* Try:\n",
+			wantContain: "boom",
+		},
+		{
+			name:        "異常系: 標準出力が改行で終わらなくても標準エラーのブロックを抽出する",
+			result:      builder.RunResult{ExitCode: 1, Stdout: "> Task :app:a FAILED", Stderr: "* What went wrong:\nboom\n\n* Try:\n"},
+			wantOutput:  "> Task :app:a FAILED\n* What went wrong:\nboom\n\n* Try:\n",
+			wantContain: "exit code 1:\nboom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeFakeGradlew(t, dir)
+
+			ctrl := gomock.NewController(t)
+			runner := NewMockCommandRunner(ctrl)
+			runner.EXPECT().
+				Run(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+				Return(tt.result, nil)
+
+			b, err := builder.NewGradleBuilder(dir, time.Minute, runner)
+			require.NoError(t, err)
+
+			_, err = b.Build("release")
+
+			require.ErrorIs(t, err, builder.ErrGradleBuildFailed)
+			buildErr, ok := errors.AsType[*builder.GradleBuildError](err)
+			require.True(t, ok)
+			assert.Equal(t, tt.result.ExitCode, buildErr.ExitCode)
+			assert.Equal(t, tt.wantOutput, buildErr.Output)
+			assert.Contains(t, err.Error(), tt.wantContain)
+		})
+	}
 }

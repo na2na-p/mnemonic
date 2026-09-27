@@ -49,13 +49,17 @@ type DependencyInfo struct {
 // Dependencies はビルドに必要な依存ツールの一覧。
 // mnemonic自体はGoの単一バイナリとして動作するためランタイム依存を持たない。
 // ここに列挙するのはAPKビルドパイプラインが実行時に呼び出す外部ツール。
+//
+// why not: Android NDKを確認しない。ネイティブライブラリはテンプレート同梱の
+// krkrsdl2_universal.apkとプラグインのビルド済み.soをjniLibsへ置くだけで、
+// テンプレートのapp/build.gradleにもネイティブビルドの設定が無く、ビルド中に
+// NDKを呼ぶ処理が無い。
 var Dependencies = []DependencyInfo{
 	{Name: "Java JDK", Command: "java", VersionFlag: "-version", Required: true},
 	{
 		Name: "Android SDK", Command: "sdkmanager", VersionFlag: "--version", Required: true,
 		PostCheck: checkAndroidBuildTools,
 	},
-	{Name: "Android NDK", Command: "ndk-build", VersionFlag: "--version", Required: true},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
 	// why not: FluidSynthはMIDIアセットを含むゲームのビルドでは必須
 	// （T-220以降、MIDIがあるのにFluidSynthが無い場合はビルドを失敗させる）

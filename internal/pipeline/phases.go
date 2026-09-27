@@ -537,20 +537,17 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 
 	gradleTimeout := time.Duration(b.config.GradleTimeoutSeconds) * time.Second
 
-	gradleBuilder, err := builder.NewGradleBuilder(projectDir, gradleTimeout, nil)
+	gradle, err := builder.NewGradleBuilder(projectDir, gradleTimeout, nil)
 	if err != nil {
 		return a, err
 	}
 
-	result, err := gradleBuilder.Build("release")
+	unsignedAPK, err := runGradleBuild(gradle, b.log())
 	if err != nil {
 		return a, err
 	}
-	if !result.Success || result.APKPath == nil {
-		return a, fmt.Errorf("%w: %s", ErrGradleAPKMissing, result.OutputLog)
-	}
 
-	a.unsignedAPK = *result.APKPath
+	a.unsignedAPK = unsignedAPK
 
 	return a, nil
 }
