@@ -22,12 +22,13 @@ import (
 )
 
 // minimalXP3Bytes は最小限のXP3ファイル（11バイトマジック + インデックス
-// オフセット）を返す。オフセットはファイル末尾（19）を指すため、インデックスは
-// 存在せず、解析は空のファイル一覧で終わる。
+// オフセット + index_sizeが0の非圧縮インデックス）を返す。解析は空のファイル
+// 一覧で終わる。
 func minimalXP3Bytes() []byte {
 	var buf bytes.Buffer
 	buf.Write(parser.XP3Magic)
 	writeUint64(&buf, uint64(len(parser.XP3Magic)+8))
+	writeRawIndex(&buf, 0x00, nil)
 
 	return buf.Bytes()
 }
@@ -620,10 +621,10 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		t.Parallel()
 
 		// "info"サブチャンクがsubChunkSize=MaxUint64を宣言するが、実データは
-		// 一切続かない（=数十バイトの細工ファイル）。修正前はreadChunkが
-		// make([]byte, size)を素朴に呼び出しfatal error（回復不能なOOM）に
-		// なっていた。修正後はstream.Len()でクランプされ、単に情報不足として
-		// エントリが破棄されるだけになる。
+		// 一切続かない（=数十バイトの細工ファイル）。readChunkが宣言値のまま
+		// make([]byte, size)を呼ぶとfatal error（回復不能なOOM）になる。
+		// stream.Len()でクランプされるため確保は起きず、segmサブチャンクを
+		// 欠くエントリとしてErrInvalidXP3になる。
 		var entryBody bytes.Buffer
 		entryBody.WriteString("info")
 		writeUint64(&entryBody, math.MaxUint64)
@@ -637,10 +638,9 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "malicious.xp3")
 		writeFile(t, path, archiveBytes)
 
-		archive, err := parser.NewXP3Archive(path)
+		_, err := parser.NewXP3Archive(path)
 
-		require.NoError(t, err)
-		assert.Empty(t, archive.ListFiles())
+		require.ErrorIs(t, err, parser.ErrInvalidXP3)
 	})
 
 	t.Run("異常系: segmサブチャンクが巨大サイズを宣言しても即時OOMしない", func(t *testing.T) {
@@ -649,7 +649,7 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		// writeChunkHeaderは実データ長をそのままsubChunkSizeとして書き込むため
 		// 使えない（「宣言サイズ ≠ 実データ長」という攻撃条件を作れない）。
 		// ここではsubChunkSize=MaxUint64を宣言しつつ実データを一切続けない
-		// バイト列を手動で組み立てる。
+		// バイト列を手動で組み立てる。infoサブチャンクを欠くためErrInvalidXP3になる。
 		var entryBody bytes.Buffer
 		entryBody.WriteString("segm")
 		writeUint64(&entryBody, math.MaxUint64)
@@ -662,10 +662,9 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "malicious_segm.xp3")
 		writeFile(t, path, archiveBytes)
 
-		archive, err := parser.NewXP3Archive(path)
+		_, err := parser.NewXP3Archive(path)
 
-		require.NoError(t, err)
-		assert.Empty(t, archive.ListFiles())
+		require.ErrorIs(t, err, parser.ErrInvalidXP3)
 	})
 }
 
@@ -1031,13 +1030,10 @@ func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
 	assert.Equal(t, dataSection, extracted)
 }
 
-// TestXP3Archive_EntryWithoutSegments_IsDiscarded は、infoチャンクは正常に
-// nameを確定できるがsegmチャンクを欠く（あるいは28バイト未満で1件も有効な
-// セグメントを構成できない）場合に、エントリ自体が破棄されることをpinする。
-//
-// parseSingleEntryの「name == "" || len(segments) == 0」判定は、
-// len(segments)==0の条件を取り除くミューテーションを入れても検出されない
-// 可能性があったため、このテストで固定する。
+// TestXP3Archive_EntryWithoutSegments_IsDiscarded は、infoチャンクで名前を
+// 確定できるがsegmチャンクを欠く場合はエントリ名を添えたErrInvalidXP3になり、
+// segmチャンクが28バイト未満で1件も有効なセグメントを構成できない場合は
+// エントリ自体が破棄されることをpinする。
 func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 	t.Parallel()
 
@@ -1056,7 +1052,7 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		return info.Bytes()
 	}
 
-	t.Run("異常系: infoは正常だがsegmチャンクが存在しない場合エントリは破棄される", func(t *testing.T) {
+	t.Run("異常系: infoは正常だがsegmチャンクが存在しない場合はErrInvalidXP3", func(t *testing.T) {
 		t.Parallel()
 
 		var entryBody bytes.Buffer
@@ -1071,10 +1067,10 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "no_segm.xp3")
 		writeFile(t, path, archiveBytes)
 
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
+		_, err := parser.NewXP3Archive(path)
 
-		assert.Empty(t, archive.ListFiles())
+		require.ErrorIs(t, err, parser.ErrInvalidXP3)
+		assert.Contains(t, err.Error(), "no_segm.bin")
 	})
 
 	t.Run("異常系: segmチャンクが28バイト未満の場合エントリは破棄される", func(t *testing.T) {
@@ -1437,9 +1433,10 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 
 	const headerSize = 19
 	const numSegments = 2000
-	const segmentDeclaredSize = 500 // 実ファイルサイズよりずっと大きい宣言値
-
 	payload := []byte("SHARED_OFFSET_PAYLOAD")
+	// 各セグメントはファイル末尾を超えない（超える非圧縮セグメントはそれだけで
+	// ErrInvalidXP3になる）が、numSegments件の合計はファイルサイズを大きく超える。
+	segmentDeclaredSize := len(payload)
 	offset := int64(headerSize)
 
 	nameUTF16 := utf16.Encode([]rune("many_segments.bin"))
@@ -1495,8 +1492,8 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	extracted, err := os.ReadFile(filepath.Join(outputDir, "many_segments.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 	require.NoError(t, err)
 
-	// budgetがなければ最大 numSegments * segmentDeclaredSize ≈ 1,000,000バイト
-	// 分読まれうるが、budget導入後はエントリ全体でfileSizeを超えて読まれない。
+	// budgetがなければ numSegments * segmentDeclaredSize = 42,000バイト読まれうるが、
+	// budgetによりエントリ全体でfileSizeを超えて読まれない。
 	assert.LessOrEqual(t, int64(len(extracted)), fileSize)
 	assert.Less(t, len(extracted), numSegments*segmentDeclaredSize)
 }
@@ -1740,6 +1737,12 @@ func TestNewXP3Archive_CorruptIndex(t *testing.T) {
 		"異常系: クッションヘッダー付きアーカイブでインデックスオフセットがファイル末尾より遥か先を指す": withIndexOffset(
 			cushionArchive, uint64(len(cushionArchive))+1000,
 		),
+		"異常系: インデックスオフセットがヘッダー直後のファイル末尾を指す": append(
+			bytes.Clone(parser.XP3Magic), uint64Bytes(uint64(len(parser.XP3Magic)+8))...,
+		),
+		"異常系: インデックスオフセットがデータ領域の後のファイル末尾を指す": withIndexOffset(
+			v1Archive, uint64(len(v1Archive)),
+		),
 		"異常系: インデックスオフセットがファイル末尾の1バイト前を指す": withIndexOffset(
 			v1Archive, uint64(len(v1Archive))-1,
 		),
@@ -1844,12 +1847,6 @@ func TestNewXP3Archive_IndexAtEOF(t *testing.T) {
 		content   []byte
 		wantFiles []string
 	}{
-		"正常系: インデックスオフセットがヘッダー直後のファイル末尾を指す場合は空のファイル一覧": {
-			content: minimalXP3Bytes(),
-		},
-		"正常系: インデックスオフセットがデータ領域の後のファイル末尾を指す場合は空のファイル一覧": {
-			content: withIndexOffset(v1Archive, uint64(len(v1Archive))),
-		},
 		"正常系: zlib圧縮インデックスを解析できる": {
 			content:   v1Archive,
 			wantFiles: []string{"v1.txt"},
@@ -2507,6 +2504,192 @@ func TestXP3Archive_PlannedOutputSize(t *testing.T) {
 				require.NoError(t, err)
 			}
 			assert.Equal(t, tc.wantWritten, dirFileBytes(t, outputDir))
+		})
+	}
+}
+
+// TestXP3Archive_EngineTruncationRules は、途切れたり欠けたりした索引とデータを
+// krkrz の tTVPXP3Archive（base/XP3Archive.cpp）と同じ基準で扱うことを検証する。
+// 行番号は krkrz b11c43a0 の XP3Archive.cpp を指す。
+//
+// why not: buildXP3ArchiveWithLayout を使わない。フィクスチャがパーサーと同じ
+// 誤読をすると往復検証はそのまま通ってしまうため、バイト列を XP3Archive.cpp の
+// 読み取り位置ごとに書き下す。レイアウトは全ケース共通で、0: マジック、
+// 11: インデックスオフセット、19: データ "hello"、24: インデックスフラグ、
+// 25: index_size、33: ファイルテーブル。ただし圧縮セグメントの行はデータが
+// 16バイトのzlibストリームで、インデックスフラグは35から始まる。
+func TestXP3Archive_EngineTruncationRules(t *testing.T) {
+	t.Parallel()
+
+	// L247-251 の XP3Mark。L254 で11バイト読み、L302 で比較する。
+	magic := []byte{'X', 'P', '3', 0x0d, 0x0a, 0x20, 0x0a, 0x1a, 0x8b, 0x67, 0x01}
+	// L369 の index_ofs。24はデータ "hello" の直後。
+	indexOffset24 := []byte{0x18, 0, 0, 0, 0, 0, 0, 0}
+	// L369 の index_ofs。137は正常なアーカイブのファイル末尾ちょうど。
+	indexOffsetAtEOF := []byte{0x89, 0, 0, 0, 0, 0, 0, 0}
+	// offset 19。segm の開始位置（L501）が指すデータ。
+	data := []byte("hello")
+	// L374 の index_flag。0x00 は L412-422 の非圧縮インデックス。
+	rawIndexFlag := []byte{0x00}
+	// FindChunk（L577-602）が読む info サブチャンク。見出しの後ろは L449-468 が
+	// ch_info_start からの相対位置で読む。
+	info := []byte{
+		'i', 'n', 'f', 'o', 0x18, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長24（L585-588）
+		0, 0, 0, 0, // +0 flags（L449）
+		5, 0, 0, 0, 0, 0, 0, 0, // +4 元サイズ（L452）
+		5, 0, 0, 0, 0, 0, 0, 0, // +12 格納サイズ（L453）
+		1, 0, // +20 名前の文字数（L455）
+		0xa9, 0x03, // +22 名前 "Ω"（UTF-16LE、L467-468）
+	}
+	// 名前の文字数が0の info サブチャンク。本体22バイト。
+	emptyNameInfo := []byte{
+		'i', 'n', 'f', 'o', 0x16, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長22
+		0, 0, 0, 0, // +0 flags（L449）
+		5, 0, 0, 0, 0, 0, 0, 0, // +4 元サイズ（L452）
+		5, 0, 0, 0, 0, 0, 0, 0, // +12 格納サイズ（L453）
+		0, 0, // +20 名前の文字数0（L455）
+	}
+	// segm サブチャンク。開始位置19のレコード1件（28バイト）。
+	segm := func(flags, originalSize, storedSize byte) []byte {
+		return []byte{
+			's', 'e', 'g', 'm', 0x1c, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長28（L480、L484）
+			flags, 0, 0, 0, // +0 flags、0は非圧縮、1はzlib（L490-497）
+			0x13, 0, 0, 0, 0, 0, 0, 0, // +4 開始位置19（L501）
+			originalSize, 0, 0, 0, 0, 0, 0, 0, // +12 元サイズ（L504）
+			storedSize, 0, 0, 0, 0, 0, 0, 0, // +20 格納サイズ（L505）
+		}
+	}
+	rawSegm := func(originalSize byte) []byte { return segm(0, originalSize, originalSize) }
+	// adlr サブチャンク（L514-518）。
+	adlr := []byte{
+		'a', 'd', 'l', 'r', 0x04, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長4
+		0x78, 0x56, 0x34, 0x12, // +0 Adler32（L518）
+	}
+	// File チャンク（L438）。sizeは宣言する本体長。
+	file := func(size byte, subChunks ...[]byte) []byte {
+		chunk := []byte{'F', 'i', 'l', 'e', size, 0, 0, 0, 0, 0, 0, 0}
+		for _, sub := range subChunks {
+			chunk = append(chunk, sub...)
+		}
+		return chunk
+	}
+	buildArchiveWithPayload := func(indexOffset, payload, table []byte) []byte {
+		var out []byte
+		out = append(out, magic...)
+		out = append(out, indexOffset...)
+		out = append(out, payload...)
+		out = append(out, rawIndexFlag...)
+		// L416 の index_size。テーブルは256バイト未満。
+		out = append(out, byte(len(table)), 0, 0, 0, 0, 0, 0, 0)
+		return append(out, table...)
+	}
+	buildArchive := func(indexOffset, table []byte) []byte {
+		return buildArchiveWithPayload(indexOffset, data, table)
+	}
+	// "hello" を無圧縮ブロック1つで表したzlibストリーム（16バイト）。
+	zlibHello := []byte{
+		0x78, 0x01, // CMF/FLG（RFC 1950）
+		0x01, 0x05, 0x00, 0xfa, 0xff, // BFINAL=1・BTYPE=00、LEN=5、NLEN（RFC 1951 3.2.4）
+		'h', 'e', 'l', 'l', 'o',
+		0x06, 0x2c, 0x02, 0x15, // Adler-32
+	}
+	// L369 の index_ofs。35はzlibHelloの直後。
+	indexOffset35 := []byte{0x23, 0, 0, 0, 0, 0, 0, 0}
+
+	// 本体92バイト（info 36 + segm 40 + adlr 16）の File チャンク1つで、
+	// ファイル全体は 33 + 104 = 137 バイトになる。
+	wellFormed := buildArchive(indexOffset24, file(0x5c, info, rawSegm(5), adlr))
+	// 元サイズ118はオフセット19からファイル末尾137までちょうど。
+	segmentToEOF := buildArchive(indexOffset24, file(0x5c, info, rawSegm(118), adlr))
+
+	cases := map[string]struct {
+		content        []byte
+		wantOpenErr    bool
+		wantExtractErr bool
+		wantEntryInErr bool
+		wantEmpty      bool
+		want           []byte
+	}{
+		"正常系: info・segm・adlrが揃ったアーカイブは展開できる": {
+			content: wellFormed,
+			want:    data,
+		},
+		"正常系: ファイル末尾ちょうどまでの非圧縮セグメントは展開できる": {
+			content: segmentToEOF,
+			want:    segmentToEOF[19:],
+		},
+		"正常系: 格納サイズがファイル末尾を超えても残りに完結したzlibストリームがある圧縮セグメントは展開できる": {
+			// 格納サイズ255はオフセット19以降の残量を超え、残りはzlibHelloとインデックス。
+			content: buildArchiveWithPayload(indexOffset35, zlibHello, file(0x5c, info, segm(1, 5, 0xff), adlr)),
+			want:    data,
+		},
+		"正常系: 名前の文字数が0のエントリは一覧に現れない": {
+			content:   buildArchive(indexOffset24, file(0x5a, emptyNameInfo, rawSegm(5), adlr)),
+			wantEmpty: true,
+		},
+		"異常系: インデックスオフセットがファイル末尾ちょうどを指すとErrInvalidXP3（L374のフラグ読み取りが投げる）": {
+			content:     buildArchive(indexOffsetAtEOF, file(0x5c, info, rawSegm(5), adlr)),
+			wantOpenErr: true,
+		},
+		"異常系: Fileチャンクの宣言長がテーブル残量を1バイト超えるとErrInvalidXP3": {
+			content:     buildArchive(indexOffset24, file(0x5d, info, rawSegm(5), adlr)),
+			wantOpenErr: true,
+		},
+		"異常系: infoサブチャンクを欠くFileチャンクはErrInvalidXP3（L444-445）": {
+			content:     buildArchive(indexOffset24, file(0x38, rawSegm(5), adlr)),
+			wantOpenErr: true,
+		},
+		"異常系: segmサブチャンクを欠くFileチャンクはエントリ名を添えたErrInvalidXP3（L480-481）": {
+			content:        buildArchive(indexOffset24, file(0x34, info, adlr)),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"異常系: 非圧縮セグメントの元サイズがファイル末尾を1バイト超えると展開がErrInvalidXP3（L1014のReadBuffer）": {
+			content:        buildArchive(indexOffset24, file(0x5c, info, rawSegm(119), adlr)),
+			wantExtractErr: true,
+			wantEntryInErr: true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "engine.xp3")
+			writeFile(t, path, tc.content)
+
+			archive, err := parser.NewXP3Archive(path)
+			if tc.wantOpenErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Contains(t, err.Error(), path)
+				if tc.wantEntryInErr {
+					assert.Contains(t, err.Error(), "Ω")
+				}
+				return
+			}
+			require.NoError(t, err)
+			if tc.wantEmpty {
+				assert.Empty(t, archive.ListFiles())
+				return
+			}
+			require.Equal(t, []string{"Ω"}, archive.ListFiles())
+
+			outputDir := filepath.Join(tmpDir, "out")
+			err = extractAllWithinPlan(t, archive, outputDir)
+			if tc.wantExtractErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Contains(t, err.Error(), path)
+				if tc.wantEntryInErr {
+					assert.Contains(t, err.Error(), "Ω")
+				}
+				assert.NoFileExists(t, filepath.Join(outputDir, "Ω"))
+				return
+			}
+			require.NoError(t, err)
+			got, err := os.ReadFile(filepath.Join(outputDir, "Ω")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

@@ -153,10 +153,11 @@ const maxIndexBlocks = 16
 
 // parseStandardIndex はインデックスオフセットが指す標準インデックスをパースする。
 //
-// インデックスオフセットがファイル末尾ちょうどを指す場合はインデックスを持たない
-// 空のアーカイブとして扱い、末尾より先を指す場合は壊れたアーカイブとして扱う。
-// why not: 末尾より先へのSeekは成功し、フラグの読み取りはどちらでもio.EOFになる
-// ため、読み取りエラーからは両者を区別できない。そのためファイルサイズと比較する。
+// why not: インデックスオフセットがファイル末尾ちょうどを指すアーカイブを、
+// インデックスを持たない空のアーカイブとして受け入れない。krkrz
+// （base/XP3Archive.cpp の tTVPXP3Archive）はそこからフラグ1バイトをReadBufferで
+// 読み、読み取り不足としてエラーにする（tjs2/tjs.cpp）。空のアーカイブは
+// index_sizeが0の非圧縮インデックスで表す。
 //
 // why not: フラグ0x80を「テーブルサイズとテーブル位置が続く形式」とは読まない。
 // krkrz の tTVPXP3Archive（base/XP3Archive.cpp）は0x80を継続フラグとして扱い、
@@ -177,11 +178,8 @@ func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) error {
 		return fmt.Errorf("%w: %w: %s", ErrInvalidXP3, err, a.archivePath)
 	}
 	a.fileSize = fileSize
-	if indexOffset > fileSize {
-		return a.invalidIndexError("インデックスオフセットがファイル末尾を超えています")
-	}
-	if indexOffset == fileSize {
-		return nil
+	if indexOffset >= fileSize {
+		return a.invalidIndexError("インデックスオフセットがファイルの範囲外です")
 	}
 
 	// why not: ファイルテーブルの上限はインデックスごとではなく全体に適用する。
@@ -201,9 +199,6 @@ func (a *XP3Archive) parseStandardIndex(f io.ReadSeeker, header []byte) error {
 			return nil
 		}
 
-		// why not: ヘッダーのインデックスオフセットと違い、ファイル末尾ちょうどを
-		// 空のアーカイブとして扱わない。継続フラグは次のインデックスがあることを
-		// 示すため、末尾を指すのは途切れたアーカイブである。
 		next, ok := readUint64(f)
 		if !ok {
 			return a.invalidIndexError("次のインデックスオフセットを読み取れません")
@@ -410,14 +405,16 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 			continue
 		}
 
-		entryData := make([]byte, chunkSize)
-		n, err := io.ReadFull(stream, entryData)
-		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return a.invalidIndexError("Fileチャンクを読み取れません")
+		// why not: テーブル残量を超えるFileチャンクを残りだけで読まない。krkrz の
+		// tTVPXP3Archive（base/XP3Archive.cpp）はFindChunkでチャンク長をテーブル長と
+		// 比べず、次のFileチャンクの探索範囲を index_size - 開始位置 として符号なしで
+		// 求めるため、開始位置がテーブルを越えると範囲が桁あふれしてテーブルの外を読む。
+		// 読み込みが定まらないアーカイブであり、受け入れる根拠がない。
+		if chunkSize > uint64(stream.Len()) { //nolint:gosec // bytes.Reader.Len()は常に非負
+			return a.invalidIndexError("Fileチャンクの長さがファイルテーブルの残量を超えています")
 		}
-		entryData = entryData[:n]
 
-		entry, ok, err := parseSingleEntry(entryData)
+		entry, ok, err := parseSingleEntry(readChunk(stream, chunkSize))
 		if err != nil {
 			return fmt.Errorf("%w: %w: %s", ErrInvalidXP3, err, a.archivePath)
 		}
@@ -429,16 +426,24 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 
 // parseSingleEntry は単一のファイルエントリをパースする。
 //
-// nameが取得できなかった場合（infoチャンクを欠くなど）、またはセグメントを
-// 1つも持てなかった場合（segmチャンクを欠く、あるいは28バイト未満で
-// 有効なセグメントを構成できない場合）はokにfalseを返す。krkrzが読めない
-// セグメントを持つ場合（parseSegments参照）は、エントリ名を添えたエラーを返す。
+// infoサブチャンクかsegmサブチャンクを欠く場合はエラーを返す（segmを欠く場合は
+// エントリ名を添える）。krkrz（base/XP3Archive.cpp の tTVPXP3Archive）はどちらも
+// FindChunkで見つからなければTVPReadErrorを投げる。
+// infoから名前を得られなかった場合、またはsegmが28バイト未満などでセグメントを
+// 1つも持てなかった場合はokにfalseを返す。krkrzが読めないセグメントを持つ場合
+// （parseSegments参照）は、エントリ名を添えたエラーを返す。
+//
+// why not: 名前が空のエントリやセグメントを持たないエントリはエラーにしない。
+// krkrz は長さ0の名前も、28バイト未満のsegm（セグメント0件）も投げずに索引へ
+// 加える。
 func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 	stream := bytes.NewReader(entryData)
 
 	var (
-		name     string
-		segmData [][]byte
+		name      string
+		foundInfo bool
+		foundSegm bool
+		segmData  [][]byte
 	)
 
 	for {
@@ -454,6 +459,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 
 		switch {
 		case bytes.Equal(subChunkName, []byte("info")):
+			foundInfo = true
 			infoData := readChunk(stream, subChunkSize)
 			// why not: flagsのビット31を暗号化の印として扱わない。krkrz（base/XP3Archive.h）
 			// ではこのビットはTVP_XP3_FILE_PROTECTED（展開ツールからの保護の印）であり、
@@ -469,6 +475,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 				}
 			}
 		case bytes.Equal(subChunkName, []byte("segm")):
+			foundSegm = true
 			segmData = append(segmData, readChunk(stream, subChunkSize))
 		default:
 			// adlr（Adler32チェックサム）を含む未知のサブチャンクは、既知チャンクと
@@ -477,6 +484,15 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		}
 	}
 
+	if !foundInfo {
+		return XP3FileEntry{}, false, errors.New("Fileチャンクにinfoサブチャンクがありません")
+	}
+	if !foundSegm {
+		if name == "" {
+			return XP3FileEntry{}, false, errors.New("Fileチャンクにsegmサブチャンクがありません")
+		}
+		return XP3FileEntry{}, false, fmt.Errorf("%s: Fileチャンクにsegmサブチャンクがありません", name)
+	}
 	if name == "" {
 		return XP3FileEntry{}, false, nil
 	}
@@ -866,9 +882,15 @@ func streamSize(f io.ReadSeeker) (int64, error) {
 // 管理する（budgetの必要性はextractEntryとentryBudgetのwhy not参照）。
 //
 // fileSizeで読み取る長さの宣言値をクランプする理由はstreamSizeのwhy not参照。
-// readSizeはsegmentReadLimit（safeInt64通過済みで非負の宣言値と、非負に
+// 読み取る長さはsegmentReadLimit（safeInt64通過済みで非負の宣言値と、非負に
 // クランプした残量の小さい方）とbudget.raw（読み取った分しか減らないため非負）の
 // 小さい方であり常に非負のため、負値ガードは不要。
+//
+// why not: 元サイズがファイル末尾を超える非圧縮セグメントを、残りだけの短い
+// データとして返さない。krkrzのtTVPXP3ArchiveStream::Read（base/XP3Archive.cpp）は
+// 非圧縮セグメントをReadBufferで読み、読み取り不足はエラーになる（tjs2/tjs.cpp）。
+// 圧縮セグメントは格納サイズが残量を超えても残りだけで解凍を試みる。krkrzの
+// tTVPSegmentData::SetDataもReadBufferではなくReadで読み、成否をuncompressに委ねる。
 //
 // why not: 解凍できない圧縮セグメントを読み取った生データのまま返さない。krkrzの
 // tTVPSegmentData::SetData（base/XP3Archive.cpp）は元サイズぶんの領域へ
@@ -880,15 +902,16 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *en
 		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
 	}
 
-	readSize := min(segmentReadLimit(segment, fileSize), budget.raw)
+	readLimit := segmentReadLimit(segment, fileSize)
+	if !segmentDecompresses(segment) && readLimit < segment.OriginalSize {
+		return nil, fmt.Errorf("%w: 非圧縮セグメントの元サイズ%dバイトがファイル末尾を超えています", ErrInvalidXP3, segment.OriginalSize)
+	}
 
-	buf := make([]byte, readSize)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+	buf := make([]byte, min(readLimit, budget.raw))
+	if _, err := io.ReadFull(f, buf); err != nil {
 		return nil, fmt.Errorf("セグメントデータの読み込みに失敗しました: %w", err)
 	}
-	buf = buf[:n]
-	budget.raw -= int64(n)
+	budget.raw -= int64(len(buf))
 
 	if segmentDecompresses(segment) {
 		segmentLimit := segmentDecompressionLimit(segment)
