@@ -10,6 +10,7 @@ import (
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
 	"github.com/na2na-p/mnemonic/internal/cache"
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 )
 
 func newCacheCmd(cacheDir func() (string, error)) *cobra.Command {
@@ -124,9 +125,9 @@ func newCacheInfoCmd(cacheDir func() (string, error)) *cobra.Command {
 }
 
 func printCacheInfo(w io.Writer, ci cache.Info) {
-	fmt.Fprintln(w, "キャッシュ情報")                            //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
-	fmt.Fprintf(w, "ディレクトリ: %s\n", ci.Directory)          //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
-	fmt.Fprintf(w, "サイズ: %s\n", formatSize(ci.SizeBytes)) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	fmt.Fprintln(w, "キャッシュ情報")                                   //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	fmt.Fprintf(w, "ディレクトリ: %s\n", ci.Directory)                 //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	fmt.Fprintf(w, "サイズ: %s\n", fsutil.FormatSize(ci.SizeBytes)) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 
 	if ci.TemplateVersion == nil {
 		fmt.Fprintln(w, "テンプレート: なし") //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要

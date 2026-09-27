@@ -49,9 +49,34 @@ func (b *BuildPipeline) adjustScripts(directory string) error {
 		// 変換直後の一時ツリーに対するローカルなファイルI/Oか内容起因の恒久的な
 		// 失敗に限られ、数秒のバックオフで解消する類ではなく、リトライが役に立たない。
 		if _, err := adjuster.Convert(path, path); err != nil {
-			return fmt.Errorf("スクリプトの調整に失敗しました: %w", err)
+			return fmt.Errorf("スクリプトの調整に失敗しました: %w", &rootRelativeError{
+				root: directory,
+				err:  fmt.Errorf("%s: %w", path, err),
+			})
 		}
 
 		return nil
 	})
+}
+
+// rootRelativeError はerrの文言に現れるroot配下のパスを、converter.RelativeMessageに
+// 従いrootからの相対パスにして示す。errors.Is/errors.Asはerrをたどる。
+//
+// why not: 相対化した文言をfmt.Errorfの%sで埋め込むだけにしない。それでは
+// ErrScriptNotUTF8・ErrPermanentFailure・fs.ErrPermissionなどをerrors.Isで
+// 判別できなくなる。スクリプトのパスだけを相対化しないのは、OSのエラー
+// （例: open <パス>: permission denied）も同じ絶対パスを含むためである。
+// directoryはRunの終了時に削除される一時ディレクトリであり、その絶対パスは
+// 利用者が参照できない。
+type rootRelativeError struct {
+	root string
+	err  error
+}
+
+func (e *rootRelativeError) Error() string {
+	return converter.RelativeMessage(e.err.Error(), e.root)
+}
+
+func (e *rootRelativeError) Unwrap() error {
+	return e.err
 }

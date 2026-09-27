@@ -1,12 +1,14 @@
 package converter
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +133,94 @@ func TestExecCommandRunner_Run(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantContain)
 			assert.NotContains(t, err.Error(), tt.wantAbsent)
+		})
+	}
+}
+
+func TestExecCommandRunner_RunWithoutStderr(t *testing.T) {
+	t.Parallel()
+
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("shが無いためスキップ")
+	}
+
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("sleepが無いためスキップ")
+	}
+
+	tests := []struct {
+		name    string
+		runner  CommandRunner
+		timeout time.Duration
+		command string
+		args    []string
+		want    string
+	}{
+		{
+			name:    "異常系: 行数の上限があってもstderrが空なら終了状態で終わり末尾に区切りを付けない",
+			runner:  execCommandRunner{stderrLineLimit: 3},
+			command: sh,
+			args:    []string{"-c", "exit 3"},
+			want:    sh + "実行に失敗しました: exit status 3",
+		},
+		{
+			name:    "異常系: 行数の上限が無くてもstderrが空なら終了状態で終わり末尾に区切りを付けない",
+			runner:  execCommandRunner{},
+			command: sh,
+			args:    []string{"-c", "exit 3"},
+			want:    sh + "実行に失敗しました: exit status 3",
+		},
+		{
+			name:    "異常系: 行数の上限があってもstderrが空白と空行だけなら終了状態で終わり末尾に区切りを付けない",
+			runner:  execCommandRunner{stderrLineLimit: 3},
+			command: sh,
+			args:    []string{"-c", `printf '\n  \n\t\n' >&2; exit 3`},
+			want:    sh + "実行に失敗しました: exit status 3",
+		},
+		{
+			name:    "異常系: 行数の上限が無くてもstderrが空白と空行だけなら終了状態で終わり末尾に区切りを付けない",
+			runner:  NewExecCommandRunner(),
+			command: sh,
+			args:    []string{"-c", `printf '\n  \n\t\n' >&2; exit 3`},
+			want:    sh + "実行に失敗しました: exit status 3",
+		},
+		{
+			name:    "異常系: 行数の上限があるときタイムアウトで強制終了されたら終了理由で終わる",
+			runner:  execCommandRunner{stderrLineLimit: 3},
+			timeout: 300 * time.Millisecond,
+			command: sleep,
+			args:    []string{"5"},
+			want:    sleep + "実行に失敗しました: signal: killed",
+		},
+		{
+			name:    "異常系: 行数の上限が無いときタイムアウトで強制終了されたら終了理由で終わる",
+			runner:  NewExecCommandRunner(),
+			timeout: 300 * time.Millisecond,
+			command: sleep,
+			args:    []string{"5"},
+			want:    sleep + "実行に失敗しました: signal: killed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := t.Context()
+			if tt.timeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.timeout)
+				defer cancel()
+			}
+
+			_, err := tt.runner.Run(ctx, tt.command, tt.args...)
+
+			require.Error(t, err)
+			assert.Equal(t, tt.want, err.Error())
+			_, ok := errors.AsType[*exec.ExitError](err)
+			assert.True(t, ok, "want *exec.ExitError, got %v", err)
 		})
 	}
 }

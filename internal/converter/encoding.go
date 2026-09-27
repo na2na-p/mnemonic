@@ -5,7 +5,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -56,18 +56,20 @@ var (
 // utf-16le/utf-16beは変換元としてのみ受け付け、変換先には指定できない。
 var SupportedEncodings = []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949", "utf-16le", "utf-16be"}
 
-// encodingAliases はchardetが返すエンコーディング名とSupportedEncodingsの対応マッピング。
+// encodingAliases はエンコーディング名の別名（chardetが返す名前と、利用者が
+// --source-encodingに指定する名前）からSupportedEncodingsへの対応。キーは
+// canonicalEncodingがencodingKeyで引くため、正式名や他の別名と大文字小文字と
+// "-"/"_"の違いしかない綴りは載せない。
 //
 // why not: "utf-8-sig"のエイリアスはBOM付きUTF-8を示す一般的なエンコーディング
 // 名を吸収するために存在する。github.com/saintfish/chardetはBOMの有無に
-// 関わらず常に"UTF-8"を返すため、Go側でこのエイリアスが実際に引かれることは
-// ないが、将来chardet実装が変わった場合の防御として残す。
+// 関わらず常に"UTF-8"を返すため、自動検出でこのエイリアスが引かれることは
+// ないが、--source-encodingに指定する名前として受け付け、将来chardet実装が
+// 変わった場合の防御にもなる。
 var encodingAliases = map[string]string{
-	"shift-jis": "shift_jis",
-	"shiftjis":  "shift_jis",
-	"sjis":      "shift_jis",
-	"euc_jp":    "euc-jp",
-	"eucjp":     "euc-jp",
+	"shiftjis": "shift_jis",
+	"sjis":     "shift_jis",
+	"eucjp":    "euc-jp",
 	// why not: 別名が無いと、chardetが返す"GB-18030"と"EUC-KR"（saintfish/chardet
 	// multi_byte.go）がSupportedEncodingsのどれにも一致せず、gb18030とcp949は
 	// 自動検出で選ばれない。
@@ -89,14 +91,52 @@ var encodingAliases = map[string]string{
 	"windows-31j": "shift_jis",
 }
 
-// normalizeEncoding はエンコーディング名を正規化する。
-func normalizeEncoding(enc string) string {
-	lower := strings.ToLower(strings.ReplaceAll(enc, "_", "-"))
-	if alias, ok := encodingAliases[lower]; ok {
-		return alias
+// encodingAliasesByKey はencodingAliasesをencodingKeyの形のキーで引けるようにしたもの。
+var encodingAliasesByKey = func() map[string]string {
+	byKey := make(map[string]string, len(encodingAliases))
+	for alias, target := range encodingAliases {
+		byKey[encodingKey(alias)] = target
 	}
 
-	return strings.ToLower(enc)
+	return byKey
+}()
+
+// sameEncoding はaとbがcanonicalEncodingで同じSupportedEncodingsの名前へ解決される
+// かを返す。
+//
+// why not: 解決できない名前同士は、綴りが同じでも同じ文字コードとみなさない。
+// 同じとみなすと、変換元と変換先に同じ未対応の名前を渡したファイルが、復号器の
+// 無い名前のまま既に変換先のエンコーディングであるとしてスキップされ、未対応の
+// 名前であることが報告されない。
+func sameEncoding(a, b string) bool {
+	canonicalA, okA := canonicalEncoding(a)
+	canonicalB, okB := canonicalEncoding(b)
+
+	return okA && okB && canonicalA == canonicalB
+}
+
+// canonicalEncoding はエンコーディング名nameを、別名を解決したうえで大文字小文字と
+// "-"/"_"の違いを無視してSupportedEncodingsの名前へ解決する。解決できなければ
+// falseを返す。
+//
+// why not: 名前の検証（IsSelectableSourceEncoding）と復号器の選択
+// （encodingByNameなど）で別々の正規化を使わない。両者の正規化が食い違うと、
+// 検証を通った名前で復号器を選べなくなる。たとえばeuc_jpを検証が受け付けて復号器
+// が解決できなければ、BOMで始まるファイルと吉里吉里のsimple crypt形式（いずれも
+// 指定より優先して復号する）を除くすべてのテキストアセットの復号が、未対応の
+// エンコーディングとして失敗することになる。
+func canonicalEncoding(name string) (string, bool) {
+	key := encodingKey(name)
+	if target, ok := encodingAliasesByKey[key]; ok {
+		key = encodingKey(target)
+	}
+
+	i := slices.IndexFunc(SupportedEncodings, func(supported string) bool { return encodingKey(supported) == key })
+	if i < 0 {
+		return "", false
+	}
+
+	return SupportedEncodings[i], true
 }
 
 // SelectableSourceEncodings は利用者が変換元として明示できるエンコーディング名の一覧。
@@ -110,22 +150,46 @@ func normalizeEncoding(enc string) string {
 // U+FFFDも失敗にしないため、変換は成功として書き出される。
 var SelectableSourceEncodings = slices.DeleteFunc(slices.Clone(SupportedEncodings), isUTF16Encoding)
 
+// DescribeSelectableSourceEncodings はSelectableSourceEncodingsを順に", "で並べ、
+// 別名のある名前には直後の全角括弧に別名を辞書順で添えた一覧を返す。
+func DescribeSelectableSourceEncodings() string {
+	names := make([]string, 0, len(SelectableSourceEncodings))
+	for _, canonical := range SelectableSourceEncodings {
+		aliases := sourceEncodingAliases(canonical)
+		if len(aliases) == 0 {
+			names = append(names, canonical)
+			continue
+		}
+
+		names = append(names, canonical+"（"+strings.Join(aliases, ", ")+"）")
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// sourceEncodingAliases はcanonicalを指すencodingAliasesの別名を辞書順で返す。
+func sourceEncodingAliases(canonical string) []string {
+	var aliases []string
+	for _, alias := range slices.Sorted(maps.Keys(encodingAliases)) {
+		if resolved, ok := canonicalEncoding(alias); ok && resolved == canonical {
+			aliases = append(aliases, alias)
+		}
+	}
+
+	return aliases
+}
+
 // IsSelectableSourceEncoding はencがSelectableSourceEncodingsのいずれか（別名を含む）を
 // 指すかを返す。空文字列はfalseを返す。
 func IsSelectableSourceEncoding(enc string) bool {
 	return isSupportedEncoding(enc) && !isUTF16Encoding(enc)
 }
 
-// isSupportedEncoding はencがSupportedEncodingsに含まれるかを確認する。
+// isSupportedEncoding はencがSupportedEncodingsのいずれか（別名を含む）を指すかを返す。
 func isSupportedEncoding(enc string) bool {
-	if enc == "" {
-		return false
-	}
+	_, ok := canonicalEncoding(enc)
 
-	normalized := strings.ToLower(strings.ReplaceAll(normalizeEncoding(enc), "_", "-"))
-	return slices.ContainsFunc(SupportedEncodings, func(supported string) bool {
-		return normalized == strings.ToLower(strings.ReplaceAll(supported, "_", "-"))
-	})
+	return ok
 }
 
 // EncodingDetectionResult は文字コード検出結果を表す不変値。
@@ -196,15 +260,12 @@ func (d *EncodingDetector) DetectBytes(data []byte) EncodingDetectionResult {
 		}
 	}
 
-	normalized := ""
-	if rawEncoding != "" {
-		normalized = normalizeEncoding(rawEncoding)
-	}
+	canonical, supported := canonicalEncoding(rawEncoding)
 
 	return EncodingDetectionResult{
-		Encoding:    normalized,
+		Encoding:    cmp.Or(canonical, strings.ToLower(rawEncoding)),
 		Confidence:  confidence,
-		IsSupported: isSupportedEncoding(rawEncoding),
+		IsSupported: supported,
 	}
 }
 
@@ -368,7 +429,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %w", ErrEncodingConversionFailed, err))
 	}
 
-	targetNormalized := strings.ReplaceAll(strings.ToLower(c.targetEncoding), "-", "_")
+	targetIsUTF8 := sameEncoding(c.targetEncoding, "utf-8")
 	hasBOM := bytes.HasPrefix(data, utf8BOM)
 	isKirikiriScript := isKirikiriScriptExtension(filepath.Ext(source))
 
@@ -376,7 +437,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 	// 変換先のエンジンはBOM無しテキストを厳格なUTF-8として読み、不正なバイト列で
 	// 例外を投げる（kirikiriScriptExtensionsを参照）ため、不正なUTF-8をそのまま残すと
 	// 読み込み時に落ちる。バイト列を確かめ、不正なら復号へ進めて失敗として報告する。
-	alreadyTarget := plan.isOnly(c.targetEncoding) && (targetNormalized != "utf_8" || utf8.Valid(data))
+	alreadyTarget := plan.isOnly(c.targetEncoding) && (!targetIsUTF8 || utf8.Valid(data))
 	if alreadyTarget && !hasBOM && !isKirikiriScript {
 		return ConversionResult{
 			SourcePath:  source,
@@ -405,7 +466,7 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 	// ファイルはBOMで自己記述していたため、BOM無しUTF-8にすると読み手の既定
 	// エンコーディング（forkごとに異なりうる）に依存する。BOMを保てばどの既定でも
 	// UTF-8として読まれる。
-	if (isKirikiriScript || isUTF16Encoding(sourceEncoding)) && targetNormalized == "utf_8" {
+	if (isKirikiriScript || isUTF16Encoding(sourceEncoding)) && targetIsUTF8 {
 		resultBytes = append(append([]byte{}, utf8BOM...), resultBytes...)
 	}
 
@@ -425,29 +486,6 @@ func (c *EncodingConverter) Convert(source, dest string) (ConversionResult, erro
 		BytesBefore: bytesBefore,
 		BytesAfter:  getFileSize(dest),
 	}, nil
-}
-
-// classifyReadError はensureSourceExistsで確認済みのsourceに対するos.ReadFileの
-// 失敗errを分類する。権限不足はOSのエラーを包んだErrSourceUnreadableを
-// ErrPermanentFailureでラップして返し、存在しない場合はErrSourceNotFoundを、
-// それ以外はOSのエラーを包んだErrSourceUnreadableを再試行対象として返す。
-//
-// why not: 読み込みの失敗を一律に恒久扱いにも再試行対象にもしない。
-// ImageConverterのTLG読み込み(decodeSource)と同じく、再試行しても変わらないと
-// 原因から判別できる権限不足だけを恒久扱いにし、ensureSourceExists後の削除競合や
-// I/Oエラーなど一時的でありうる失敗は再試行側に残す。ファイル自体に読み込み権限が
-// 無い場合はos.Statが成功してensureSourceExistsを通過し、ここで初めて失敗するため、
-// 再試行対象にするとDefaultRetryConfigでは3回試行して1秒と2秒待った末に
-// 「最大リトライ回数超過」として報告され、権限不足という原因が見えにくくなる。
-func classifyReadError(source string, err error) error {
-	switch {
-	case errors.Is(err, fs.ErrPermission):
-		return permanentError(fmt.Errorf("%w: %w", ErrSourceUnreadable, err))
-	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("%w: %s", ErrSourceNotFound, source)
-	default:
-		return fmt.Errorf("%w: %w", ErrSourceUnreadable, err)
-	}
 }
 
 // ConvertBytes はバイトデータの文字コードを変換し、(変換後バイト列, 復号に使った
@@ -533,15 +571,15 @@ func singleSource(enc string) sourcePlan {
 // キーに変換する。
 func encodingKey(name string) string { return strings.ReplaceAll(strings.ToLower(name), "-", "_") }
 
-// isOnly は候補がencだけかを、大文字小文字と"-"/"_"の違いを無視して判定する。
+// isOnly は候補がencと同じ文字コード（sameEncodingを参照）の1つだけかを返す。
 func (p sourcePlan) isOnly(enc string) bool {
-	return len(p.candidates) == 1 && encodingKey(p.candidates[0]) == encodingKey(enc)
+	return len(p.candidates) == 1 && sameEncoding(p.candidates[0], enc)
 }
 
 // overrideMessage は、復号に使ったusedがchardetの推定と異なる場合にその両方を示す
 // 文言を返す。推定を使わなかった場合と推定どおりに復号した場合は空文字列を返す。
 func (p sourcePlan) overrideMessage(used string) string {
-	if p.detection == nil || encodingKey(used) == encodingKey(p.detection.Encoding) {
+	if p.detection == nil || sameEncoding(used, p.detection.Encoding) {
 		return ""
 	}
 
@@ -646,16 +684,17 @@ func planDetectedSource(data []byte, detection EncodingDetectionResult) sourcePl
 			// Shift_JISの"猫"(94 4C)のような短いテキストに候補を1つも返さない。
 			// ここに来るのは有効なUTF-8ではないバイト列なので、推定名がある場合と
 			// 同じ理由でShift_JISとして復号する。
-			return shiftJISFallback("検出結果なしで、Shift_JISとしても復号できませんでした")
+			return shiftJISFallback("推定結果なしで、Shift_JISとしても復号できませんでした")
 		}
 
-		return shiftJISFallback(fmt.Sprintf("検出結果%sは未対応で、Shift_JISとしても復号できませんでした", detection.Encoding))
+		return shiftJISFallback(fmt.Sprintf("推定 %s（信頼度 %.2f）は未対応で、Shift_JISとしても復号できませんでした",
+			detection.Encoding, detection.Confidence))
 	case detection.Confidence < ambiguousConfidence && slices.Contains(shiftJISLookalikeEncodings, detection.Encoding):
 		// 両方で復号できる場合は、上の未対応時と同じ理由（元のエンジンが有効な
 		// UTF-8でないBOM無しテキストを読む経路はCP932だけ）でShift_JISを優先する。
 		return sourcePlan{
 			candidates: []string{"shift_jis", detection.Encoding},
-			failure: fmt.Sprintf("検出結果%s（信頼度%.2f）とShift_JISのいずれとしても復号できませんでした",
+			failure: fmt.Sprintf("推定 %s（信頼度 %.2f）とShift_JISのいずれとしても復号できませんでした",
 				detection.Encoding, detection.Confidence),
 		}
 	default:
@@ -709,7 +748,7 @@ func convertEncoding(data []byte, plan sourcePlan, targetEncoding string) ([]byt
 }
 
 func decodeToUTF8(data []byte, sourceEncoding string) ([]byte, error) {
-	if normalizeEncoding(sourceEncoding) == "utf-8" {
+	if canonical, _ := canonicalEncoding(sourceEncoding); canonical == "utf-8" {
 		if !utf8.Valid(data) {
 			return nil, errors.New("不正なUTF-8バイト列です")
 		}
@@ -744,13 +783,13 @@ func decodeToUTF8(data []byte, sourceEncoding string) ([]byte, error) {
 
 // isUTF16Encoding はエンコーディング名encが（別名の正規化後に）utf-16le/utf-16beかを返す。
 func isUTF16Encoding(enc string) bool {
-	normalized := normalizeEncoding(enc)
+	canonical, _ := canonicalEncoding(enc)
 
-	return normalized == "utf-16le" || normalized == "utf-16be"
+	return canonical == "utf-16le" || canonical == "utf-16be"
 }
 
 func encodeFromUTF8(data []byte, targetEncoding string) ([]byte, error) {
-	if normalizeEncoding(targetEncoding) == "utf-8" {
+	if canonical, _ := canonicalEncoding(targetEncoding); canonical == "utf-8" {
 		return data, nil
 	}
 
@@ -779,7 +818,8 @@ func encodeFromUTF8(data []byte, targetEncoding string) ([]byte, error) {
 // UTF-16はUseBOMの復号器を返すため、先頭のBOMは復号時に取り除かれ、BOMがあれば
 // そのバイト順が名前のバイト順より優先される。
 func encodingByName(name string) (encoding.Encoding, error) {
-	switch normalizeEncoding(name) {
+	canonical, _ := canonicalEncoding(name)
+	switch canonical {
 	case "shift_jis":
 		return japanese.ShiftJIS, nil
 	case "euc-jp":

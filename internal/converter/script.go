@@ -12,6 +12,10 @@ import (
 )
 
 // ErrScriptNotUTF8 はScriptAdjuster.Convertの変換元がUTF-8として妥当でない場合のエラー。
+//
+// why not: ScriptAdjuster.Convertはこのエラーに変換元のパスを付けない。呼び出し側は
+// 渡したパスを知っており、ConversionResultもSourcePathを持つため、パスを付けると
+// 報告で同じパスが重なる。
 var ErrScriptNotUTF8 = errors.New("UTF-8として読み込めませんでした")
 
 // RuleCategory はスクリプト調整ルールの用途を表すカテゴリ。
@@ -290,10 +294,12 @@ func (a *ScriptAdjuster) CanConvert(filePath string) bool {
 // 失敗はerrとして返す。変換元が存在しない・権限不足で確認できない場合は
 // ErrSourceNotFound/ErrSourceUnreadableをErrPermanentFailureでラップして返し、
 // それ以外の理由で確認できない場合はErrSourceUnreadableを再試行対象として返す。
-// 内容がUTF-8として妥当でない場合はErrScriptNotUTF8をErrPermanentFailureで
-// ラップして返す。読み込み・出力の失敗はOSのエラーを%wで保持し、再試行対象と
-// する。errがnilのとき、Statusは調整箇所が無ければStatusSkipped、それ以外は
-// StatusSuccessとなる。
+// 読み込みの失敗はclassifyReadErrorに従い、権限不足ならOSのエラーを包んだ
+// ErrSourceUnreadableをErrPermanentFailureでラップして返し、それ以外は再試行
+// 対象として返す。内容がUTF-8として妥当でない場合はErrScriptNotUTF8を
+// ErrPermanentFailureでラップして返し、その文言に変換元のパスは含めない。
+// 出力の失敗はOSのエラーを%wで保持し、再試行対象とする。errがnilのとき、
+// Statusは調整箇所が無ければStatusSkipped、それ以外はStatusSuccessとなる。
 func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) {
 	if err := ensureSourceExists(source); err != nil {
 		return ConversionResult{SourcePath: source}, err
@@ -301,7 +307,7 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 
 	content, err := os.ReadFile(source) //nolint:gosec // 存在確認済みの変換元ファイルを読む用途のため妥当
 	if err != nil {
-		return ConversionResult{SourcePath: source}, fmt.Errorf("変換元ファイルの読み込みに失敗しました: %w", err)
+		return ConversionResult{SourcePath: source}, classifyReadError(source, err)
 	}
 
 	// 入力に既にBOMが付いていても二重付与しないよう、出力時に付与し直す
@@ -312,7 +318,7 @@ func (a *ScriptAdjuster) Convert(source, dest string) (ConversionResult, error) 
 	// 不正なバイト列（例: Shift_JISのままのファイル）を含む内容がそのまま
 	// SUCCESSとして書き出されてしまう（文字化けの温存）。
 	if !utf8.Valid(content) {
-		return ConversionResult{SourcePath: source}, permanentError(fmt.Errorf("%w: %s", ErrScriptNotUTF8, source))
+		return ConversionResult{SourcePath: source}, permanentError(ErrScriptNotUTF8)
 	}
 
 	bytesBefore := int64(len(content))

@@ -82,9 +82,22 @@ func (l *BuildLogger) log(level, consoleMessage, fileMessage string, console io.
 	}
 	if l.file != nil {
 		clean := ansiEscapePattern.ReplaceAllString(fileMessage, "")
-		line := fmt.Sprintf("[%s] %s: %s", time.Now().Format("2006-01-02 15:04:05"), level, clean)
-		l.write(l.file, line)
+		l.write(l.file, prefixLines(fmt.Sprintf("[%s] %s: ", time.Now().Format("2006-01-02 15:04:05"), level), clean))
 	}
+}
+
+// prefixLines はmessageの各行の先頭にprefixを付けて改行で連結する。messageの末尾の
+// 改行は1つだけ行の終端として扱い、改行で区切った各行の末尾からCRを1つ除く。
+//
+// why not: 2行目以降を接頭辞無しで続けて書かない。grep ERRORのような行単位の抽出で
+// 続きの行が落ち、別のエントリにも見える。
+func prefixLines(prefix, message string) string {
+	lines := make([]string, 0, strings.Count(message, "\n")+1)
+	for line := range strings.SplitSeq(strings.TrimSuffix(message, "\n"), "\n") {
+		lines = append(lines, prefix+strings.TrimSuffix(line, "\r"))
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // Info は情報メッセージを出力する（Normal以上）。

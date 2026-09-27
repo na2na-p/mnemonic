@@ -41,6 +41,15 @@ func TestSelectableSourceEncodings(t *testing.T) {
 	assert.Equal(t, []string{"shift_jis", "euc-jp", "utf-8", "gb2312", "gb18030", "big5", "cp949"}, converter.SelectableSourceEncodings)
 }
 
+func TestDescribeSelectableSourceEncodings(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"shift_jis（cp932, shiftjis, sjis, windows-31j）, euc-jp（eucjp）, utf-8（ascii, utf-8-sig, utf8）, "+
+			"gb2312, gb18030（gb-18030）, big5, cp949（euc-kr, euckr）",
+		converter.DescribeSelectableSourceEncodings())
+}
+
 func TestIsSelectableSourceEncoding(t *testing.T) {
 	t.Parallel()
 
@@ -818,6 +827,89 @@ func TestEncodingConverter_Convert(t *testing.T) {
 	})
 }
 
+func TestEncodingConverter_Convert_EquivalentEncodingNames(t *testing.T) {
+	t.Parallel()
+
+	const text = "これは既にUTF-8のファイルです"
+
+	tests := []struct {
+		name           string
+		targetEncoding string
+		sourceEncoding string
+		fileName       string
+		data           []byte
+		wantStatus     converter.ConversionStatus
+		wantBOM        bool
+	}{
+		{
+			name: "正常系: 変換元にutf-8を指定した有効なUTF-8のテキストはスキップされる", sourceEncoding: "utf-8",
+			fileName: "a.txt", data: []byte(text), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換元に別名utf8を指定してもutf-8と同じくスキップされる", sourceEncoding: "utf8",
+			fileName: "a.txt", data: []byte(text), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換元に大文字とアンダースコア区切りのUTF_8を指定してもスキップされる", sourceEncoding: "UTF_8",
+			fileName: "a.txt", data: []byte(text), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換元に別名asciiを指定してもutf-8と同じくスキップされる", sourceEncoding: "ascii",
+			fileName: "a.txt", data: []byte(text), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換元に別名utf-8-sigを指定してもutf-8と同じくスキップされる", sourceEncoding: "utf-8-sig",
+			fileName: "a.txt", data: []byte(text), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換先shift_jisに変換元の別名cp932を指定したShift_JISのテキストはスキップされる", targetEncoding: "shift_jis",
+			sourceEncoding: "cp932", fileName: "a.txt", data: encodeSJIS(t, "猫の名前"), wantStatus: converter.StatusSkipped,
+		},
+		{
+			name: "正常系: 変換先に別名utf8を指定しても吉里吉里スクリプトにはUTF-8 BOMを付与する", targetEncoding: "utf8",
+			fileName: "a.ks", data: []byte(text), wantStatus: converter.StatusSuccess, wantBOM: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			source := filepath.Join(dir, tt.fileName)
+			dest := filepath.Join(dir, "out", tt.fileName)
+			writeFile(t, source, tt.data)
+
+			c := converter.NewEncodingConverter(tt.targetEncoding, tt.sourceEncoding)
+			result, err := c.Convert(source, dest)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, result.Status)
+			if tt.wantBOM {
+				destBytes, readErr := os.ReadFile(dest)
+				require.NoError(t, readErr)
+				assert.Equal(t, append([]byte("\xef\xbb\xbf"), tt.data...), destBytes)
+			}
+		})
+	}
+}
+
+func TestEncodingConverter_Convert_UnresolvableEncodingName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "a.txt")
+	dest := filepath.Join(dir, "out", "a.txt")
+	writeFile(t, source, []byte("title=abc"))
+
+	c := converter.NewEncodingConverter("klingon", "klingon")
+	_, err := c.Convert(source, dest)
+
+	require.ErrorIs(t, err, converter.ErrUnsupportedEncoding)
+	require.ErrorIs(t, err, converter.ErrPermanentFailure)
+	assert.NoFileExists(t, dest)
+}
+
 func TestEncodingConverter_Convert_UTF16(t *testing.T) {
 	t.Parallel()
 
@@ -1147,6 +1239,42 @@ func TestEncodingConverter_ConvertBytes_SimpleCrypt(t *testing.T) {
 
 		require.Error(t, err)
 	})
+}
+
+func TestEncodingConverter_ConvertBytes_SourceEncodingSpellings(t *testing.T) {
+	t.Parallel()
+
+	const (
+		japanese = "吾輩は猫である。名前はまだ無い。"
+		hangul   = "한국어"
+	)
+
+	tests := []struct {
+		name           string
+		sourceEncoding string
+		data           []byte
+		want           string
+	}{
+		{name: "正常系: アンダースコア区切りのeuc_jpはEUC-JPとして復号する", sourceEncoding: "euc_jp", data: encodeEUCJP(t, japanese), want: japanese},
+		{name: "正常系: 大文字とアンダースコア区切りのUTF_8はUTF-8として復号する", sourceEncoding: "UTF_8", data: []byte(japanese), want: japanese},
+		{name: "正常系: 大文字とアンダースコア区切りのWINDOWS_31JはShift_JISとして復号する", sourceEncoding: "WINDOWS_31J", data: encodeSJIS(t, japanese), want: japanese},
+		{name: "正常系: 大文字とハイフン区切りのSHIFT-JISはShift_JISとして復号する", sourceEncoding: "SHIFT-JIS", data: encodeSJIS(t, japanese), want: japanese},
+		{name: "正常系: アンダースコア区切りのeuc_krはCP949として復号する", sourceEncoding: "euc_kr", data: encodeWith(t, korean.EUCKR, hangul), want: hangul},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.True(t, converter.IsSelectableSourceEncoding(tt.sourceEncoding))
+
+			c := converter.NewEncodingConverter("", tt.sourceEncoding)
+			resultBytes, _, err := c.ConvertBytes(tt.data)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(resultBytes))
+		})
+	}
 }
 
 func TestEncodingConverter_ConvertBytes(t *testing.T) {
@@ -1761,24 +1889,24 @@ func TestEncodingConverter_Convert_AutoDetectedSource(t *testing.T) {
 		wantInMessage  []string
 	}{
 		{
-			name:          "異常系: 文字コードを推定できずShift_JISとしても復号できないバイト列は検出結果なしを示して失敗する",
+			name:          "異常系: 文字コードを推定できずShift_JISとしても復号できないバイト列は推定結果なしを示して失敗する",
 			data:          []byte{0x94},
-			wantInMessage: []string{"検出結果なし", "Shift_JIS"},
+			wantInMessage: []string{"推定結果なしで、Shift_JISとしても復号できませんでした"},
 		},
 		{
-			name:          "異常系: 未対応と推定されShift_JISとしても復号できないバイト列は推定名を示して失敗する",
+			name:          "異常系: 未対応と推定されShift_JISとしても復号できないバイト列は推定名と信頼度を示して失敗する",
 			data:          []byte("id,name\n1,\xfd\xfe\xff\xfd"),
-			wantInMessage: []string{"iso-8859-1", "Shift_JIS"},
+			wantInMessage: []string{"推定 iso-8859-1（信頼度 0.23）は未対応で、Shift_JISとしても復号できませんでした"},
 		},
 		{
-			name:          "異常系: Shift_JISとして不正なバイトを含むLatin-1の文章は推定名を示して失敗する",
+			name:          "異常系: Shift_JISとして不正なバイトを含むLatin-1の文章は推定名と信頼度を示して失敗する",
 			data:          []byte("caf\xe9 cr\xe8me br\xfbl\xe9e"),
-			wantInMessage: []string{"iso-8859-1", "Shift_JIS"},
+			wantInMessage: []string{"推定 iso-8859-1（信頼度 0.16）は未対応で、Shift_JISとしても復号できませんでした"},
 		},
 		{
 			name:          "異常系: 低信頼度のgb18030と推定されGB18030とShift_JISのどちらでも復号できないバイト列は両方を示して失敗する",
 			data:          []byte{0x6b, 0x3d, 0xca, 0xea, 0xba},
-			wantInMessage: []string{"gb18030", "Shift_JIS"},
+			wantInMessage: []string{"推定 gb18030（信頼度 0.10）とShift_JISのいずれとしても復号できませんでした"},
 		},
 		{
 			name:           "異常系: 指定されたShift_JISとして復号できないバイト列は失敗する",

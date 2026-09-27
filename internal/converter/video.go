@@ -87,8 +87,10 @@ type CommandRunner interface {
 // 先頭のその行数までに絞る。0の場合はstderr全体を含める。
 //
 // why not: NewExecCommandRunnerが返す実装（MidiConverterが使う）では絞らない。
-// MIDI変換はバナーを抑止せずにffmpegを起動しており、ffmpeg 9.0.1で同じ形の
-// 呼び出しに壊れた入力を与えると、先頭3行はバージョンとビルド構成のバナーだった。
+// この実装はFFmpeg系のコマンドのほかfluidsynthも実行するが、fluidsynthの失敗時の
+// stderrで原因が何行目に出るかは確かめられていないため、先頭の行に絞ると原因を
+// 落としうる。MidiConverterはffmpegを-hide_banner -loglevel error付きで
+// 起動するので、ffmpegのstderrにバナーは入らない。
 type execCommandRunner struct {
 	stderrLineLimit int
 }
@@ -121,6 +123,10 @@ func (r execCommandRunner) Run(ctx context.Context, name string, args ...string)
 		detail := strings.TrimSpace(stderr.String())
 		if r.stderrLineLimit > 0 {
 			detail = summarizeStderr(stderr.String(), r.stderrLineLimit)
+		}
+
+		if detail == "" {
+			return stdout.Bytes(), fmt.Errorf("%s実行に失敗しました: %w", name, err)
 		}
 
 		return stdout.Bytes(), fmt.Errorf("%s実行に失敗しました: %w: %s", name, err, detail)

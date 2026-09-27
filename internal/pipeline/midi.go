@@ -83,7 +83,7 @@ func convertMidiFilesUsing(directory string, midiConverter *converter.MidiConver
 		return err
 	}
 
-	return convertMidiFileList(midiFiles, midiConverter, logger)
+	return convertMidiFileList(directory, midiFiles, midiConverter, logger)
 }
 
 // findMidiFiles はdirectory配下の.mid/.midiファイルを再帰的に列挙する。
@@ -165,17 +165,23 @@ func midiWorkerCount(cpuCount int) int {
 // why not: 最初の失敗で打ち切らず全ファイルを試すのは、利用者が一度の実行で
 // 失敗した全ファイルを把握できるようにするため。ただし1件でも失敗した場合は
 // エラーを返し、変換されなかったMIDIを指す.ogg参照がAPKへ混入するのを防ぐ。
-func convertMidiFileList(midiFiles []string, midiConverter *converter.MidiConverter, logger Logger) error {
-	return convertMidiFileListWith(midiFiles, midiConverter, nil, logger)
+func convertMidiFileList(directory string, midiFiles []string, midiConverter *converter.MidiConverter, logger Logger) error {
+	return convertMidiFileListWith(directory, midiFiles, midiConverter, nil, logger)
 }
 
 // convertMidiFileListWith はsleepがnilでなければConversionManagerのリトライ
-// 待機に使う。
+// 待機に使う。失敗の各行に現れるdirectory配下のパスは、converter.RelativeMessageに
+// 従いdirectoryからの相対パスにする。
+//
+// why not: 失敗の報告に絶対パスを残さない。directoryはRunの終了時に削除される
+// 一時ディレクトリであり、その絶対パスは利用者が参照できず、行を長くするだけである。
+// ConvertDirectoryと異なりConvertFilesは結果のパスを相対化しないため、ここで行う。
 //
 // why not: 待機関数をパッケージ変数で差し替えられるようにしない。t.Parallel()
 // で並行に走るテストが同じ変数を書き換えるとデータ競合になるため、呼び出し
 // ごとの引数として受け取る。
 func convertMidiFileListWith(
+	directory string,
 	midiFiles []string,
 	midiConverter *converter.MidiConverter,
 	sleep func(time.Duration),
@@ -205,7 +211,9 @@ func convertMidiFileListWith(
 
 	for _, result := range results {
 		if result.Status != converter.StatusSuccess {
-			failures = append(failures, fmt.Sprintf("%s: %s", result.SourcePath, result.Message))
+			failures = append(failures, converter.RelativeMessage(
+				fmt.Sprintf("%s: %s", result.SourcePath, result.Message), directory,
+			))
 
 			continue
 		}

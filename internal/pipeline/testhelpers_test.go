@@ -2,13 +2,17 @@ package pipeline
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/na2na-p/mnemonic/internal/parser"
 )
 
 // skipIfCaseInsensitiveFS はdirが大文字小文字を区別しないファイルシステム
@@ -92,4 +96,41 @@ func (r *recordingLogger) messages(level string) []string {
 	}
 
 	return got
+}
+
+// storedXP3Bytes は非圧縮のエントリ（name, data）を1件だけ持ち、索引も非圧縮で
+// 書いたXP3アーカイブのバイト列を返す。
+func storedXP3Bytes(name string, data []byte) []byte {
+	const headerSize = 19 // マジック(11) + 索引オフセット(8)
+
+	nameUTF16 := utf16.Encode([]rune(name))
+	le := binary.LittleEndian
+
+	var info []byte
+	info = le.AppendUint32(info, 0)
+	info = le.AppendUint64(info, uint64(len(data)))
+	info = le.AppendUint64(info, uint64(len(data)))
+	info = le.AppendUint16(info, uint16(len(nameUTF16))) //nolint:gosec // テストで渡す名前は短い既知の値
+	for _, u := range nameUTF16 {
+		info = le.AppendUint16(info, u)
+	}
+
+	var segm []byte
+	segm = le.AppendUint32(segm, 0)
+	segm = le.AppendUint64(segm, headerSize)
+	segm = le.AppendUint64(segm, uint64(len(data)))
+	segm = le.AppendUint64(segm, uint64(len(data)))
+
+	chunk := func(name string, body []byte) []byte {
+		return append(le.AppendUint64([]byte(name), uint64(len(body))), body...)
+	}
+	table := chunk("File", append(chunk("info", info), chunk("segm", segm)...))
+
+	archive := append([]byte{}, parser.XP3Magic...)
+	archive = le.AppendUint64(archive, uint64(headerSize+len(data)))
+	archive = append(archive, data...)
+	archive = append(archive, 0x00)
+	archive = le.AppendUint64(archive, uint64(len(table)))
+
+	return append(archive, table...)
 }

@@ -2,6 +2,7 @@ package builder
 
 import (
 	"image/png"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -235,16 +236,15 @@ func TestPluginPlacer_Place(t *testing.T) {
 		}
 	})
 
-	t.Run("正常系: プラグインファイルが見つからない場合はスキップする", func(t *testing.T) {
+	t.Run("異常系: プラグインファイルが見つからない場合はパスを含むエラーを返す", func(t *testing.T) {
 		t.Parallel()
 
+		missingPath := filepath.Join(t.TempDir(), "does-not-exist.so")
 		pluginsInfo := &PluginsInfo{
 			Plugins: map[string]PluginInfo{
 				"extrans": {
-					Name: "extrans",
-					Paths: map[string]string{
-						"arm64-v8a": filepath.Join(t.TempDir(), "does-not-exist.so"),
-					},
+					Name:  "extrans",
+					Paths: map[string]string{"arm64-v8a": missingPath},
 				},
 			},
 		}
@@ -252,7 +252,46 @@ func TestPluginPlacer_Place(t *testing.T) {
 		projectDir := t.TempDir()
 		p := newPluginPlacer(projectDir)
 
-		require.NoError(t, p.Place(pluginsInfo))
+		err := p.Place(pluginsInfo)
+
+		require.ErrorIs(t, err, ErrTemplatePreparer)
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		require.ErrorContains(t, err, missingPath)
+		assert.NoFileExists(t, filepath.Join(projectDir, "app", "src", "main", "jniLibs", "arm64-v8a", "does-not-exist.so"))
+	})
+
+	t.Run("異常系: プラグインファイルを読めない場合はパスを含むエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読めるため検証できない")
+		}
+
+		lockedDir := t.TempDir()
+		unreadablePath := filepath.Join(lockedDir, "libextrans.so")
+		require.NoError(t, os.WriteFile(unreadablePath, []byte("extrans so content"), 0o600))
+		require.NoError(t, os.Chmod(lockedDir, 0o000))
+		// t.TempDirの削除より先に権限を戻さないと、中のファイルを削除できずテストが失敗する。
+		t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o700) })
+
+		pluginsInfo := &PluginsInfo{
+			Plugins: map[string]PluginInfo{
+				"extrans": {
+					Name:  "extrans",
+					Paths: map[string]string{"arm64-v8a": unreadablePath},
+				},
+			},
+		}
+
+		projectDir := t.TempDir()
+		p := newPluginPlacer(projectDir)
+
+		err := p.Place(pluginsInfo)
+
+		require.ErrorIs(t, err, ErrTemplatePreparer)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		require.ErrorContains(t, err, unreadablePath)
+		assert.NoFileExists(t, filepath.Join(projectDir, "app", "src", "main", "jniLibs", "arm64-v8a", "libextrans.so"))
 	})
 }
 

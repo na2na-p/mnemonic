@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
+	"github.com/na2na-p/mnemonic/internal/fsutil"
 	"github.com/na2na-p/mnemonic/internal/info"
 )
 
@@ -60,5 +61,5 @@ func printFileStatsSection(w io.Writer, label string, stats info.FileStats) {
 	if len(stats.Extensions) > 0 {
 		fmt.Fprintf(w, "  Extensions: %s\n", strings.Join(stats.Extensions, ", ")) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 	}
-	fmt.Fprintf(w, "  Total Size: %s\n", formatSize(stats.TotalSizeBytes)) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+	fmt.Fprintf(w, "  Total Size: %s\n", fsutil.FormatSize(stats.TotalSizeBytes)) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 }

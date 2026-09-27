@@ -103,7 +103,7 @@ func TestBuildPipeline_Validate(t *testing.T) {
 			errContain: "--template-offline",
 		},
 		{
-			name: "異常系: --source-encodingに未対応の文字コード名を指定すると指定できる名前を示す",
+			name: "異常系: --source-encodingに未対応の文字コード名を指定すると指定できる名前を別名とともに示す",
 			setupFn: func(t *testing.T, dir string) pipeline.Config {
 				t.Helper()
 				input := filepath.Join(dir, "game.exe")
@@ -113,8 +113,10 @@ func TestBuildPipeline_Validate(t *testing.T) {
 
 				return cfg
 			},
-			wantErr:    true,
-			errContain: "--source-encoding に指定できない文字コード名です: klingon（指定できる名前: shift_jis, euc-jp, utf-8, gb2312, gb18030, big5, cp949）",
+			wantErr: true,
+			errContain: "--source-encoding に指定できない文字コード名です: klingon。指定できる名前（括弧内は別名）: " +
+				"shift_jis（cp932, shiftjis, sjis, windows-31j）, euc-jp（eucjp）, utf-8（ascii, utf-8-sig, utf8）, " +
+				"gb2312, gb18030（gb-18030）, big5, cp949（euc-kr, euckr）",
 		},
 		{
 			name: "異常系: --source-encodingにutf-16leは指定できない",

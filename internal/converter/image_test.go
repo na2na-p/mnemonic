@@ -316,7 +316,30 @@ func TestTLGImageDecoder_GetInfo(t *testing.T) {
 		_, err := decoder.GetInfo("/nonexistent/path/to/file.tlg")
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		assert.NotErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: 読み取り権限の無いファイルは再試行不要なErrSourceUnreadableを返す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "unreadable.tlg")
+		writeFile(t, path, buildTLG5Fixture(2, 32))
+		require.NoError(t, os.Chmod(path, 0o000))
+
+		decoder := converter.NewTLGImageDecoder()
+		_, err := decoder.GetInfo(path)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.NotErrorIs(t, err, converter.ErrSourceNotFound)
 	})
 
 	t.Run("異常系: TLG形式でないファイルはErrTLGInvalidFormatを返す", func(t *testing.T) {
@@ -432,7 +455,30 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 		_, err := decoder.Decode("/nonexistent/path/to/file.tlg")
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, converter.ErrSourceNotFound)
+		require.ErrorIs(t, err, converter.ErrSourceNotFound)
+		assert.NotErrorIs(t, err, converter.ErrPermanentFailure)
+	})
+
+	t.Run("異常系: 読み取り権限の無いファイルは再試行不要なErrSourceUnreadableを返す", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "unreadable.tlg")
+		writeFile(t, path, buildTLG5Fixture(2, 32))
+		require.NoError(t, os.Chmod(path, 0o000))
+
+		decoder := converter.NewTLGImageDecoder()
+		_, err := decoder.Decode(path)
+
+		require.Error(t, err)
+		require.ErrorIs(t, err, converter.ErrPermanentFailure)
+		require.ErrorIs(t, err, converter.ErrSourceUnreadable)
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.NotErrorIs(t, err, converter.ErrSourceNotFound)
 	})
 
 	t.Run("異常系: TLG形式でないファイルはErrTLGInvalidFormatを返す", func(t *testing.T) {

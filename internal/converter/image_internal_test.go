@@ -22,6 +22,7 @@ func TestReadTLGSource(t *testing.T) {
 		notWantErr  error
 		wantOSErr   error
 		wantPathErr bool
+		wantNoRetry bool
 	}{
 		{
 			name: "異常系: 存在しないファイルはErrSourceNotFoundを返す",
@@ -32,9 +33,10 @@ func TestReadTLGSource(t *testing.T) {
 			notWantErr:  ErrSourceUnreadable,
 			wantOSErr:   nil,
 			wantPathErr: false,
+			wantNoRetry: false,
 		},
 		{
-			name:       "異常系: 読み取り権限の無いファイルはOSのエラーを包んだErrSourceUnreadableを返す",
+			name:       "異常系: 読み取り権限の無いファイルはOSのエラーを包んだ再試行不要なErrSourceUnreadableを返す",
 			skipAsRoot: true,
 			setup: func(t *testing.T, dir string) string {
 				t.Helper()
@@ -49,9 +51,10 @@ func TestReadTLGSource(t *testing.T) {
 			notWantErr:  ErrSourceNotFound,
 			wantOSErr:   fs.ErrPermission,
 			wantPathErr: true,
+			wantNoRetry: true,
 		},
 		{
-			name: "異常系: ディレクトリはOSのエラーを包んだErrSourceUnreadableを返す",
+			name: "異常系: ディレクトリはOSのエラーを包んだ再試行対象のErrSourceUnreadableを返す",
 			setup: func(t *testing.T, dir string) string {
 				t.Helper()
 
@@ -64,6 +67,7 @@ func TestReadTLGSource(t *testing.T) {
 			notWantErr:  ErrSourceNotFound,
 			wantOSErr:   nil,
 			wantPathErr: true,
+			wantNoRetry: false,
 		},
 	}
 
@@ -90,6 +94,11 @@ func TestReadTLGSource(t *testing.T) {
 			if tt.wantPathErr {
 				_, ok := errors.AsType[*fs.PathError](err)
 				assert.True(t, ok, "OSのエラー(*fs.PathError)を包んでいること")
+			}
+			if tt.wantNoRetry {
+				require.ErrorIs(t, err, ErrPermanentFailure)
+			} else {
+				require.NotErrorIs(t, err, ErrPermanentFailure)
 			}
 		})
 	}
