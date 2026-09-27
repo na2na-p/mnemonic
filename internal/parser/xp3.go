@@ -13,6 +13,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/na2na-p/mnemonic/internal/safepath"
+	"github.com/na2na-p/mnemonic/internal/saturate"
 )
 
 // センチネルエラー群。
@@ -703,7 +704,7 @@ func (a *XP3Archive) PlannedOutputSize() int64 {
 func plannedOutputSize(entries []XP3FileEntry, fileSize int64) int64 {
 	var total int64
 	for _, entry := range entries {
-		total = saturatingAdd(total, entryOutputLimit(entry, fileSize, maxSegmentDecompressedSize))
+		total = saturate.Add(total, entryOutputLimit(entry, fileSize, maxSegmentDecompressedSize))
 	}
 
 	return total
@@ -715,10 +716,10 @@ func plannedOutputSize(entries []XP3FileEntry, fileSize int64) int64 {
 func entryOutputLimit(entry XP3FileEntry, fileSize, inflatedLimit int64) int64 {
 	var total int64
 	for _, segment := range entry.Segments {
-		total = saturatingAdd(total, segmentOutputLimit(segment, fileSize))
+		total = saturate.Add(total, segmentOutputLimit(segment, fileSize))
 	}
 
-	return min(total, saturatingAdd(fileSize, inflatedLimit))
+	return min(total, saturate.Add(fileSize, inflatedLimit))
 }
 
 // maxDeflateRatio はdeflateが入力1バイトあたりに生み出せる出力バイト数の上限。
@@ -772,15 +773,6 @@ func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
 // 非圧縮とみなすとzlibストリームそのものを書き出してしまう。
 func segmentDecompresses(segment XP3Segment) bool {
 	return segment.IsCompressed
-}
-
-// saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
-func saturatingAdd(a, b int64) int64 {
-	if a > math.MaxInt64-b {
-		return math.MaxInt64
-	}
-
-	return a + b
 }
 
 // saturatingMul は非負のaと正のbの積を返す。積がint64を超える場合はmath.MaxInt64を返す。

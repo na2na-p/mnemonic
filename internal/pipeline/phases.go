@@ -16,6 +16,7 @@ import (
 	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/fsutil"
 	"github.com/na2na-p/mnemonic/internal/parser"
+	"github.com/na2na-p/mnemonic/internal/saturate"
 	"github.com/na2na-p/mnemonic/internal/signer"
 )
 
@@ -152,7 +153,7 @@ const extractFootprintCopies = 3
 // math.MaxInt64を返す。
 func requiredExtractSpace(planned, written []int64) int64 {
 	writtenTotal := saturatingSum(written)
-	total := saturatingAdd(saturatingSum(planned), writtenTotal)
+	total := saturate.Add(saturatingSum(planned), writtenTotal)
 	if total > math.MaxInt64/extractFootprintCopies {
 		return math.MaxInt64
 	}
@@ -164,19 +165,10 @@ func requiredExtractSpace(planned, written []int64) int64 {
 func saturatingSum(values []int64) int64 {
 	var total int64
 	for _, v := range values {
-		total = saturatingAdd(total, v)
+		total = saturate.Add(total, v)
 	}
 
 	return total
-}
-
-// saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
-func saturatingAdd(a, b int64) int64 {
-	if a > math.MaxInt64-b {
-		return math.MaxInt64
-	}
-
-	return a + b
 }
 
 // checkExtractSpace はdirを含むファイルシステムの空き容量がrequiredバイトに
