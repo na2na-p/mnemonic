@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
+	"github.com/na2na-p/mnemonic/internal/builder"
 	"github.com/na2na-p/mnemonic/internal/pipeline"
 )
 
@@ -524,6 +526,76 @@ func TestBuildCommand_LogFile_PipelineLogger(t *testing.T) {
 	}
 }
 
+// TestBuildCommand_GradleOutputHint はGradleの失敗時に、端末へ出さなかった
+// Gradleの出力全文の在りかを1行で案内することを検証する。
+// newBuildPipelineを差し替えるためt.Parallel()を呼ばない。
+func TestBuildCommand_GradleOutputHint(t *testing.T) {
+	dir := t.TempDir()
+	inputFile := filepath.Join(dir, "game.exe")
+	require.NoError(t, os.WriteFile(inputFile, make([]byte, 100), 0o600))
+	outputFile := filepath.Join(dir, "output.apk")
+	logFile := filepath.Join(dir, "build.log")
+
+	gradleFailure := (&builder.GradleBuildError{
+		ExitCode: 1,
+		Output:   "Welcome to Gradle 7.5!\n* What went wrong:\nExecution failed for task ':app:mergeReleaseResources'.\n\n* Try:\n",
+	}).Error()
+	apkMissing := pipeline.ErrGradleAPKMissing.Error()
+
+	tests := []struct {
+		name         string
+		extraArgs    []string
+		errorMessage string
+		wantStdout   string
+	}{
+		{
+			name:         "異常系: ログファイル無しなら--log-fileか-vvでの再実行を案内する",
+			errorMessage: gradleFailure,
+			wantStdout: "ビルド失敗: " + gradleFailure + "\n" +
+				"Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます\n",
+		},
+		{
+			name:         "異常系: ログファイル指定時はそのファイルに記録したことを案内する",
+			extraArgs:    []string{"--log-file", logFile},
+			errorMessage: gradleFailure,
+			wantStdout: "ビルド失敗: " + gradleFailure + "\n" +
+				"Gradleの出力全文は " + logFile + " に記録しました\n",
+		},
+		{
+			name:         "異常系: -vv指定時は出力全文が端末に出ているため案内しない",
+			extraArgs:    []string{"-vv"},
+			errorMessage: gradleFailure,
+			wantStdout:   "ビルド失敗: " + gradleFailure + "\n",
+		},
+		{
+			name:         "異常系: APKが見つからない場合も出力全文の在りかを案内する",
+			errorMessage: apkMissing,
+			wantStdout: "ビルド失敗: " + apkMissing + "\n" +
+				"Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます\n",
+		},
+		{
+			name:         "異常系: Gradle以外の失敗では案内しない",
+			errorMessage: "変換フェーズが完了していません",
+			wantStdout:   "ビルド失敗: 変換フェーズが完了していません\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withStubBuildPipeline(t, &stubBuildRunner{
+				runResult: pipeline.Result{Success: false, ErrorMessage: tt.errorMessage},
+			})
+
+			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
+			result := invoke(t, args)
+
+			assert.Equal(t, int(apperr.ExitError), result.exitCode)
+			assert.Equal(t, tt.wantStdout, result.stdout)
+			assert.Empty(t, result.stderr)
+		})
+	}
+}
+
 // failingLogFile は書き込みを常にsyscall.ENOSPCで失敗させる出力先のテスト用実装。
 type failingLogFile struct{}
 
@@ -747,6 +819,7 @@ type verboseRecorder struct {
 func (*verboseRecorder) Info(string)              {}
 func (*verboseRecorder) Warning(string)           {}
 func (r *verboseRecorder) Verbose(message string) { r.messages = append(r.messages, message) }
+func (*verboseRecorder) Debug(string)             {}
 
 // TestNewBuildPipeline_WiresLogger は既定のnewBuildPipelineが受け取ったロガーを
 // 実際のBuildPipelineへ設定することを検証する。
@@ -783,6 +856,27 @@ func TestDoctorCommand_MissingRequiredToolExitsWithDependencyError(t *testing.T)
 
 	assert.Equal(t, int(apperr.ExitDependencyError), result.exitCode)
 	assert.Contains(t, result.stdout, "必須ツールが不足しています")
+}
+
+// why not: t.Parallel()を呼ばない。t.SetenvでPATH・ANDROID_HOMEを書き換えるため
+// （TestDoctorCommand_MissingRequiredToolExitsWithDependencyErrorと同じ理由）。
+func TestDoctorCommand_WithoutNDKSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("フェイクのツールをシェルスクリプトで用意するため")
+	}
+
+	bin := t.TempDir()
+	for _, tool := range []string{"java", "sdkmanager", "ffmpeg", "zipalign", "apksigner"} {
+		require.NoError(t, os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\necho 1.0.0\n"), 0o700)) //nolint:gosec // テスト用のフェイク実行ファイルのため妥当
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("ANDROID_HOME", t.TempDir())
+
+	result := invoke(t, []string{"doctor"})
+
+	assert.Equal(t, int(apperr.ExitSuccess), result.exitCode, result.stdout)
+	assert.Contains(t, result.stdout, "すべての必須ツールが利用可能です")
+	assert.NotContains(t, result.stdout, "NDK")
 }
 
 func TestDoctorCommand_ShowsTable(t *testing.T) {

@@ -82,6 +82,7 @@ func (r *recordingLogger) record(level, message string) {
 func (r *recordingLogger) Info(message string)    { r.record("INFO", message) }
 func (r *recordingLogger) Warning(message string) { r.record("WARNING", message) }
 func (r *recordingLogger) Verbose(message string) { r.record("VERBOSE", message) }
+func (r *recordingLogger) Debug(message string)   { r.record("DEBUG", message) }
 
 // messages はlevelのログのメッセージを記録順に返す。
 func (r *recordingLogger) messages(level string) []string {
@@ -101,13 +102,19 @@ func (r *recordingLogger) messages(level string) []string {
 // storedXP3Bytes は非圧縮のエントリ（name, data）を1件だけ持ち、索引も非圧縮で
 // 書いたXP3アーカイブのバイト列を返す。
 func storedXP3Bytes(name string, data []byte) []byte {
+	return storedXP3BytesWithInfoFlags(name, 0, data)
+}
+
+// storedXP3BytesWithInfoFlags はstoredXP3Bytesと同じアーカイブを、infoサブチャンクの
+// flagsにinfoFlagsを書いて返す。
+func storedXP3BytesWithInfoFlags(name string, infoFlags uint32, data []byte) []byte {
 	const headerSize = 19 // マジック(11) + 索引オフセット(8)
 
 	nameUTF16 := utf16.Encode([]rune(name))
 	le := binary.LittleEndian
 
 	var info []byte
-	info = le.AppendUint32(info, 0)
+	info = le.AppendUint32(info, infoFlags)
 	info = le.AppendUint64(info, uint64(len(data)))
 	info = le.AppendUint64(info, uint64(len(data)))
 	info = le.AppendUint16(info, uint16(len(nameUTF16))) //nolint:gosec // テストで渡す名前は短い既知の値

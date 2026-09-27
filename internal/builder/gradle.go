@@ -19,7 +19,7 @@ import (
 
 // センチネルエラー群。
 var (
-	// ErrGradleBuildFailed はGradleビルド/クリーンが非ゼロ終了コードで終了した場合のエラー。
+	// ErrGradleBuildFailed はGradleビルドが非ゼロ終了コードで終了した場合のエラー。
 	ErrGradleBuildFailed = errors.New("Gradleビルドに失敗しました")
 	// ErrGradleTimeout はGradleコマンドがタイムアウトした場合のエラー。
 	ErrGradleTimeout = errors.New("Gradleコマンドがタイムアウトしました")
@@ -264,7 +264,8 @@ func capitalize(s string) string {
 // buildTypeが空文字列の場合は"release"を使用する。
 // Gradle wrapperが見つからない場合はErrGradleWrapperNotFound、
 // タイムアウトした場合はErrGradleTimeout、
-// ビルドが非ゼロ終了コードで終わった場合はErrGradleBuildFailedを返す。
+// ビルドが非ゼロ終了コードで終わった場合はErrGradleBuildFailedをUnwrapする
+// *GradleBuildErrorを返す。
 func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 	buildType = cmp.Or(buildType, "release")
 
@@ -278,10 +279,10 @@ func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 		return BuildResult{}, err
 	}
 
-	outputLog := result.Stdout + result.Stderr
+	outputLog := joinOutput(result.Stdout, result.Stderr)
 
 	if result.ExitCode != 0 {
-		return BuildResult{}, fmt.Errorf("%w: exit code %d: %s", ErrGradleBuildFailed, result.ExitCode, outputLog)
+		return BuildResult{}, &GradleBuildError{ExitCode: result.ExitCode, Output: outputLog}
 	}
 
 	return BuildResult{
@@ -290,6 +291,18 @@ func (b *GradleBuilder) Build(buildType string) (BuildResult, error) {
 		BuildTime: buildTime,
 		OutputLog: outputLog,
 	}, nil
+}
+
+// joinOutput は標準出力と標準エラーを1つのログへ結合する。
+//
+// why not: 単純に連結しない。標準出力が改行で終わらないと、標準エラーの先頭行が
+// 標準出力の最終行の続きになり、行頭で探す"* What went wrong:"を見落とす。
+func joinOutput(stdout, stderr string) string {
+	if stdout != "" && stderr != "" && !strings.HasSuffix(stdout, "\n") {
+		return stdout + "\n" + stderr
+	}
+
+	return stdout + stderr
 }
 
 // GetAPKPath は生成されたAPKファイルのパスを取得する。
@@ -337,4 +350,130 @@ func (b *GradleBuilder) GetAPKPath(buildType string) *string {
 	sort.Strings(matches)
 
 	return &matches[0]
+}
+
+// Gradleの失敗出力から要約を作る際の上限と見出し。
+const (
+	// why not: ブロックを無制限に示さない。複数の並列処理が失敗すると
+	// "Multiple task action failures occurred"の下に1件あたり3行ずつ並び、
+	// AAPT2デーモン5個の起動失敗で17行になった。同じ内容が繰り返されるだけなので、
+	// その2倍弱で打ち切る。
+	gradleCauseMaxLines = 30
+	// why not: 原因ブロックが無い出力を全て示さない。ブロックが無い出力は
+	// Gradleの定型の失敗報告ではなく、原因行の位置を形式から決められないため、
+	// 端末の1画面に収まる末尾だけを示し、全文はGradleBuildError.Outputから記録させる。
+	gradleTailLines = 20
+
+	gradleCauseHeader = "* What went wrong:"
+	// gradleSectionPrefix はGradleの失敗報告の各節（"* Try:"、"* Exception is:"等）の行頭。
+	gradleSectionPrefix = "* "
+)
+
+// GradleBuildError はGradleビルドが非ゼロ終了コードで終わったことを表す。
+// errors.Is(err, ErrGradleBuildFailed)を満たす。
+//
+// why not: Gradleの全出力をエラー文へ入れない。全出力はダウンロード進捗や
+// スタックトレースを含み、実ゲームのビルド失敗では1100行を超えた。エラー文は
+// 端末へそのまま表示され、ログファイルにも全行へ接頭辞を付けて書かれるため、
+// 原因が埋もれる。エラー文には原因の要約だけを入れ、全出力はOutputとして
+// 呼び出し側に記録させる。
+type GradleBuildError struct {
+	ExitCode int
+	// Output は標準出力と標準エラーを結合したGradleの全出力。
+	Output string
+}
+
+// Error はGradleが報告した"* What went wrong:"ブロックを、無ければ出力の
+// 末尾を、終了コードとともに返す。
+func (e *GradleBuildError) Error() string {
+	summary := summarizeGradleFailure(e.Output)
+	if summary == "" {
+		return fmt.Sprintf("%s: exit code %d: （Gradleの出力なし）", ErrGradleBuildFailed.Error(), e.ExitCode)
+	}
+
+	return fmt.Sprintf("%s: exit code %d:\n%s", ErrGradleBuildFailed.Error(), e.ExitCode, summary)
+}
+
+// Unwrap はErrGradleBuildFailedを返す。
+func (e *GradleBuildError) Unwrap() error {
+	return ErrGradleBuildFailed
+}
+
+// summarizeGradleFailure はGradleの出力から失敗の原因を示す行を取り出す。
+func summarizeGradleFailure(output string) string {
+	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+
+	cause := gradleCauseLines(lines)
+	if len(cause) == 0 {
+		return strings.Join(lastNonEmptyLines(lines, gradleTailLines), "\n")
+	}
+
+	if len(cause) > gradleCauseMaxLines {
+		omitted := len(cause) - gradleCauseMaxLines
+		cause = append(cause[:gradleCauseMaxLines], fmt.Sprintf("（ほか%d行を省略）", omitted))
+	}
+
+	return strings.Join(cause, "\n")
+}
+
+// gradleCauseLines は全ての"* What went wrong:"ブロックの本文を、見出しと
+// ブロック前後の空行を除いて返す。ブロックの間は空行1つで区切る。
+func gradleCauseLines(lines []string) []string {
+	var (
+		cause   []string
+		block   []string
+		inBlock bool
+	)
+
+	flush := func() {
+		block = trimBlankLines(block)
+		if len(block) == 0 {
+			return
+		}
+		if len(cause) > 0 {
+			cause = append(cause, "")
+		}
+		cause = append(cause, block...)
+		block = nil
+	}
+
+	for _, line := range lines {
+		switch {
+		case line == gradleCauseHeader:
+			flush()
+			inBlock = true
+		case inBlock && strings.HasPrefix(line, gradleSectionPrefix):
+			flush()
+			inBlock = false
+		case inBlock:
+			block = append(block, line)
+		}
+	}
+	flush()
+
+	return cause
+}
+
+// trimBlankLines は先頭と末尾の空行を除いたlinesを返す。
+func trimBlankLines(lines []string) []string {
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return lines
+}
+
+// lastNonEmptyLines は空行を除いたlinesの末尾n行を返す。
+func lastNonEmptyLines(lines []string, n int) []string {
+	nonEmpty := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			nonEmpty = append(nonEmpty, line)
+		}
+	}
+
+	return nonEmpty[max(len(nonEmpty)-n, 0):]
 }

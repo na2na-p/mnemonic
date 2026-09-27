@@ -300,10 +300,10 @@ func (s *AssetScanner) classifyFile(relSlash string) AssetFile {
 // why not: relSlashはfilepath.ToSlashで正規化済みのため、OS依存のfilepath.Base
 // ではなく単純な文字列分割で十分であり、Windows上でも一貫した結果になる。
 func pathBase(relSlash string) string {
-	idx := strings.LastIndex(relSlash, "/")
-	if idx == -1 {
+	_, base, found := strings.CutLast(relSlash, "/")
+	if !found {
 		return relSlash
 	}
 
-	return relSlash[idx+1:]
+	return base
 }

@@ -32,7 +32,17 @@ func findDependency(t *testing.T, name string) doctor.DependencyInfo {
 func TestDependencies_Count(t *testing.T) {
 	t.Parallel()
 
-	assert.Len(t, doctor.Dependencies, 5)
+	assert.Len(t, doctor.Dependencies, 4)
+}
+
+// TestDependencies_ExcludesNDK はビルドが呼ばないNDKを依存ツールとして確認しないことを検証する。
+func TestDependencies_ExcludesNDK(t *testing.T) {
+	t.Parallel()
+
+	for _, dep := range doctor.Dependencies {
+		assert.NotEqual(t, "ndk-build", dep.Command, dep.Name)
+		assert.NotContains(t, dep.Name, "NDK")
+	}
 }
 
 func TestDependencies_ContainsRequiredTools(t *testing.T) {
@@ -51,10 +61,6 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 		{
 			caseName: "正常系: Android_SDKが必須依存として登録されている", name: "Android SDK",
 			expectedCommand: "sdkmanager", expectedRequire: true,
-		},
-		{
-			caseName: "正常系: Android_NDKが必須依存として登録されている", name: "Android NDK",
-			expectedCommand: "ndk-build", expectedRequire: true,
 		},
 		{caseName: "正常系: FFmpegが必須依存として登録されている", name: "FFmpeg", expectedCommand: "ffmpeg", expectedRequire: true},
 	}

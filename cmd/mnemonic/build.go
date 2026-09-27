@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/na2na-p/mnemonic/internal/apperr"
+	"github.com/na2na-p/mnemonic/internal/builder"
 	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/logger"
 	"github.com/na2na-p/mnemonic/internal/pipeline"
@@ -156,6 +157,9 @@ func newBuildCmd() *cobra.Command {
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "ビルド失敗: %s\n", result.ErrorMessage) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+			if hint := gradleOutputHint(result.ErrorMessage, logFile, verboseLevel(verbose)); hint != "" {
+				fmt.Fprintln(cmd.OutOrStdout(), hint) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
+			}
 			log.Error(result.ErrorMessage)
 
 			return exitWith(apperr.ExitError)
@@ -214,6 +218,31 @@ func closeLogFile(cmd *cobra.Command, log *logger.BuildLogger, file io.Closer) {
 	if closeErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "警告: ログファイルを閉じられませんでした: %v\n", closeErr) //nolint:errcheck // CLI出力の書き込み失敗は実用上ハンドリング不要
 	}
+}
+
+// gradleOutputHint はGradleの失敗時に、Gradleの出力全文の在りかを示す1行を返す。
+// Gradleの失敗でない場合と、全文がすでに端末へ出ている-vv以上の場合は空文字列を返す。
+//
+// why not: エラーの型ではなくメッセージの先頭で判定する。pipeline.Resultは
+// エラーを文字列でしか持たず、errors.Asで*builder.GradleBuildErrorを取り出せない。
+// GradleBuildErrorとAPK未検出のエラー文はどちらもセンチネルの文言で始まる。
+//
+// why not: ログファイルが無い場合に「確認できます」とだけ書かない。パイプラインは
+// 全文をDebugでロガーへ渡すだけで、ログファイルも-vvも無い実行では全文はどこにも
+// 残っていないため、再実行を案内する。
+func gradleOutputHint(errorMessage, logFile string, level logger.VerboseLevel) string {
+	if level >= logger.Debug {
+		return ""
+	}
+	if !strings.HasPrefix(errorMessage, builder.ErrGradleBuildFailed.Error()) &&
+		!strings.HasPrefix(errorMessage, pipeline.ErrGradleAPKMissing.Error()) {
+		return ""
+	}
+	if logFile != "" {
+		return "Gradleの出力全文は " + logFile + " に記録しました"
+	}
+
+	return "Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます"
 }
 
 // verboseLevel は-vの指定回数をlogger.VerboseLevelへ変換する。-vvより多い指定はDebugとして、

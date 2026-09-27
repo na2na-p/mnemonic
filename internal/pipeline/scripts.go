@@ -29,11 +29,16 @@ func (b *BuildPipeline) adjustScripts(directory string) error {
 		rules = converter.DefaultRulesWithoutVideoExtensions()
 	}
 
-	adjuster := converter.NewScriptAdjuster(rules, true)
+	about, err := converter.LoadAboutDialog(directory)
+	if err != nil {
+		return fmt.Errorf("スクリプトの調整に失敗しました: %w", &rootRelativeError{root: directory, err: err})
+	}
+
+	adjuster := converter.NewScriptAdjuster(rules, true).WithAboutDialog(about)
 
 	return filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return &rootRelativeError{root: directory, err: walkErr}
 		}
 		if d.IsDir() {
 			return nil

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -773,4 +774,89 @@ func TestMidiConverter_Convert_RenderTimeout(t *testing.T) {
 		assert.False(t, deadline.Before(probeEnd.Add(timeout)),
 			"レンダリングの期限 %v がバージョン確認終了 %v からタイムアウトを数えた時刻より前になっている", deadline, probeEnd)
 	})
+}
+
+// tempWavEchoRunner はfailingに指定されたコマンドだけを失敗させ、そのエラー文に
+// 渡された一時WAVのパス（fluidsynthは-F、ffmpegは-iの引数）を2回含める。
+// それ以外のコマンドは成功扱いにし、ffprobeは失敗させて無音トリムを省かせる。
+type tempWavEchoRunner struct {
+	failing string
+
+	mu      sync.Mutex
+	wavPath string
+}
+
+func (r *tempWavEchoRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	flag := map[string]string{"fluidsynth": "-F", "ffmpeg": "-i"}[name]
+	i := slices.Index(args, flag)
+	if flag == "" || i < 0 || i+1 >= len(args) {
+		if name == "ffprobe" {
+			return nil, errors.New("ffprobe failed")
+		}
+
+		return nil, nil
+	}
+
+	wavPath := args[i+1]
+	r.mu.Lock()
+	r.wavPath = wavPath
+	r.mu.Unlock()
+
+	if name != r.failing {
+		return nil, nil
+	}
+
+	return nil, errors.New(name + ": " + wavPath + ": failed (" + wavPath + ")")
+}
+
+// TestMidiConverter_Convert_TempWavPathInError は外部コマンドのエラー文に現れる
+// 一時WAVの絶対パスを、何を指すかを示す語に置き換えることを検証する。
+func TestMidiConverter_Convert_TempWavPathInError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		failing     string
+		wantErr     error
+		wantMessage string
+	}{
+		{
+			name:        "異常系: FluidSynthのエラー文に現れる一時WAVのパスを置き換える",
+			failing:     "fluidsynth",
+			wantErr:     converter.ErrFluidsynthFailed,
+			wantMessage: "FluidSynth変換に失敗しました: fluidsynth: <一時WAV>: failed (<一時WAV>)",
+		},
+		{
+			name:        "異常系: FFmpegのエラー文に現れる一時WAVのパスを置き換える",
+			failing:     "ffmpeg",
+			wantErr:     converter.ErrMidiFFmpegFailed,
+			wantMessage: "FFmpeg変換に失敗しました: ffmpeg: <一時WAV>: failed (<一時WAV>)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			soundfont := filepath.Join(dir, "test.sf2")
+			writeFile(t, soundfont, []byte("soundfont data"))
+			source := filepath.Join(dir, "input.mid")
+			writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+			dest := filepath.Join(dir, "output.ogg")
+
+			runner := &tempWavEchoRunner{failing: tt.failing}
+			c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+
+			_, err := c.Convert(source, dest)
+
+			require.ErrorIs(t, err, tt.wantErr)
+			require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			assert.Equal(t, tt.wantMessage, err.Error())
+			assert.NotContains(t, err.Error(), filepath.Clean(os.TempDir()))
+			require.NotEmpty(t, runner.wavPath)
+			_, statErr := os.Stat(runner.wavPath)
+			require.ErrorIs(t, statErr, fs.ErrNotExist, "失敗しても一時WAVは削除する")
+		})
+	}
 }

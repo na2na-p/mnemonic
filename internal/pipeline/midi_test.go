@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -243,10 +244,10 @@ func TestConvertMidiFileListWith(t *testing.T) {
 			soundfont := filepath.Join(dir, "soundfont.sf2")
 			require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
 
-			runner := &renderCountingRunner{fakeCommandRunner: fakeCommandRunner{responses: map[string]fakeCommandResponse{
+			runner := &renderCountingRunner{responses: map[string]fakeCommandResponse{
 				"fluidsynth": {},
 				"ffmpeg":     {err: tt.ffmpegErr},
-			}}}
+			}}
 			midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
 			recorder := &sleepRecorder{}
 
@@ -328,8 +329,86 @@ func TestConvertMidiFileListWith_RemovalFailure(t *testing.T) {
 	assert.FileExists(t, midiFile)
 	warnings := logger.messages("WARNING")
 	require.Len(t, warnings, 1)
-	assert.Contains(t, warnings[0], midiFile)
-	assert.Equal(t, 1, strings.Count(warnings[0], midiFile), "パスは1回だけ示す")
+	rel := filepath.FromSlash("bgm/sinone.mid")
+	assert.Contains(t, warnings[0], " "+rel+": ", "削除できなかったファイルをdirからの相対パスで示す")
+	assert.Equal(t, 1, strings.Count(warnings[0], rel), "パスは1回だけ示す")
+	assert.NotContains(t, warnings[0], dir, "一時ディレクトリの絶対パスを警告に含めない")
+}
+
+// TestFindMidiFiles_WalkFailure はMIDIファイルの走査に失敗した場合の報告を検証する。
+func TestFindMidiFiles_WalkFailure(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+	}
+
+	dir := t.TempDir()
+	lockedDir := filepath.Join(dir, "bgm", "locked")
+	require.NoError(t, os.MkdirAll(lockedDir, 0o750))
+	require.NoError(t, os.Chmod(lockedDir, 0o000))
+	// t.TempDirのRemoveAllより先に権限を戻すため、TempDirの後に登録する（Cleanupは逆順に走る）。
+	t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o750) }) //nolint:gosec // テスト用ディレクトリの権限を元に戻す
+
+	_, err := findMidiFiles(dir)
+
+	require.ErrorIs(t, err, fs.ErrPermission)
+	assert.True(t,
+		strings.HasPrefix(err.Error(), "MIDIファイルの走査に失敗しました: "),
+		"走査の失敗であることを示す: %s", err,
+	)
+	assert.Contains(t, err.Error(), " "+filepath.FromSlash("bgm/locked")+": ", "走査に失敗したディレクトリを相対パスで示す")
+	assert.NotContains(t, err.Error(), dir)
+}
+
+// tempWavEchoRunner はffmpegの入力に渡された一時WAVのパスを、ffmpeg 9.0.1が
+// 入力を開けないときの文言（Error opening input file <パス>.）で返す。
+// fluidsynthのレンダリングと版の確認は成功扱い、ffprobeは失敗扱いにする。
+type tempWavEchoRunner struct {
+	mu       sync.Mutex
+	wavPaths []string
+}
+
+func (r *tempWavEchoRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	switch name {
+	case "fluidsynth":
+		return nil, nil
+	case "ffmpeg":
+		i := slices.Index(args, "-i")
+		if i < 0 || i+1 >= len(args) {
+			return nil, errors.New("ffmpegの入力が指定されていない")
+		}
+		wavPath := args[i+1]
+		r.mu.Lock()
+		r.wavPaths = append(r.wavPaths, wavPath)
+		r.mu.Unlock()
+
+		return nil, errors.New("Error opening input file " + wavPath + ".")
+	default:
+		return nil, errors.New("予期しないコマンド: " + name)
+	}
+}
+
+// TestConvertMidiFileListWith_TempWavPath はMIDI変換の失敗行に、走査した
+// ディレクトリの外にある一時WAVの絶対パスが現れないことを検証する。
+func TestConvertMidiFileListWith_TempWavPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	midiFile := filepath.Join(dir, "opening.mid")
+	require.NoError(t, os.WriteFile(midiFile, []byte("MThd"), 0o600))
+	soundfont := filepath.Join(dir, "soundfont.sf2")
+	require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
+
+	runner := &tempWavEchoRunner{}
+	midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)
+
+	err := convertMidiFileListWith(dir, []string{midiFile}, midiConverter, (&sleepRecorder{}).sleep, nopLogger{})
+
+	require.ErrorIs(t, err, ErrMidiConversionFailed)
+	require.NotEmpty(t, runner.wavPaths)
+	assert.NotContains(t, err.Error(), filepath.Clean(os.TempDir()), "一時WAVの絶対パスを失敗行に含めない")
+	assert.Contains(t, err.Error(), "opening.mid: 最大リトライ回数超過: FFmpeg変換に失敗しました: Error opening input file <一時WAV>.")
 }
 
 func TestMidiWorkerCount(t *testing.T) {
@@ -416,10 +495,10 @@ func TestConvertMidiFileListWith_Concurrency(t *testing.T) {
 		require.NoError(t, os.WriteFile(soundfont, []byte("sf2"), 0o600))
 
 		runner := &concurrencyRecordingRunner{
-			fakeCommandRunner: fakeCommandRunner{responses: map[string]fakeCommandResponse{
+			responses: map[string]fakeCommandResponse{
 				"fluidsynth": {},
 				"ffmpeg":     {},
-			}},
+			},
 			hold: 50 * time.Millisecond,
 		}
 		midiConverter := converter.NewMidiConverter(soundfont, 0, "", 0, time.Second, runner)

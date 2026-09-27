@@ -13,6 +13,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/na2na-p/mnemonic/internal/safepath"
+	"github.com/na2na-p/mnemonic/internal/saturate"
 )
 
 // センチネルエラー群。
@@ -41,53 +42,6 @@ const maxFileTableSize = 64 << 20
 // 締め出さず、宣言サイズを偽ったTB級の膨張だけを弾ける。
 const maxSegmentDecompressedSize = 1 << 30
 
-// EncryptionType は検出可能な暗号化タイプを表す。
-//
-// XP3アーカイブで使用される暗号化方式を表す。
-type EncryptionType string
-
-// EncryptionTypeの各値。
-const (
-	// EncryptionNone は暗号化なしを表す。
-	EncryptionNone EncryptionType = "none"
-	// EncryptionSimpleXOR は単純なXOR暗号化を表す。
-	EncryptionSimpleXOR EncryptionType = "simple_xor"
-	// EncryptionCustom はカスタム暗号化（ゲーム固有の実装）を表す。
-	EncryptionCustom EncryptionType = "custom"
-	// EncryptionUnknown は未知の暗号化方式を表す。
-	EncryptionUnknown EncryptionType = "unknown"
-)
-
-// EncryptionInfo は暗号化情報を保持する。
-//
-// XP3アーカイブの暗号化状態に関する情報を格納する不変値。
-type EncryptionInfo struct {
-	// IsEncrypted は暗号化されているかどうか。
-	IsEncrypted bool
-	// EncryptionType は検出された暗号化タイプ。
-	EncryptionType EncryptionType
-	// Details は暗号化に関する追加情報（未設定の場合は空文字列）。
-	Details string
-}
-
-// XP3EncryptionError はXP3が暗号化されている場合に返されるエラー。
-//
-// 暗号化情報を保持し、エラーメッセージとして詳細を提供する。
-type XP3EncryptionError struct {
-	// Info は検出された暗号化情報。
-	Info EncryptionInfo
-}
-
-// Error はエラーメッセージを返す。
-func (e *XP3EncryptionError) Error() string {
-	message := fmt.Sprintf("XP3アーカイブは暗号化されています (タイプ: %s)", e.Info.EncryptionType)
-	if e.Info.Details != "" {
-		return fmt.Sprintf("%s: %s", message, e.Info.Details)
-	}
-
-	return message
-}
-
 // XP3Segment はXP3ファイルセグメント情報を表す。
 //
 // XP3アーカイブ内のファイルは複数のセグメントに分割されている場合がある。
@@ -96,6 +50,8 @@ type XP3Segment struct {
 	// Offset はセグメントデータのオフセット。
 	Offset int64
 	// Size はアーカイブに格納されたバイト数（圧縮セグメントでは圧縮後サイズ）。
+	// 展開時に読み取る長さとして使うのは圧縮セグメントだけで、非圧縮セグメントは
+	// OriginalSizeぶんを読む。
 	Size int64
 	// OriginalSize は元のサイズ（圧縮セグメントでは解凍後サイズ）。
 	OriginalSize int64
@@ -109,8 +65,6 @@ type XP3FileEntry struct {
 	Name string
 	// Segments はファイルを構成するセグメントの一覧（登場順）。
 	Segments []XP3Segment
-	// IsEncrypted は暗号化されているか。
-	IsEncrypted bool
 }
 
 // XP3Archive はXP3アーカイブを操作する。
@@ -121,7 +75,6 @@ type XP3Archive struct {
 	archivePath string
 	fileSize    int64
 	fileEntries []XP3FileEntry
-	isEncrypted bool
 }
 
 // NewXP3Archive はarchivePathのアーカイブファイルを開く。
@@ -464,11 +417,12 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 		}
 		entryData = entryData[:n]
 
-		if entry, ok := parseSingleEntry(entryData); ok {
+		entry, ok, err := parseSingleEntry(entryData)
+		if err != nil {
+			return fmt.Errorf("%w: %w: %s", ErrInvalidXP3, err, a.archivePath)
+		}
+		if ok {
 			a.fileEntries = append(a.fileEntries, entry)
-			if entry.IsEncrypted {
-				a.isEncrypted = true
-			}
 		}
 	}
 }
@@ -477,14 +431,14 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 //
 // nameが取得できなかった場合（infoチャンクを欠くなど）、またはセグメントを
 // 1つも持てなかった場合（segmチャンクを欠く、あるいは28バイト未満で
-// 有効なセグメントを構成できない場合）はokにfalseを返す。
-func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
+// 有効なセグメントを構成できない場合）はokにfalseを返す。krkrzが読めない
+// セグメントを持つ場合（parseSegments参照）は、エントリ名を添えたエラーを返す。
+func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 	stream := bytes.NewReader(entryData)
 
 	var (
-		name        string
-		segments    []XP3Segment
-		isEncrypted bool
+		name     string
+		segmData [][]byte
 	)
 
 	for {
@@ -501,21 +455,21 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 		switch {
 		case bytes.Equal(subChunkName, []byte("info")):
 			infoData := readChunk(stream, subChunkSize)
+			// why not: flagsのビット31を暗号化の印として扱わない。krkrz（base/XP3Archive.h）
+			// ではこのビットはTVP_XP3_FILE_PROTECTED（展開ツールからの保護の印）であり、
+			// base/XP3Archive.cppは既定でTVPAllowExtractProtectedStorageをtrueにして
+			// ビット31を見ずに読み、読み出しでも参照しない。ゲーム固有の暗号化は
+			// 読み出し後にTVPXP3ArchiveExtractionFilterが施すもので、索引には現れない。
+			// flags、original_size、sizeはここでは使わない（サイズはsegmの各セグメントが持つ）。
 			if len(infoData) >= 22 {
-				flags := binary.LittleEndian.Uint32(infoData[0:4])
-				// original_size, sizeはsegmチャンク側の各セグメントが持つため、
-				// ここでは読み飛ばす。
 				nameLen := int(binary.LittleEndian.Uint16(infoData[20:22]))
 
 				if len(infoData) >= 22+nameLen*2 {
 					name = decodeUTF16LE(infoData[22 : 22+nameLen*2])
 				}
-
-				isEncrypted = flags&0x80000000 != 0
 			}
 		case bytes.Equal(subChunkName, []byte("segm")):
-			segmData := readChunk(stream, subChunkSize)
-			segments = append(segments, parseSegments(segmData)...)
+			segmData = append(segmData, readChunk(stream, subChunkSize))
 		default:
 			// adlr（Adler32チェックサム）を含む未知のサブチャンクは、既知チャンクと
 			// 同じくskipChunkでスキップする（詳細はskipChunkのwhy not参照）。
@@ -523,16 +477,37 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 		}
 	}
 
-	if name == "" || len(segments) == 0 {
-		return XP3FileEntry{}, false
+	if name == "" {
+		return XP3FileEntry{}, false, nil
+	}
+
+	// why not: segmをinfoより先に見つけた時点ではパースしない。サブチャンクの順序は
+	// 決まっておらず、エラーにエントリ名を添えるにはinfoを読み終えている必要がある。
+	var segments []XP3Segment
+	for _, data := range segmData {
+		parsed, err := parseSegments(data)
+		if err != nil {
+			return XP3FileEntry{}, false, fmt.Errorf("%s: %w", name, err)
+		}
+		segments = append(segments, parsed...)
+	}
+	if len(segments) == 0 {
+		return XP3FileEntry{}, false, nil
 	}
 
 	return XP3FileEntry{
-		Name:        name,
-		Segments:    segments,
-		IsEncrypted: isEncrypted,
-	}, true
+		Name:     name,
+		Segments: segments,
+	}, true, nil
 }
+
+// segmレコードのflagsの値。krkrz base/XP3Archive.h の
+// TVP_XP3_SEGM_ENCODE_METHOD_MASK / _RAW / _ZLIB と同じ。
+const (
+	segmEncodeMethodMask = 0x07
+	segmEncodeRaw        = 0x00
+	segmEncodeZlib       = 0x01
+)
 
 // parseSegments はsegmサブチャンクのデータを28バイト単位のセグメント列としてパースする。
 //
@@ -543,56 +518,70 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool) {
 // 「セグメントレコードのパース時」に確保する[]XP3Segmentのメモリ量に関する
 // 主張に過ぎず、展開時に同一オフセットを指す大量のセグメントを積み重ねる
 // 攻撃までは防げない（そちらの対策はextractEntryのwhy not参照）。
-func parseSegments(segmData []byte) []XP3Segment {
+//
+// why not: エンコード方式が0（非圧縮）と1（zlib）以外のセグメントを圧縮として
+// 読まない。krkrz（base/XP3Archive.cpp のsegm読み取り）はflags & 0x07がそれ以外なら
+// TVPReadErrorを投げ、その値の格納形式を定めていない。
+//
+// why not: 読み取る長さを決めるサイズ（元サイズと、圧縮セグメントの格納サイズ）が
+// int64の範囲を超えるセグメントを、ゼロ値に読み替えて受け入れない。krkrzは非圧縮
+// セグメントを元サイズぶんReadBufferで読み（読み取り不足はtjs2/tjs.cppでエラー）、
+// 圧縮セグメントは元サイズと解凍後の長さが一致しなければ投げる（tTVPSegmentData::
+// SetData）ため、どちらもアーカイブから満たせない。0に読み替えると空のファイルとして
+// 展開してしまう。非圧縮セグメントの格納サイズはkrkrzが読まないため範囲を問わない。
+func parseSegments(segmData []byte) ([]XP3Segment, error) {
 	const segmentRecordSize = 28
 
 	numSegments := len(segmData) / segmentRecordSize
 	if numSegments == 0 {
-		return nil
+		return nil, nil
 	}
 
 	segments := make([]XP3Segment, 0, numSegments)
 	for i := range numSegments {
 		record := segmData[i*segmentRecordSize : (i+1)*segmentRecordSize]
 
-		// why not: OffsetがsafeInt64で範囲外と判定された場合、Size/OriginalSize
-		// と同じくゼロ値へフォールバックすると「オフセット0（=アーカイブヘッダー
-		// 付近）からSize/OriginalSizeで示されるバイト数を読む」動作になり、
-		// 本来無関係なアーカイブヘッダーのバイト列を展開結果に混入させてしまう。
-		// Size/OriginalSizeのゼロ値フォールバックは最悪でも
-		// 「空読みになるだけ」で実害がないが、Offsetは読み取り位置そのものを
-		// 決めるため同列には扱えない。そのためOffsetが範囲外のセグメントは
-		// 丸ごと破棄する（このエントリの他のセグメントには影響しない。全セグ
-		// メントが破棄された場合はparseSingleEntry側のname/segments判定により
-		// エントリ自体が破棄される）。
+		var segment XP3Segment
+		switch binary.LittleEndian.Uint32(record[0:4]) & segmEncodeMethodMask {
+		case segmEncodeRaw:
+			segment.IsCompressed = false
+		case segmEncodeZlib:
+			segment.IsCompressed = true
+		default:
+			return nil, fmt.Errorf("セグメント%dのエンコード方式が不明です", i)
+		}
+
+		// why not: OffsetがsafeInt64で範囲外と判定された場合にゼロ値へ
+		// フォールバックすると「オフセット0（=アーカイブヘッダー付近）から
+		// セグメントの長さぶんを読む」動作になり、本来無関係なアーカイブヘッダーの
+		// バイト列を展開結果に混入させてしまう。そのためOffsetが範囲外のセグメントは
+		// 丸ごと破棄する（このエントリの他のセグメントには影響しない。全セグメントが
+		// 破棄された場合はparseSingleEntry側のsegments判定によりエントリ自体が
+		// 破棄される）。
 		offset, ok := safeInt64(binary.LittleEndian.Uint64(record[4:12]))
 		if !ok {
 			continue
 		}
-
-		var segment XP3Segment
 		segment.Offset = offset
 
-		flags := binary.LittleEndian.Uint32(record[0:4])
-		// safeInt64がfalseの場合、対応フィールドはゼロ値のまま
-		// （セグメント自体は破棄せず、パース可能な範囲の情報を活かす）。
-		//
 		// why not: 格納サイズを先に読まない。krkrz（base/XP3Archive.cpp）は+12を
 		// 元サイズ、+20を格納サイズとして読み、krkrrel-ng（src/krkrrel.cpp）も
 		// この順に書く。逆に読むと解凍後サイズの上限が格納サイズになり、格納サイズ
 		// より大きく膨らむ圧縮セグメントが展開に失敗する。
-		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[12:20])); ok {
-			segment.OriginalSize = v
+		segment.OriginalSize, ok = safeInt64(binary.LittleEndian.Uint64(record[12:20]))
+		if !ok {
+			return nil, fmt.Errorf("セグメント%dの元サイズが範囲外です", i)
 		}
-		if v, ok := safeInt64(binary.LittleEndian.Uint64(record[20:28])); ok {
-			segment.Size = v
+		size, ok := safeInt64(binary.LittleEndian.Uint64(record[20:28]))
+		if !ok && segment.IsCompressed {
+			return nil, fmt.Errorf("セグメント%dの格納サイズが範囲外です", i)
 		}
-		segment.IsCompressed = flags&0x07 != 0
+		segment.Size = size
 
 		segments = append(segments, segment)
 	}
 
-	return segments
+	return segments, nil
 }
 
 // readChunk はstreamからsizeバイトを読み取る。
@@ -703,7 +692,7 @@ func (a *XP3Archive) PlannedOutputSize() int64 {
 func plannedOutputSize(entries []XP3FileEntry, fileSize int64) int64 {
 	var total int64
 	for _, entry := range entries {
-		total = saturatingAdd(total, entryOutputLimit(entry, fileSize, maxSegmentDecompressedSize))
+		total = saturate.Add(total, entryOutputLimit(entry, fileSize, maxSegmentDecompressedSize))
 	}
 
 	return total
@@ -715,10 +704,10 @@ func plannedOutputSize(entries []XP3FileEntry, fileSize int64) int64 {
 func entryOutputLimit(entry XP3FileEntry, fileSize, inflatedLimit int64) int64 {
 	var total int64
 	for _, segment := range entry.Segments {
-		total = saturatingAdd(total, segmentOutputLimit(segment, fileSize))
+		total = saturate.Add(total, segmentOutputLimit(segment, fileSize))
 	}
 
-	return min(total, saturatingAdd(fileSize, inflatedLimit))
+	return min(total, saturate.Add(fileSize, inflatedLimit))
 }
 
 // maxDeflateRatio はdeflateが入力1バイトあたりに生み出せる出力バイト数の上限。
@@ -737,30 +726,35 @@ func entryOutputLimit(entry XP3FileEntry, fileSize, inflatedLimit int64) int64 {
 const maxDeflateRatio = 1032
 
 // segmentOutputLimit はreadSegmentがsegmentについて返しうるバイト数の上限を返す。
+// 解凍するセグメントについてreadSegmentが返すのは、宣言した解凍後サイズちょうどの
+// 解凍結果だけであり、それ以外はエラーになって何も書き出さない。
 //
-// why not: 解凍するセグメントでも解凍後サイズの上限だけを見積もりにしない。
-// zlibとして解凍できないセグメントは、readSegmentが読み取った生データを
-// そのまま返すため、生データの方が長ければそちらが書き出される。
-//
-// why not: 解凍後サイズの上限をsegmentDecompressionLimitのままにしない。
-// krkrrelは空のファイルも圧縮して格納し（格納サイズ8バイト・解凍後サイズ0）、
-// 解凍後サイズ0は64MiBへフォールバックするため、空のファイル1件ごとに64MiBを
-// 見積もってしまう。生データのmaxDeflateRatio倍を超えて膨張することはないため、
-// そちらでも抑える。
+// why not: 解凍後サイズの上限をsegmentDecompressionLimitだけにしない。宣言サイズは
+// アーカイブ自身の値であり、生データのmaxDeflateRatio倍を超えて膨張することはない
+// ため、宣言が大きくてもそちらで抑えられる。
 func segmentOutputLimit(segment XP3Segment, fileSize int64) int64 {
 	raw := segmentReadLimit(segment, fileSize)
 	if !segmentDecompresses(segment) {
 		return raw
 	}
 
-	return max(raw, min(segmentDecompressionLimit(segment), saturatingMul(raw, maxDeflateRatio)))
+	return min(segmentDecompressionLimit(segment), saturatingMul(raw, maxDeflateRatio))
 }
 
 // segmentReadLimit はsegmentについてファイルから読み取れる生バイト数の上限を返す。
-// Size宣言値をオフセット以降の実際の残量へクランプする（理由はstreamSizeの
+// 読み取る長さの宣言値をオフセット以降の実際の残量へクランプする（理由はstreamSizeの
 // why not参照）。
+//
+// why not: 非圧縮セグメントの長さに格納サイズ（Size）を使わない。krkrzの
+// tTVPXP3ArchiveStream（base/XP3Archive.cpp）は非圧縮セグメントを元サイズぶん
+// ストリームから直接読み、格納サイズを参照するのは圧縮セグメントの解凍時だけである。
 func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
-	return min(segment.Size, max(fileSize-segment.Offset, 0))
+	length := segment.OriginalSize
+	if segmentDecompresses(segment) {
+		length = segment.Size
+	}
+
+	return min(length, max(fileSize-segment.Offset, 0))
 }
 
 // segmentDecompresses はreadSegmentがsegmentをzlib解凍するかどうかを返す。
@@ -772,15 +766,6 @@ func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
 // 非圧縮とみなすとzlibストリームそのものを書き出してしまう。
 func segmentDecompresses(segment XP3Segment) bool {
 	return segment.IsCompressed
-}
-
-// saturatingAdd は非負のa、bの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
-func saturatingAdd(a, b int64) int64 {
-	if a > math.MaxInt64-b {
-		return math.MaxInt64
-	}
-
-	return a + b
 }
 
 // saturatingMul は非負のaと正のbの積を返す。積がint64を超える場合はmath.MaxInt64を返す。
@@ -889,10 +874,16 @@ func streamSize(f io.ReadSeeker) (int64, error) {
 // 生み出したバイト数をbudget.inflatedから差し引き、エントリ全体の累積量を
 // 管理する（budgetの必要性はextractEntryとentryBudgetのwhy not参照）。
 //
-// fileSizeでセグメントのSize宣言値をクランプする理由はstreamSizeのwhy not参照。
-// readSizeはsegmentReadLimit（safeInt64通過済みで非負のsegment.Sizeと、非負に
+// fileSizeで読み取る長さの宣言値をクランプする理由はstreamSizeのwhy not参照。
+// readSizeはsegmentReadLimit（safeInt64通過済みで非負の宣言値と、非負に
 // クランプした残量の小さい方）とbudget.raw（読み取った分しか減らないため非負）の
 // 小さい方であり常に非負のため、負値ガードは不要。
+//
+// why not: 解凍できない圧縮セグメントを読み取った生データのまま返さない。krkrzの
+// tTVPSegmentData::SetData（base/XP3Archive.cpp）は元サイズぶんの領域へ
+// uncompressし、結果がZ_OKでないか解凍後の長さが元サイズと違えば
+// TVPUncompressionFailedを投げる。生データを返すと壊れたzlibストリームがそのまま
+// ファイルとして書き出される。
 func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *entryBudget) ([]byte, error) {
 	if _, err := f.Seek(segment.Offset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("セグメントオフセットへのシークに失敗しました: %w", err)
@@ -911,91 +902,23 @@ func readSegment(f io.ReadSeeker, segment XP3Segment, fileSize int64, budget *en
 	if segmentDecompresses(segment) {
 		segmentLimit := segmentDecompressionLimit(segment)
 		decompressed, err := decompressZlib(buf, min(segmentLimit, budget.inflated))
-		if errors.Is(err, ErrDecompressedTooLarge) {
-			if budget.inflated < segmentLimit {
-				return nil, fmt.Errorf("%w: エントリの解凍後サイズの合計が上限%dバイトを超えています: %w", ErrInvalidXP3, budget.inflatedLimit, ErrDecompressedTooLarge)
-			}
+		if errors.Is(err, ErrDecompressedTooLarge) && budget.inflated < segmentLimit {
+			return nil, fmt.Errorf("%w: エントリの解凍後サイズの合計が上限%dバイトを超えています: %w", ErrInvalidXP3, budget.inflatedLimit, ErrDecompressedTooLarge)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("%w: セグメント: %w", ErrInvalidXP3, err)
 		}
-		if err == nil {
-			budget.inflated -= int64(len(decompressed))
-			buf = decompressed
+		if int64(len(decompressed)) != segment.OriginalSize {
+			return nil, fmt.Errorf("%w: セグメントの解凍後サイズ%dバイトが宣言%dバイトと一致しません", ErrInvalidXP3, len(decompressed), segment.OriginalSize)
 		}
+		budget.inflated -= int64(len(decompressed))
+		buf = decompressed
 	}
 
 	return buf, nil
 }
 
 // segmentDecompressionLimit はsegmentの解凍後サイズの上限を返す。
-//
-// why not: OriginalSizeはsafeInt64で範囲外と判定されるとゼロ値になり、宣言値が0の
-// 場合と区別できない。0を上限にすると範囲外を宣言したセグメントが一律に失敗するため、
-// 0の場合はファイルテーブルと同じ上限へフォールバックする。
 func segmentDecompressionLimit(segment XP3Segment) int64 {
-	if segment.OriginalSize > 0 {
-		return min(segment.OriginalSize, maxSegmentDecompressedSize)
-	}
-
-	return maxFileTableSize
-}
-
-// IsEncrypted は暗号化されているかを判定する。
-func (a *XP3Archive) IsEncrypted() bool {
-	return a.isEncrypted
-}
-
-// XP3EncryptionChecker はXP3ファイルの暗号化をチェックする。
-//
-// XP3アーカイブファイルを解析し、暗号化されているかどうかを判定する。
-type XP3EncryptionChecker struct {
-	archivePath string
-}
-
-// NewXP3EncryptionChecker はarchivePathを対象に初期化する。
-func NewXP3EncryptionChecker(archivePath string) *XP3EncryptionChecker {
-	return &XP3EncryptionChecker{archivePath: archivePath}
-}
-
-// Check は暗号化状態をチェックして返す。
-//
-// アーカイブファイルが存在しない場合はErrXP3NotFoundを返す。
-// 不正なXP3ファイル形式でパースに失敗した場合は、暗号化されていないとみなした
-// EncryptionInfoを返す（エラーにしない）。
-func (c *XP3EncryptionChecker) Check() (EncryptionInfo, error) {
-	if _, err := os.Stat(c.archivePath); err != nil {
-		return EncryptionInfo{}, fmt.Errorf("%w: %s", ErrXP3NotFound, c.archivePath)
-	}
-
-	archive, err := NewXP3Archive(c.archivePath)
-	if err != nil {
-		if errors.Is(err, ErrInvalidXP3) {
-			return EncryptionInfo{IsEncrypted: false, EncryptionType: EncryptionNone}, nil
-		}
-
-		return EncryptionInfo{}, err
-	}
-
-	if archive.IsEncrypted() {
-		return EncryptionInfo{
-			IsEncrypted:    true,
-			EncryptionType: EncryptionUnknown,
-			Details:        "アーカイブ内のファイルが暗号化されています",
-		}, nil
-	}
-
-	return EncryptionInfo{IsEncrypted: false, EncryptionType: EncryptionNone}, nil
-}
-
-// RaiseIfEncrypted は暗号化されている場合にXP3EncryptionErrorを返す。
-func (c *XP3EncryptionChecker) RaiseIfEncrypted() error {
-	info, err := c.Check()
-	if err != nil {
-		return err
-	}
-
-	if info.IsEncrypted {
-		return &XP3EncryptionError{Info: info}
-	}
-
-	return nil
+	return min(segment.OriginalSize, maxSegmentDecompressedSize)
 }

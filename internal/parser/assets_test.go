@@ -356,6 +356,25 @@ func TestAssetScanner_WithConfig(t *testing.T) {
 		assert.Equal(t, "test.ks", manifest.Files[0].Path)
 	})
 
+	t.Run("正常系: excludeのパターンはサブディレクトリのファイルの名前だけにも一致する", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "data", "old"), 0o750))
+		writeFile(t, filepath.Join(dir, "data", "old", "backup.bak"), []byte("backup"))
+		writeFile(t, filepath.Join(dir, "data", "old", "keep.ks"), []byte("test"))
+
+		cfg := &parser.ScannerConfig{Exclude: []string{"backup.bak"}}
+		scanner, err := parser.NewAssetScanner(dir, cfg)
+		require.NoError(t, err)
+
+		manifest, err := scanner.Scan()
+		require.NoError(t, err)
+
+		require.Len(t, manifest.Files, 1)
+		assert.Equal(t, "data/old/keep.ks", manifest.Files[0].Path)
+	})
+
 	t.Run("正常系: conversion_rules設定で変換ルールが上書きされる", func(t *testing.T) {
 		t.Parallel()
 

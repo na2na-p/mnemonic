@@ -407,30 +407,55 @@ func TestLogPreferredSourceSkips(t *testing.T) {
 	}
 }
 
+// newTemplatePreparerはcache.Dir()でSDL2ソースキャッシュの場所を決め、解決に失敗すると
+// その旨も警告する。cache.Dir()はHOMEなどの環境変数から組み立てるため、各ケースで
+// t.Setenvにより環境変数を固定する。t.Setenvは並行する祖先を持つテストから呼べない
+// ため、本テストもサブテストもt.Parallel()にできない。
 func TestBuildPipeline_NewTemplatePreparer(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
-		name    string
-		message string
+		name             string
+		unresolvableHome bool
+		message          string
 	}{
-		{name: "正常系: TemplatePreparerの警告をパイプラインのLoggerへWARNINGとして流す", message: "x"},
+		{
+			name:    "正常系: TemplatePreparerの警告をパイプラインのLoggerへWARNINGとして流す",
+			message: "x",
+		},
+		{
+			name:             "正常系: ホームディレクトリを解決できなくてもキャッシュを使えない旨を警告したうえで警告を流す",
+			unresolvableHome: true,
+			message:          "x",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			if tc.unresolvableHome {
+				t.Setenv("HOME", "")
+				t.Setenv("USERPROFILE", "")
+			} else {
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv("USERPROFILE", t.TempDir())
+				t.Setenv("XDG_CACHE_HOME", t.TempDir())
+				t.Setenv("LOCALAPPDATA", t.TempDir())
+			}
 
 			b := newTestPipeline(t)
 			logger := &recordingLogger{}
 			b.SetLogger(logger)
 
-			// why not: t.SetenvでHOMEを差し替えない（t.Parallelと併用できない）。構築は
-			// キャッシュのパスを組み立てるだけでファイルシステムに触れず、Warnの呼び出しも
-			// キャッシュを読み書きしないため、実キャッシュディレクトリは変化しない。
 			b.newTemplatePreparer(t.TempDir()).Warn(tc.message)
 
-			assert.Equal(t, []string{tc.message}, logger.messages("WARNING"))
+			warnings := logger.messages("WARNING")
+			if !tc.unresolvableHome {
+				assert.Equal(t, []string{tc.message}, warnings)
+
+				return
+			}
+
+			require.Len(t, warnings, 2)
+			assert.Contains(t, warnings[0], "キャッシュディレクトリを解決できないため、SDL2ソースのキャッシュを使わずに続行します")
+			assert.Equal(t, tc.message, warnings[1])
 		})
 	}
 }
@@ -516,6 +541,38 @@ func TestBuildPipeline_ExecuteConvert_LogsConversionNotes(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, logger.messages("VERBOSE"), filepath.Join("data", "name.csv")+": 推定結果なし、shift_jis として復号")
+}
+
+// TestBuildPipeline_ExecuteAnalyze_XP3 は、infoのflagsのビット31（krkrz
+// base/XP3Archive.h のTVP_XP3_FILE_PROTECTED）が立ったXP3も、ANALYZEフェーズで
+// 拒否せずに受け付けることを検証する。
+func TestBuildPipeline_ExecuteAnalyze_XP3(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		infoFlags uint32
+	}{
+		{"正常系: 保護フラグの無いXP3を受け付ける", 0},
+		{"正常系: 保護フラグ（ビット31）が立ったXP3も受け付ける", 0x80000000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			input := filepath.Join(dir, "data.xp3")
+			require.NoError(t, os.WriteFile(input, storedXP3BytesWithInfoFlags("startup.tjs", tt.infoFlags, []byte("// startup")), 0o600))
+
+			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+			t.Cleanup(p.cleanupTempDirs)
+
+			_, err := p.executeAnalyze(buildArtifacts{})
+
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
