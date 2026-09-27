@@ -414,28 +414,3 @@ func TestMaxDeflateRatio(t *testing.T) {
 		})
 	}
 }
-
-func TestSaturatingMul(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		a    int64
-		b    int64
-		want int64
-	}{
-		{"正常系: 0との積は0", 0, maxDeflateRatio, 0},
-		{"正常系: int64に収まる積はそのまま返す", 8, maxDeflateRatio, 8 * 1032},
-		{"正常系: 積がちょうどint64に収まる境界ではそのまま返す", math.MaxInt64 / maxDeflateRatio, maxDeflateRatio, math.MaxInt64 / maxDeflateRatio * maxDeflateRatio},
-		{"正常系: 積がint64を超える場合は最大値で飽和する", math.MaxInt64/maxDeflateRatio + 1, maxDeflateRatio, math.MaxInt64},
-		{"正常系: 最大値同士の積も最大値で飽和する", math.MaxInt64, math.MaxInt64, math.MaxInt64},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.want, saturatingMul(tc.a, tc.b))
-		})
-	}
-}

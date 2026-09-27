@@ -738,7 +738,7 @@ func segmentOutputLimit(segment XP3Segment, fileSize int64) int64 {
 		return raw
 	}
 
-	return min(segmentDecompressionLimit(segment), saturatingMul(raw, maxDeflateRatio))
+	return min(segmentDecompressionLimit(segment), saturate.Mul(raw, maxDeflateRatio))
 }
 
 // segmentReadLimit はsegmentについてファイルから読み取れる生バイト数の上限を返す。
@@ -766,15 +766,6 @@ func segmentReadLimit(segment XP3Segment, fileSize int64) int64 {
 // 非圧縮とみなすとzlibストリームそのものを書き出してしまう。
 func segmentDecompresses(segment XP3Segment) bool {
 	return segment.IsCompressed
-}
-
-// saturatingMul は非負のaと正のbの積を返す。積がint64を超える場合はmath.MaxInt64を返す。
-func saturatingMul(a, b int64) int64 {
-	if a > math.MaxInt64/b {
-		return math.MaxInt64
-	}
-
-	return a * b
 }
 
 // extractEntry はentryの全セグメントを順に読み取り・解凍し、連結して
