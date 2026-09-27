@@ -32,101 +32,6 @@ func minimalXP3Bytes() []byte {
 	return buf.Bytes()
 }
 
-func TestEncryptionType_Values(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]struct {
-		encryptionType parser.EncryptionType
-		expected       string
-	}{
-		"正常系: NONE型の値":       {parser.EncryptionNone, "none"},
-		"正常系: SIMPLE_XOR型の値": {parser.EncryptionSimpleXOR, "simple_xor"},
-		"正常系: CUSTOM型の値":     {parser.EncryptionCustom, "custom"},
-		"正常系: UNKNOWN型の値":    {parser.EncryptionUnknown, "unknown"},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.expected, string(tc.encryptionType))
-		})
-	}
-}
-
-func TestEncryptionInfo_Creation(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]parser.EncryptionInfo{
-		"正常系: 非暗号化・詳細なし": {
-			IsEncrypted: false, EncryptionType: parser.EncryptionNone, Details: "",
-		},
-		"正常系: XOR暗号化・詳細あり": {
-			IsEncrypted: true, EncryptionType: parser.EncryptionSimpleXOR, Details: "XORキー: 0xFF",
-		},
-		"正常系: カスタム暗号化・詳細あり": {
-			IsEncrypted: true, EncryptionType: parser.EncryptionCustom, Details: "カスタム暗号化検出",
-		},
-		"正常系: 未知の暗号化・詳細なし": {
-			IsEncrypted: true, EncryptionType: parser.EncryptionUnknown, Details: "",
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			info := parser.EncryptionInfo{
-				IsEncrypted:    tc.IsEncrypted,
-				EncryptionType: tc.EncryptionType,
-				Details:        tc.Details,
-			}
-
-			assert.Equal(t, tc.IsEncrypted, info.IsEncrypted)
-			assert.Equal(t, tc.EncryptionType, info.EncryptionType)
-			assert.Equal(t, tc.Details, info.Details)
-		})
-	}
-}
-
-func TestXP3EncryptionError(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: エラーメッセージに暗号化タイプが含まれる", func(t *testing.T) {
-		t.Parallel()
-
-		info := parser.EncryptionInfo{
-			IsEncrypted:    true,
-			EncryptionType: parser.EncryptionSimpleXOR,
-		}
-		err := &parser.XP3EncryptionError{Info: info}
-
-		assert.Equal(t, info, err.Info)
-		assert.Contains(t, err.Error(), "暗号化されています")
-		assert.Contains(t, err.Error(), "simple_xor")
-	})
-
-	t.Run("正常系: 詳細情報を含むエラーメッセージ", func(t *testing.T) {
-		t.Parallel()
-
-		info := parser.EncryptionInfo{
-			IsEncrypted:    true,
-			EncryptionType: parser.EncryptionCustom,
-			Details:        "特殊な暗号化方式",
-		}
-		err := &parser.XP3EncryptionError{Info: info}
-
-		assert.Contains(t, err.Error(), "特殊な暗号化方式")
-	})
-
-	t.Run("正常系: errorインターフェースを満たす", func(t *testing.T) {
-		t.Parallel()
-
-		var err error = &parser.XP3EncryptionError{Info: parser.EncryptionInfo{}}
-		assert.Error(t, err)
-	})
-}
-
 func TestNewXP3Archive(t *testing.T) {
 	t.Parallel()
 
@@ -353,92 +258,6 @@ func TestXP3Archive_ExtractAll_BackslashSeparatedNames(t *testing.T) {
 	}
 }
 
-func TestXP3Archive_IsEncrypted(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: テスト用ファイルは暗号化されていない", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "valid.xp3")
-		writeFile(t, path, minimalXP3Bytes())
-
-		archive, err := parser.NewXP3Archive(path)
-		require.NoError(t, err)
-
-		assert.False(t, archive.IsEncrypted())
-	})
-}
-
-func TestXP3EncryptionChecker_Check(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: 非暗号化XP3を正しく判定できる", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "valid.xp3")
-		writeFile(t, path, minimalXP3Bytes())
-
-		checker := parser.NewXP3EncryptionChecker(path)
-		result, err := checker.Check()
-
-		require.NoError(t, err)
-		assert.False(t, result.IsEncrypted)
-		assert.Equal(t, parser.EncryptionNone, result.EncryptionType)
-	})
-
-	t.Run("異常系: 存在しないファイルでErrXP3NotFound", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "nonexistent.xp3")
-
-		checker := parser.NewXP3EncryptionChecker(path)
-		_, err := checker.Check()
-
-		require.ErrorIs(t, err, parser.ErrXP3NotFound)
-	})
-
-	t.Run("正常系: 不正なXP3ファイルはパース失敗として非暗号化扱いになる", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "invalid.xp3")
-		writeFile(t, path, append([]byte("NOT_AN_XP3_FILE"), make([]byte, 100)...))
-
-		checker := parser.NewXP3EncryptionChecker(path)
-		result, err := checker.Check()
-
-		require.NoError(t, err)
-		assert.False(t, result.IsEncrypted)
-		assert.Equal(t, parser.EncryptionNone, result.EncryptionType)
-	})
-}
-
-func TestXP3EncryptionChecker_RaiseIfEncrypted(t *testing.T) {
-	t.Parallel()
-
-	t.Run("正常系: 非暗号化XP3では例外を発生させない", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "valid.xp3")
-		writeFile(t, path, minimalXP3Bytes())
-
-		checker := parser.NewXP3EncryptionChecker(path)
-
-		assert.NoError(t, checker.RaiseIfEncrypted())
-	})
-
-	t.Run("異常系: 存在しないファイルでErrXP3NotFound", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "nonexistent.xp3")
-
-		checker := parser.NewXP3EncryptionChecker(path)
-
-		err := checker.RaiseIfEncrypted()
-
-		require.ErrorIs(t, err, parser.ErrXP3NotFound)
-	})
-}
-
 // --- 標準インデックスを持つ実XP3アーカイブのビルダー ---
 //
 // XP3Archiveの本体ロジック（zlib解凍・チャンク解析・オフセット算出）は
@@ -458,7 +277,7 @@ type xp3SegmentSpec struct {
 type xp3EntrySpec struct {
 	name         string
 	data         []byte
-	encryptFlag  bool
+	protectFlag  bool
 	compressFlag bool
 	// segments を指定すると複数セグメントの明示的なレイアウトを構築できる。
 	// 空の場合はdata/compressFlagから単一セグメントのエントリを合成する
@@ -557,7 +376,7 @@ func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3I
 		// 合計値をそのまま書けば十分）。
 		var info bytes.Buffer
 		var flags uint32
-		if e.encryptFlag {
+		if e.protectFlag {
 			flags |= 0x80000000
 		}
 		nameUTF16 := utf16.Encode([]rune(e.name))
@@ -573,13 +392,11 @@ func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3I
 
 		// segmサブチャンク（セグメントごとに28バイトのレコードを連結し、
 		// flags、offset、元サイズ、格納サイズの順に書く）。
-		// フラグは0x07。パース側の判定はflags&0x07 != 0のため0x01でも判定結果は
-		// 同じになる（krkrrel-ngが圧縮セグメントに書く値は0x01）。
 		var segm bytes.Buffer
 		for _, seg := range entrySegments[i] {
 			var segmFlags uint32
 			if seg.compressFlag {
-				segmFlags |= 0x07
+				segmFlags |= 0x01
 			}
 			writeUint32(&segm, segmFlags)
 			writeUint64(&segm, uint64(seg.offset)) //nolint:gosec // テストヘルパーであり非負であることが既知
@@ -709,7 +526,6 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 
 		files := archive.ListFiles()
 		require.Equal(t, []string{"data/script.ks"}, files)
-		assert.False(t, archive.IsEncrypted())
 
 		outputDir := filepath.Join(tmpDir, "out")
 		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
@@ -746,11 +562,11 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		assert.Equal(t, []byte("PNGDATA"), got2)
 	})
 
-	t.Run("正常系: 暗号化フラグが立ったエントリがあるとIsEncryptedがtrueになる", func(t *testing.T) {
+	t.Run("正常系: 保護フラグ（ビット31）が立ったエントリも展開できる", func(t *testing.T) {
 		t.Parallel()
 
 		archiveBytes := buildXP3Archive(t, []xp3EntrySpec{
-			{name: "data/secret.dat", data: []byte("secret"), encryptFlag: true},
+			{name: "data/secret.dat", data: []byte("secret"), protectFlag: true},
 		})
 
 		tmpDir := t.TempDir()
@@ -760,18 +576,11 @@ func TestXP3Archive_StandardIndexRoundTrip(t *testing.T) {
 		archive, err := parser.NewXP3Archive(path)
 		require.NoError(t, err)
 
-		assert.True(t, archive.IsEncrypted())
-
-		checker := parser.NewXP3EncryptionChecker(path)
-		result, err := checker.Check()
+		outputDir := filepath.Join(tmpDir, "out")
+		require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+		got, err := os.ReadFile(filepath.Join(outputDir, "data", "secret.dat")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
 		require.NoError(t, err)
-		assert.True(t, result.IsEncrypted)
-		assert.Equal(t, parser.EncryptionUnknown, result.EncryptionType)
-
-		err = checker.RaiseIfEncrypted()
-		var encErr *parser.XP3EncryptionError
-		require.ErrorAs(t, err, &encErr)
-		assert.True(t, encErr.Info.IsEncrypted)
+		assert.Equal(t, []byte("secret"), got)
 	})
 }
 
@@ -914,61 +723,96 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 	assert.NoFileExists(t, filepath.Join(outputDir, "secret.dat"))
 }
 
-// TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice は
-// offsetは範囲内だがsize/original_sizeがint64範囲を超えるケース。
-//
-// 修正前はint64(uint64)の素朴なキャストで符号が反転して負値になり、
-// ExtractAll時のmake([]byte, entry.Size)がmakeslice: len out of rangeで
-// パニックしていた。また、そのpanicを避けるために（誤って）Seek失敗時に
-// エントリ全体を破棄していたため、既に読み取れていたnameまで失われていた。
-// 修正後はsafeInt64で範囲外の値のみゼロ値へフォールバックする。Size/
-// OriginalSizeのフォールバックは（Offsetと異なり）最悪でも空読みになる
-// だけで実害がないため、Offsetのように破棄はしない
-// （詳細はparseSegmentsのwhy not参照）。
-func TestXP3Archive_CorruptSegmSize_PreservesEntryAndAvoidsNegativeSlice(t *testing.T) {
+// TestNewXP3Archive_OutOfRangeSegmSize は、offsetは範囲内だが読み取りに使う
+// サイズがint64の範囲を超えるsegmレコードを、パニックせずにエントリ名を添えた
+// ErrInvalidXP3として扱うことを検証する。元サイズは非圧縮でも圧縮でも読み取る
+// 長さを決め（krkrz base/XP3Archive.cpp L937・L950・L1014、L872）、格納サイズは
+// 圧縮セグメントでだけ読む長さになる（L873）。非圧縮セグメントの格納サイズは
+// krkrzが読まないため、範囲外でも展開できる。
+func TestNewXP3Archive_OutOfRangeSegmSize(t *testing.T) {
 	t.Parallel()
 
-	nameUTF16 := utf16.Encode([]rune("secret.dat"))
-
-	var info bytes.Buffer
-	writeUint32(&info, 0)                      // flags
-	writeUint64(&info, 5)                      // originalSize（パース側で読み飛ばされる）
-	writeUint64(&info, 5)                      // size（同上）
-	writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
-	for _, u := range nameUTF16 {
-		writeUint16(&info, u)
+	cases := map[string]struct {
+		flags        uint32
+		originalSize uint64
+		size         uint64
+		wantErr      bool
+		want         []byte
+	}{
+		"異常系: 非圧縮セグメントの元サイズがint64の範囲外ならErrInvalidXP3": {
+			flags: 0, originalSize: math.MaxUint64, size: 5, wantErr: true,
+		},
+		"異常系: 圧縮セグメントの元サイズがint64の範囲外ならErrInvalidXP3": {
+			flags: 1, originalSize: math.MaxUint64, size: 5, wantErr: true,
+		},
+		"異常系: 圧縮セグメントの格納サイズがint64の範囲外ならErrInvalidXP3": {
+			flags: 1, originalSize: 5, size: math.MaxUint64, wantErr: true,
+		},
+		"正常系: 非圧縮セグメントの格納サイズは範囲外でも元サイズぶんを展開する": {
+			flags: 0, originalSize: 5, size: math.MaxUint64, want: []byte("hello"),
+		},
 	}
 
-	var segm bytes.Buffer
-	writeUint32(&segm, 0)              // flags
-	writeUint64(&segm, 0)              // offset（範囲内・破棄されない）
-	writeUint64(&segm, math.MaxUint64) // originalSize（int64範囲超過）
-	writeUint64(&segm, math.MaxUint64) // size（int64範囲超過）
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	var entryBody bytes.Buffer
-	writeChunkHeader(&entryBody, "info", info.Bytes())
-	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+			nameUTF16 := utf16.Encode([]rune("secret.dat"))
 
-	var table bytes.Buffer
-	writeChunkHeader(&table, "File", entryBody.Bytes())
+			var info bytes.Buffer
+			writeUint32(&info, 0)
+			writeUint64(&info, 5)
+			writeUint64(&info, 5)
+			writeUint16(&info, uint16(len(nameUTF16))) //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+			for _, u := range nameUTF16 {
+				writeUint16(&info, u)
+			}
 
-	archiveBytes := buildXP3ArchiveWithUncompressedTable(table.Bytes())
+			const headerSize = 19
+			payload := []byte("hello")
 
-	path := filepath.Join(t.TempDir(), "corrupt_segm.xp3")
-	writeFile(t, path, archiveBytes)
+			var segm bytes.Buffer
+			writeUint32(&segm, tc.flags)
+			writeUint64(&segm, headerSize)
+			writeUint64(&segm, tc.originalSize)
+			writeUint64(&segm, tc.size)
 
-	archive, err := parser.NewXP3Archive(path)
-	require.NoError(t, err)
+			var entryBody bytes.Buffer
+			writeChunkHeader(&entryBody, "info", info.Bytes())
+			writeChunkHeader(&entryBody, "segm", segm.Bytes())
 
-	// オフセットが範囲内のためセグメント・エントリともに破棄されず、nameが保持されていること。
-	require.Equal(t, []string{"secret.dat"}, archive.ListFiles())
+			var table bytes.Buffer
+			writeChunkHeader(&table, "File", entryBody.Bytes())
 
-	// 展開してもmakesliceパニックせずに完了すること
-	// （size/originalSizeがint64安全域外のためゼロ値にフォールバックし、空データとして書き出される）。
-	outputDir := t.TempDir()
-	err = extractAllWithinPlan(t, archive, outputDir)
-	require.NoError(t, err)
-	assert.FileExists(t, filepath.Join(outputDir, "secret.dat"))
+			var buf bytes.Buffer
+			buf.Write(parser.XP3Magic)
+			writeUint64(&buf, uint64(headerSize+len(payload)))
+			buf.Write(payload)
+			writeRawIndex(&buf, 0x00, table.Bytes())
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "segm_size.xp3")
+			writeFile(t, path, buf.Bytes())
+
+			var (
+				archive *parser.XP3Archive
+				err     error
+			)
+			require.NotPanics(t, func() { archive, err = parser.NewXP3Archive(path) })
+
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Contains(t, err.Error(), "secret.dat")
+				return
+			}
+			require.NoError(t, err)
+			outputDir := filepath.Join(tmpDir, "out")
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			got, err := os.ReadFile(filepath.Join(outputDir, "secret.dat")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // --- 複数セグメント対応のテスト ---
@@ -1274,6 +1118,13 @@ type engineLayoutSegment struct {
 // 取り違えると往復検証はそのまま通ってしまうため、ここでは外部の実装が定める
 // レイアウトを値ごとに書き下す。
 func buildEngineLayoutXP3(name string, segments []engineLayoutSegment) []byte {
+	return buildEngineLayoutXP3WithInfoFlags(name, 0, segments)
+}
+
+// buildEngineLayoutXP3WithInfoFlags はbuildEngineLayoutXP3と同じアーカイブを、infoサブ
+// チャンクの先頭4バイト（krkrzのtTVPXP3Archive、base/XP3Archive.cpp L449が読むflags）に
+// infoFlagsを書いて組み立てる。
+func buildEngineLayoutXP3WithInfoFlags(name string, infoFlags uint32, segments []engineLayoutSegment) []byte {
 	const headerSize = 19 // マジック(11) + 索引オフセット(8)
 
 	le := binary.LittleEndian
@@ -1292,7 +1143,7 @@ func buildEngineLayoutXP3(name string, segments []engineLayoutSegment) []byte {
 
 	nameUTF16 := utf16.Encode([]rune(name))
 	var info []byte
-	info = le.AppendUint32(info, 0)
+	info = le.AppendUint32(info, infoFlags)
 	info = le.AppendUint64(info, originalTotal)
 	info = le.AppendUint64(info, storedTotal)
 	info = le.AppendUint16(info, uint16(len(nameUTF16))) //nolint:gosec // テストで渡す名前は短い既知の値
@@ -1386,6 +1237,25 @@ func TestXP3Archive_ExtractAll_EngineSegmLayout(t *testing.T) {
 			},
 			want: sameSize,
 		},
+		"正常系: 方式ビット以外が立っていても下位3ビットが1ならzlib圧縮として解凍する": {
+			segments: []engineLayoutSegment{
+				{flags: 0x81, payload: compressZlib(t, script), originalSize: uint64(len(script))},
+			},
+			want: script,
+		},
+		"正常系: 非圧縮セグメントは格納サイズより小さい元サイズのぶんだけ読む": {
+			segments: []engineLayoutSegment{
+				{flags: 0, payload: []byte("abcdefgh"), originalSize: 5},
+			},
+			want: []byte("abcde"),
+		},
+		"正常系: 非圧縮セグメントは格納サイズより大きい元サイズのぶんだけ後続のバイトまで読む": {
+			segments: []engineLayoutSegment{
+				{flags: 0, payload: []byte("abc"), originalSize: 5},
+				{flags: 0, payload: []byte("de"), originalSize: 2},
+			},
+			want: []byte("abcdede"),
+		},
 	}
 
 	for name, tc := range cases {
@@ -1399,6 +1269,149 @@ func TestXP3Archive_ExtractAll_EngineSegmLayout(t *testing.T) {
 			archive, err := parser.NewXP3Archive(path)
 			require.NoError(t, err)
 			require.Equal(t, []string{"data/entry.bin"}, archive.ListFiles())
+
+			outputDir := filepath.Join(tmpDir, "out")
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			got, err := os.ReadFile(filepath.Join(outputDir, "data", "entry.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestXP3Archive_ExtractAll_EngineUncompressionFailure は、krkrzが解凍に失敗したと
+// みなすzlib圧縮セグメントをErrInvalidXP3として扱い、書き出し途中のファイルを
+// 残さないことを検証する。krkrzのtTVPSegmentData::SetData（base/XP3Archive.cpp
+// L677-691）は元サイズぶんの領域へuncompressし、結果がZ_OKでないか解凍後の長さが
+// 元サイズと違えばTVPUncompressionFailedを投げる。
+func TestXP3Archive_ExtractAll_EngineUncompressionFailure(t *testing.T) {
+	t.Parallel()
+
+	script := bytes.Repeat([]byte("*start\r\n[cm]こんにちは[p]\r\n"), 36)
+	compressed := compressZlib(t, script)
+
+	cases := map[string]struct {
+		segments         []engineLayoutSegment
+		wantTooLargeWrap bool
+	}{
+		"異常系: zlibストリームでないバイト列はErrInvalidXP3": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: []byte("not a zlib stream"), originalSize: 17},
+			},
+		},
+		"異常系: 末尾が途切れたzlibストリームはErrInvalidXP3": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressed[:len(compressed)-6], originalSize: uint64(len(script))},
+			},
+		},
+		"異常系: 解凍後の長さが元サイズより短いセグメントはErrInvalidXP3": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressed, originalSize: uint64(len(script)) + 1},
+			},
+		},
+		"異常系: 解凍後の長さが元サイズより長いセグメントはErrInvalidXP3": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressed, originalSize: uint64(len(script)) - 1},
+			},
+			wantTooLargeWrap: true,
+		},
+		"異常系: 元サイズ0を宣言して空でない内容へ解凍されるセグメントはErrInvalidXP3": {
+			segments: []engineLayoutSegment{
+				{flags: 1, payload: compressed, originalSize: 0},
+			},
+			wantTooLargeWrap: true,
+		},
+		"異常系: 先行する非圧縮セグメントを書いた後に解凍に失敗してもファイルを残さない": {
+			segments: []engineLayoutSegment{
+				{flags: 0, payload: []byte("OggS-head"), originalSize: 9},
+				{flags: 1, payload: []byte("not a zlib stream"), originalSize: 17},
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "engine.xp3")
+			writeFile(t, path, buildEngineLayoutXP3("data/entry.bin", tc.segments))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
+
+			outputDir := filepath.Join(tmpDir, "out")
+			err = extractAllWithinPlan(t, archive, outputDir)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			if tc.wantTooLargeWrap {
+				require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+			}
+			assert.Contains(t, err.Error(), "data/entry.bin")
+			assert.NoFileExists(t, filepath.Join(outputDir, "data", "entry.bin"))
+		})
+	}
+}
+
+// TestNewXP3Archive_EngineSegmEncodeMethod は、segmレコードのflagsの下位3ビットが
+// 0（非圧縮）と1（zlib）以外のアーカイブをErrInvalidXP3として扱うことを検証する。
+// krkrzのtTVPXP3Archive（base/XP3Archive.cpp L492-499、base/XP3Archive.h L75-77）は
+// flags & 0x07が0でも1でもなければTVPReadErrorを投げる。
+func TestNewXP3Archive_EngineSegmEncodeMethod(t *testing.T) {
+	t.Parallel()
+
+	for method := uint32(2); method <= 7; method++ {
+		t.Run(fmt.Sprintf("異常系: 方式%dのセグメントはエントリ名を添えてErrInvalidXP3", method), func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "engine.xp3")
+			writeFile(t, path, buildEngineLayoutXP3("data/entry.bin", []engineLayoutSegment{
+				{flags: 0, payload: []byte("head"), originalSize: 4},
+				{flags: method, payload: []byte("body"), originalSize: 4},
+			}))
+
+			_, err := parser.NewXP3Archive(path)
+
+			require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			assert.Contains(t, err.Error(), "data/entry.bin")
+		})
+	}
+}
+
+// TestXP3Archive_EngineProtectedFlag は、infoのflagsのビット31
+// （base/XP3Archive.h L73のTVP_XP3_FILE_PROTECTED）が立ったエントリを暗号化と
+// みなさず、そのまま展開することを検証する。krkrzは既定で
+// TVPAllowExtractProtectedStorageがtrueであり（base/XP3Archive.cpp L30）、ビット31を
+// 見るのはそれがfalseのときだけで（L450）、読み出し処理はビット31を参照しない。
+func TestXP3Archive_EngineProtectedFlag(t *testing.T) {
+	t.Parallel()
+
+	script := bytes.Repeat([]byte("*start\r\n[cm]こんにちは[p]\r\n"), 36)
+
+	cases := map[string]struct {
+		segments []engineLayoutSegment
+		want     []byte
+	}{
+		"正常系: ビット31が立った非圧縮エントリをそのまま展開する": {
+			segments: []engineLayoutSegment{{flags: 0, payload: []byte("PNGDATA"), originalSize: 7}},
+			want:     []byte("PNGDATA"),
+		},
+		"正常系: ビット31が立ったzlib圧縮エントリを解凍して展開する": {
+			segments: []engineLayoutSegment{{flags: 1, payload: compressZlib(t, script), originalSize: uint64(len(script))}},
+			want:     script,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			path := filepath.Join(tmpDir, "protected.xp3")
+			writeFile(t, path, buildEngineLayoutXP3WithInfoFlags("data/entry.bin", 0x80000000, tc.segments))
+
+			archive, err := parser.NewXP3Archive(path)
+			require.NoError(t, err)
 
 			outputDir := filepath.Join(tmpDir, "out")
 			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
@@ -2108,19 +2121,6 @@ func TestNewXP3Archive_ContinuedIndexTableLimit(t *testing.T) {
 	}
 }
 
-func TestXP3EncryptionChecker_Check_CorruptIndex(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "corrupt-index.xp3")
-	writeFile(t, path, withIndexOffset(minimalXP3Bytes(), 1000))
-
-	result, err := parser.NewXP3EncryptionChecker(path).Check()
-
-	require.NoError(t, err)
-	assert.False(t, result.IsEncrypted)
-	assert.Equal(t, parser.EncryptionNone, result.EncryptionType)
-}
-
 // zlibBestZeroStream はsizeバイトのゼロ列をzlib.BestCompressionで圧縮したバイト列を返す。
 // 圧縮前のゼロ列をsizeバイト一括で確保するため、数MiB程度のsizeにだけ使う。
 func zlibBestZeroStream(t *testing.T, size int) []byte {
@@ -2227,7 +2227,7 @@ func buildSingleCompressedSegmentArchive(t *testing.T, payload []byte, originalS
 	}
 
 	var segm bytes.Buffer
-	writeUint32(&segm, 0x07)
+	writeUint32(&segm, 0x01)
 	writeUint64(&segm, headerSize)
 	writeUint64(&segm, originalSize)
 	writeUint64(&segm, uint64(len(payload)))
@@ -2261,27 +2261,38 @@ func TestXP3Archive_ExtractAll_SegmentDecompressionLimit(t *testing.T) {
 
 	cases := map[string]struct {
 		originalSize uint64
+		wantParseErr bool
 		wantErr      bool
+		wantTooLarge bool
 	}{
 		"異常系: original_sizeを超えて膨張するセグメントはErrDecompressedTooLarge": {
 			originalSize: 16,
 			wantErr:      true,
+			wantTooLarge: true,
 		},
 		"異常系: original_sizeを1バイトだけ超えて膨張するセグメントはErrDecompressedTooLarge": {
 			originalSize: inflatedSize - 1,
 			wantErr:      true,
+			wantTooLarge: true,
 		},
 		"正常系: original_sizeちょうどに膨張するセグメントは展開できる": {
 			originalSize: inflatedSize,
 		},
-		"正常系: original_sizeがint64の最大値でも1GiBの上限で展開できる": {
-			originalSize: math.MaxInt64,
+		"異常系: original_sizeに1バイト足りずに解凍を終えるセグメントはErrInvalidXP3": {
+			originalSize: inflatedSize + 1,
+			wantErr:      true,
 		},
-		"正常系: original_sizeがint64の範囲を超える場合は既定の上限で展開できる": {
-			originalSize: math.MaxUint64,
-		},
-		"正常系: original_sizeが2GiBを宣言しても実データが小さければ展開できる": {
+		"異常系: original_sizeが2GiBを宣言して実データが小さければErrInvalidXP3": {
 			originalSize: 2 << 30,
+			wantErr:      true,
+		},
+		"異常系: original_sizeがint64の最大値を宣言して実データが小さければErrInvalidXP3": {
+			originalSize: math.MaxInt64,
+			wantErr:      true,
+		},
+		"異常系: original_sizeがint64の範囲を超える場合は索引の時点でErrInvalidXP3": {
+			originalSize: math.MaxUint64,
+			wantParseErr: true,
 		},
 	}
 
@@ -2294,6 +2305,11 @@ func TestXP3Archive_ExtractAll_SegmentDecompressionLimit(t *testing.T) {
 			writeFile(t, path, buildSingleCompressedSegmentArchive(t, compressZlib(t, content), tc.originalSize))
 
 			archive, err := parser.NewXP3Archive(path)
+			if tc.wantParseErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Contains(t, err.Error(), "segment.bin")
+				return
+			}
 			require.NoError(t, err)
 
 			outputDir := filepath.Join(tmpDir, "out")
@@ -2301,7 +2317,11 @@ func TestXP3Archive_ExtractAll_SegmentDecompressionLimit(t *testing.T) {
 
 			if tc.wantErr {
 				require.ErrorIs(t, err, parser.ErrInvalidXP3)
-				require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+				if tc.wantTooLarge {
+					require.ErrorIs(t, err, parser.ErrDecompressedTooLarge)
+				} else {
+					require.NotErrorIs(t, err, parser.ErrDecompressedTooLarge)
+				}
 				assert.Equal(t, 1, strings.Count(err.Error(), path))
 				assert.Contains(t, err.Error(), "segment.bin")
 				assert.NoFileExists(t, filepath.Join(outputDir, "segment.bin"))
@@ -2388,7 +2408,6 @@ func TestXP3Archive_PlannedOutputSize(t *testing.T) {
 
 	notZlib := bytes.Repeat([]byte{'x'}, 200)
 	zeros := zlibBestZeroStream(t, 4<<20)
-	emptyZlib := compressZlib(t, nil)
 	emptyScripts := func(n int) func(t *testing.T) []byte {
 		return func(t *testing.T) []byte {
 			t.Helper()
@@ -2407,6 +2426,7 @@ func TestXP3Archive_PlannedOutputSize(t *testing.T) {
 		archive     func(t *testing.T) []byte
 		wantPlanned int64
 		wantWritten int64
+		wantErr     bool
 	}{
 		{
 			name:        "正常系: インデックスを持たないアーカイブは0",
@@ -2432,35 +2452,37 @@ func TestXP3Archive_PlannedOutputSize(t *testing.T) {
 			wantWritten: 300 + 7 + 9 + 400,
 		},
 		{
-			name: "正常系: zlibとして解凍できない圧縮セグメントは生データを書き出すため生データの長さを見積もる",
+			name: "異常系: zlibとして解凍できない圧縮セグメントは宣言した解凍後サイズを見積もり、展開は何も書き出さずに失敗する",
 			archive: func(t *testing.T) []byte {
 				t.Helper()
 
 				return buildSingleCompressedSegmentArchive(t, notZlib, 1)
 			},
-			wantPlanned: int64(len(notZlib)),
-			wantWritten: int64(len(notZlib)),
+			wantPlanned: 1,
+			wantWritten: 0,
+			wantErr:     true,
 		},
 		{
-			name: "正常系: 解凍後サイズを0と宣言した高圧縮セグメントは生データの1032倍を見積もり、実際の書き出し量を下回らない",
+			name: "異常系: 解凍後サイズを0と宣言した高圧縮セグメントは0を見積もり、展開は何も書き出さずに失敗する",
 			archive: func(t *testing.T) []byte {
 				t.Helper()
 
 				return buildSingleCompressedSegmentArchive(t, zeros, 0)
 			},
-			wantPlanned: int64(len(zeros)) * 1032,
-			wantWritten: 4 << 20,
+			wantPlanned: 0,
+			wantWritten: 0,
+			wantErr:     true,
 		},
 		{
 			name:        "正常系: 4KiBのスクリプトと空の圧縮スクリプト1件",
 			archive:     emptyScripts(1),
-			wantPlanned: 4096 + 1*int64(len(emptyZlib))*1032,
+			wantPlanned: 4096,
 			wantWritten: 4096,
 		},
 		{
 			name:        "正常系: 4KiBのスクリプトと空の圧縮スクリプト100件",
 			archive:     emptyScripts(100),
-			wantPlanned: 4096 + 100*int64(len(emptyZlib))*1032,
+			wantPlanned: 4096,
 			wantWritten: 4096,
 		},
 	}
@@ -2478,7 +2500,12 @@ func TestXP3Archive_PlannedOutputSize(t *testing.T) {
 
 			assert.Equal(t, tc.wantPlanned, archive.PlannedOutputSize())
 			outputDir := filepath.Join(tmpDir, "out")
-			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			err = extractAllWithinPlan(t, archive, outputDir)
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+			} else {
+				require.NoError(t, err)
+			}
 			assert.Equal(t, tc.wantWritten, dirFileBytes(t, outputDir))
 		})
 	}

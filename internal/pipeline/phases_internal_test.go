@@ -543,6 +543,38 @@ func TestBuildPipeline_ExecuteConvert_LogsConversionNotes(t *testing.T) {
 	assert.Contains(t, logger.messages("VERBOSE"), filepath.Join("data", "name.csv")+": 推定結果なし、shift_jis として復号")
 }
 
+// TestBuildPipeline_ExecuteAnalyze_XP3 は、infoのflagsのビット31（krkrz
+// base/XP3Archive.h のTVP_XP3_FILE_PROTECTED）が立ったXP3も、ANALYZEフェーズで
+// 拒否せずに受け付けることを検証する。
+func TestBuildPipeline_ExecuteAnalyze_XP3(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		infoFlags uint32
+	}{
+		{"正常系: 保護フラグの無いXP3を受け付ける", 0},
+		{"正常系: 保護フラグ（ビット31）が立ったXP3も受け付ける", 0x80000000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			input := filepath.Join(dir, "data.xp3")
+			require.NoError(t, os.WriteFile(input, storedXP3BytesWithInfoFlags("startup.tjs", tt.infoFlags, []byte("// startup")), 0o600))
+
+			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+			t.Cleanup(p.cleanupTempDirs)
+
+			_, err := p.executeAnalyze(buildArtifacts{})
+
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 	t.Parallel()
 

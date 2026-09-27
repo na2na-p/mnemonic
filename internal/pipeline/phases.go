@@ -36,30 +36,29 @@ var ErrInsufficientDiskSpace = errors.New("一時ディレクトリの空き容�
 // （オフラインモードで未取得の場合など）のエラー。
 var ErrTemplateUnavailable = errors.New("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-// executeAnalyze はANALYZEフェーズを実行する: 入力ファイルの形式を確認し、
-// 必要に応じて暗号化チェックを行う。
+// executeAnalyze はANALYZEフェーズを実行する: EXEの入力がXP3アーカイブを
+// 埋め込んでいるかを確認する。
+//
+// why not: XP3の暗号化を索引から判定しない。krkrzのゲーム固有の暗号化は読み出し後に
+// 施されるフィルタ（base/XP3Archive.cpp のTVPXP3ArchiveExtractionFilter）であり、
+// 索引には現れない。infoのflagsのビット31は展開ツールからの保護の印
+// （TVP_XP3_FILE_PROTECTED）であって、krkrzは既定でこれを無視して読む。
 func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error) {
-	suffix := strings.ToLower(filepath.Ext(b.config.InputPath))
+	if strings.ToLower(filepath.Ext(b.config.InputPath)) != ".exe" {
+		return a, nil
+	}
 
-	switch suffix {
-	case ".exe":
-		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
-		if err != nil {
-			return a, err
-		}
+	extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
+	if err != nil {
+		return a, err
+	}
 
-		xp3List, err := extractor.FindEmbeddedXP3()
-		if err != nil {
-			return a, err
-		}
-		if len(xp3List) == 0 {
-			return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
-		}
-	case ".xp3":
-		checker := parser.NewXP3EncryptionChecker(b.config.InputPath)
-		if err := checker.RaiseIfEncrypted(); err != nil {
-			return a, err
-		}
+	xp3List, err := extractor.FindEmbeddedXP3()
+	if err != nil {
+		return a, err
+	}
+	if len(xp3List) == 0 {
+		return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
 	}
 
 	return a, nil
