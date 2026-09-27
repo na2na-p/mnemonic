@@ -92,7 +92,7 @@ func findMidiFiles(directory string) ([]string, error) {
 
 	err := filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return &rootRelativeError{root: directory, err: walkErr}
 		}
 		if d.IsDir() {
 			return nil
@@ -225,7 +225,9 @@ func convertMidiFileListWith(
 		// されるだけ（サイズ増のみ）であり、これでビルド全体を落とす方が
 		// 損害が大きい。
 		if err := os.Remove(result.SourcePath); err != nil {
-			logger.Warning(fmt.Sprintf("変換済みMIDIファイルを削除できませんでした（APKに残ります）: %v", err))
+			logger.Warning(converter.RelativeMessage(
+				fmt.Sprintf("変換済みMIDIファイルを削除できませんでした（APKに残ります）: %v", err), directory,
+			))
 		}
 	}
 

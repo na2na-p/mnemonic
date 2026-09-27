@@ -33,7 +33,7 @@ func (b *BuildPipeline) adjustScripts(directory string) error {
 
 	return filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return &rootRelativeError{root: directory, err: walkErr}
 		}
 		if d.IsDir() {
 			return nil

@@ -180,10 +180,11 @@ func (c *MidiConverter) IsFluidsynthAvailable() bool {
 // サウンドフォントが存在しない場合はErrSoundfontNotFoundを、権限不足で確認できない
 // 場合はOSのエラーを包んだErrSoundfontUnreadableを、いずれもErrPermanentFailureで
 // ラップして返し、それ以外の理由で確認できない場合はErrSoundfontUnreadableを
-// 再試行対象として返す。FluidSynthの失敗はErrFluidsynthFailed、
-// FFmpegの失敗はErrMidiFFmpegFailed、出力先ディレクトリ・一時WAVの作成失敗は
-// OSのエラーを%wで保持して返し、いずれも再試行対象とする。errがnilのとき、
-// StatusはStatusSuccessとなる。
+// 再試行対象として返す。FluidSynthの失敗はErrFluidsynthFailedを、FFmpegの
+// 失敗はErrMidiFFmpegFailedを返し、どちらも文言中の一時WAVのパスを<一時WAV>に
+// 置き換える。出力先ディレクトリ・一時WAVの作成失敗はOSのエラーを%wで保持して
+// 返す。FluidSynthの失敗・FFmpegの失敗・出力先ディレクトリの作成失敗・一時WAVの
+// 作成失敗は、すべて再試行対象とする。errがnilのとき、StatusはStatusSuccessとなる。
 //
 // why not: FluidSynth/FFmpegそれぞれの未インストールとタイムアウトを区別した
 // 専用のエラーを返すこともできるが、CommandRunner抽象化により両者とも
@@ -216,13 +217,13 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 	defer func() { _ = os.Remove(tmpWavPath) }()
 
 	if err := c.runFluidsynth(source, tmpWavPath); err != nil {
-		return ConversionResult{SourcePath: source}, err
+		return ConversionResult{SourcePath: source}, &tempWavError{path: tmpWavPath, err: err}
 	}
 
 	trimSeconds, hasTrim := c.silenceDetector.trimPoint(tmpWavPath)
 
 	if err := c.runFFmpeg(tmpWavPath, dest, trimSeconds, hasTrim); err != nil {
-		return ConversionResult{SourcePath: source}, err
+		return ConversionResult{SourcePath: source}, &tempWavError{path: tmpWavPath, err: err}
 	}
 
 	return ConversionResult{
@@ -232,6 +233,37 @@ func (c *MidiConverter) Convert(source, dest string) (ConversionResult, error) {
 		BytesBefore: bytesBefore,
 		BytesAfter:  getFileSize(dest),
 	}, nil
+}
+
+// renderedWavPlaceholder はエラー文中の一時WAVのパスに代えて示す語。Convertの説明で
+// コマンドの引数を表す語と揃えている。
+//
+// why not: この定数の名前をtempWav〜にしない。gosec G101（資格情報の直書き）は
+// 文字列リテラルを持つ定数の名前を、pwやtokenを含む語の並びと大文字小文字を
+// 区別せずに照合する。tempWav〜はtem「pW」avの部分がpwに一致するため、
+// tempWavPlaceholderもtempWavLabelも誤検知される。型名のtempWavErrorは
+// 報告されない。
+const renderedWavPlaceholder = "<一時WAV>"
+
+// tempWavError はerrの文言に現れる一時WAVのパスをrenderedWavPlaceholderに置き換えて示す。
+// errors.Is/errors.Asはerrをたどる。
+//
+// why not: 一時WAVのパスをRelativeMessageで相対化しない。一時WAVは
+// os.CreateTempで変換元のツリーの外に作るため、呼び出し側が渡すルートの
+// どれにも含まれず切り詰められない。ベース名だけを残すこともしない。
+// os.CreateTempが付ける乱数の名前は利用者にとって意味が無く、このエラーを
+// 返す時点でファイル自体も削除されている。
+type tempWavError struct {
+	path string
+	err  error
+}
+
+func (e *tempWavError) Error() string {
+	return strings.ReplaceAll(e.err.Error(), e.path, renderedWavPlaceholder)
+}
+
+func (e *tempWavError) Unwrap() error {
+	return e.err
 }
 
 // runFluidsynth はFluidSynthを実行してsourceをwavOutputへレンダリングする。

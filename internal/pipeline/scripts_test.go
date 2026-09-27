@@ -129,6 +129,28 @@ func TestBuildPipeline_AdjustScripts(t *testing.T) {
 		)
 		assert.NotContains(t, err.Error(), dir)
 	})
+
+	t.Run("異常系: 探索権限の無いディレクトリは走査したディレクトリからの相対パスで報告する", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Geteuid() == 0 {
+			t.Skip("rootはパーミッションに関係なく読み込めるため再現できない")
+		}
+
+		p := newTestPipeline(t)
+		dir := t.TempDir()
+		lockedDir := filepath.Join(dir, "scenario", "locked")
+		require.NoError(t, os.MkdirAll(lockedDir, 0o750))
+		require.NoError(t, os.Chmod(lockedDir, 0o000))
+		// t.TempDirのRemoveAllより先に権限を戻すため、TempDirの後に登録する（Cleanupは逆順に走る）。
+		t.Cleanup(func() { _ = os.Chmod(lockedDir, 0o750) }) //nolint:gosec // テスト用ディレクトリの権限を元に戻す
+
+		err := p.adjustScripts(dir)
+
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.Contains(t, err.Error(), " "+filepath.FromSlash("scenario/locked")+": ", "走査に失敗したディレクトリを相対パスで示す")
+		assert.NotContains(t, err.Error(), dir)
+	})
 }
 
 // TestBuildPipeline_UTF16ScriptConversion はBOM付きUTF-16LEのスクリプトが
