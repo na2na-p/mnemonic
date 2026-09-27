@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -280,28 +281,6 @@ func TestMidiConverter_Convert(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("異常系: 出力先ディレクトリを作成できない場合は再試行対象のエラーを返す", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		soundfont := filepath.Join(dir, "test.sf2")
-		writeFile(t, soundfont, []byte("soundfont data"))
-		source := filepath.Join(dir, "input.mid")
-		writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
-		blocker := filepath.Join(dir, "blocker")
-		writeFile(t, blocker, []byte("not a directory"))
-
-		ctrl := gomock.NewController(t)
-		runner := NewMockCommandRunner(ctrl)
-
-		c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
-		_, err := c.Convert(source, filepath.Join(blocker, "output.ogg"))
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "MIDI変換に失敗しました: ")
-		require.NotErrorIs(t, err, converter.ErrPermanentFailure)
-	})
 
 	t.Run("正常系: MIDI変換が成功する(末尾無音なし)", func(t *testing.T) {
 		t.Parallel()
@@ -617,6 +596,77 @@ func fluidsynthRenderArgs(soundfont, source string, dynamicSampleLoading bool) [
 	}
 
 	return append(args, "-F", gomock.Any(), soundfont, source)
+}
+
+// why not: 親テストでt.Parallel()を呼ばない。一時WAVの作成を失敗させるケースは
+// os.CreateTempが参照するTMPDIRをt.Setenvで書き換える。t.Setenvは自身か祖先の
+// テストがt.Parallel()を呼んでいるとpanicするため、環境変数を書き換えない
+// ケースだけをt.Parallel()で並行させる。
+func TestMidiConverter_Convert_RetryableSetupFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		// wantPathPrefixは作成に失敗させるパスの接頭辞。
+		setup      func(t *testing.T, dir string) (dest, wantPathPrefix string)
+		usesSetenv bool
+	}{
+		{
+			name: "異常系: 出力先ディレクトリの親が通常のファイルなら作成に失敗しOSのエラーを保った再試行対象のエラーを返す",
+			setup: func(t *testing.T, dir string) (string, string) {
+				t.Helper()
+
+				blocker := filepath.Join(dir, "blocker")
+				writeFile(t, blocker, []byte("not a directory"))
+
+				return filepath.Join(blocker, "sub", "output.ogg"), blocker
+			},
+		},
+		{
+			name: "異常系: 一時ディレクトリが通常のファイルなら一時WAVの作成に失敗しOSのエラーを保った再試行対象のエラーを返す",
+			setup: func(t *testing.T, dir string) (string, string) {
+				t.Helper()
+
+				tmpFile := filepath.Join(dir, "tmpdir-is-file")
+				writeFile(t, tmpFile, []byte("not a directory"))
+				t.Setenv("TMPDIR", tmpFile)
+
+				return filepath.Join(dir, "out", "output.ogg"), tmpFile
+			},
+			usesSetenv: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.usesSetenv {
+				t.Parallel()
+			}
+
+			dir := t.TempDir()
+			soundfont := filepath.Join(dir, "test.sf2")
+			writeFile(t, soundfont, []byte("soundfont data"))
+			source := filepath.Join(dir, "input.mid")
+			writeFile(t, source, []byte("MThd"+string(make([]byte, 100))))
+			dest, wantPathPrefix := tt.setup(t, dir)
+
+			ctrl := gomock.NewController(t)
+			runner := NewMockCommandRunner(ctrl)
+
+			c := converter.NewMidiConverter(soundfont, 0, "", 0, 0, runner)
+			result, err := c.Convert(source, dest)
+
+			require.Error(t, err)
+			require.NotErrorIs(t, err, converter.ErrPermanentFailure)
+			require.ErrorIs(t, err, syscall.ENOTDIR)
+			pathErr, ok := errors.AsType[*fs.PathError](err)
+			require.True(t, ok, "want *fs.PathError, got %v", err)
+			assert.True(t, strings.HasPrefix(pathErr.Path, wantPathPrefix),
+				"want path under %s, got %s", wantPathPrefix, pathErr.Path)
+			assert.True(t, strings.HasPrefix(err.Error(), "MIDI変換に失敗しました: "), err.Error())
+			assert.Equal(t, source, result.SourcePath)
+			assert.NotEqual(t, converter.StatusSuccess, result.Status)
+			assert.NoFileExists(t, dest)
+		})
+	}
 }
 
 // TestMidiConverter_Convert_DynamicSampleLoading はFluidSynthのバージョンに応じて
