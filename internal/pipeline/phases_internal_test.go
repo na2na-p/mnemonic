@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -584,11 +585,8 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 	exeStub := []byte("MZ-stub-16-bytes")
 	exe := append(append([]byte{}, exeStub...), archive...)
 	planned := uint64(len(payload))
-	embedded := uint64(len(archive))
 	secondArchive := storedXP3Bytes("second.tjs", payload)
 	twoArchivesExe := append(append(append([]byte{}, exeStub...), archive...), secondArchive...)
-	twoArchivesEmbedded := embedded + uint64(len(secondArchive))
-	twoArchivesRequired := 3*(planned+twoArchivesEmbedded) - twoArchivesEmbedded
 	errStatfs := errors.New("statfs failed")
 
 	fixedFree := func(free uint64) func(string) (uint64, error) {
@@ -624,28 +622,28 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 			wantFiles:   []string{},
 		},
 		{
-			name:      "正常系: EXEは埋め込みXP3の複製も含めた3つ分から書き出し済みの1つを除いた空き容量で展開する",
+			name:      "正常系: EXEも書き出し済みの埋め込みXP3を数えず展開結果3つ分の空き容量で展開する",
 			inputName: "game.exe",
 			input:     exe,
-			freeSpace: fixedFree(3*(planned+embedded) - embedded),
-			wantFiles: []string{"game_0.xp3", "startup.tjs"},
+			freeSpace: fixedFree(3 * planned),
+			wantFiles: []string{"startup.tjs"},
 		},
 		{
-			name:        "異常系: EXEで空き容量が1バイト足りなければ埋め込みXP3の書き出しだけで止めてエラーを返す",
+			name:        "異常系: EXEで空き容量が展開結果3つ分に1バイト足りなければ何も展開せずにエラーを返す",
 			inputName:   "game.exe",
 			input:       exe,
-			freeSpace:   fixedFree(3*(planned+embedded) - embedded - 1),
+			freeSpace:   fixedFree(3*planned - 1),
 			wantErr:     ErrInsufficientDiskSpace,
-			wantMessage: "展開に必要な容量",
-			wantFree:    3*(planned+embedded) - embedded - 1,
-			wantFiles:   []string{"game_0.xp3"},
+			wantMessage: "展開に必要な容量 300 B が一時ディレクトリ ",
+			wantFree:    3*planned - 1,
+			wantFiles:   []string{},
 		},
 		{
 			name:      "正常系: EXEの最初のXP3の後ろに続くXP3は展開せず、EXE終端までを1つのXP3として書き出す",
 			inputName: "game.exe",
 			input:     twoArchivesExe,
-			freeSpace: fixedFree(twoArchivesRequired),
-			wantFiles: []string{"game_0.xp3", "startup.tjs"},
+			freeSpace: fixedFree(3 * planned),
+			wantFiles: []string{"startup.tjs"},
 		},
 		{
 			name:      "正常系: 空き容量が非常に大きくても比較できる",
@@ -715,26 +713,98 @@ func TestRequiredExtractSpace(t *testing.T) {
 	tests := []struct {
 		name    string
 		planned []int64
-		written []int64
 		want    int64
 	}{
-		{"正常系: 書き出し済みが無ければ見積もりの3つ分", []int64{100}, nil, 300},
-		{"正常系: 書き出し済みの分は3つ分から既に使った1つを除く", []int64{100}, []int64{50}, 400},
-		{"正常系: 複数アーカイブの見積もりと書き出し済みはそれぞれ合計する", []int64{60, 40}, []int64{30, 20}, 400},
-		{"正常系: 3つ分がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64/3 + 1}, nil, math.MaxInt64},
-		{"正常系: 見積もりと書き出し済みの和がint64を2超える場合も最大値で飽和する", []int64{math.MaxInt64}, []int64{2}, math.MaxInt64},
-		{"正常系: 見積もりと書き出し済みの和がint64を大きく超える場合も最大値で飽和する", []int64{math.MaxInt64}, []int64{1000}, math.MaxInt64},
-		{"正常系: 複数アーカイブの見積もりの合計がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64, 2}, nil, math.MaxInt64},
-		{"正常系: 複数アーカイブの見積もりの合計が大きく超える場合も最大値で飽和する", []int64{math.MaxInt64 - 1, 1000}, nil, math.MaxInt64},
-		{"正常系: 書き出し済みファイルの合計がint64を超える場合は最大値で飽和する", []int64{1}, []int64{math.MaxInt64, 2}, math.MaxInt64},
-		{"正常系: 書き出し済みファイルの合計が大きく超える場合も最大値で飽和する", nil, []int64{math.MaxInt64 - 1, 1000}, math.MaxInt64},
+		{"正常系: 見積もりの3つ分", []int64{100}, 300},
+		{"正常系: 複数アーカイブの見積もりは合計してから3つ分にする", []int64{60, 40}, 300},
+		{"正常系: アーカイブが無ければ0", nil, 0},
+		{"正常系: 3つ分がint64をちょうど超えない場合はそのまま返す", []int64{math.MaxInt64 / 3}, math.MaxInt64 / 3 * 3},
+		{"正常系: 3つ分がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64/3 + 1}, math.MaxInt64},
+		{"正常系: 複数アーカイブの見積もりの合計がint64を超える場合は最大値で飽和する", []int64{math.MaxInt64, 2}, math.MaxInt64},
+		{"正常系: 複数アーカイブの見積もりの合計が大きく超える場合も最大値で飽和する", []int64{math.MaxInt64 - 1, 1000}, math.MaxInt64},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, tt.want, requiredExtractSpace(tt.planned, tt.written))
+			assert.Equal(t, tt.want, requiredExtractSpace(tt.planned))
+		})
+	}
+}
+
+func TestBuildPipeline_ExecuteExtract_KeepsEmbeddedArchiveOutOfExtractDir(t *testing.T) {
+	t.Parallel()
+
+	archive := storedXP3Bytes("startup.tjs", []byte("// startup"))
+	exe := append([]byte("MZ-stub-16-bytes"), archive...)
+
+	tests := []struct {
+		name             string
+		inputName        string
+		input            []byte
+		wantEmbeddedName string
+	}{
+		{
+			name:             "正常系: EXEの埋め込みXP3は展開先とは別の一時ディレクトリに<stem>_0.xp3として書き出す",
+			inputName:        "game.exe",
+			input:            exe,
+			wantEmbeddedName: "game_0.xp3",
+		},
+		{
+			name:             "正常系: 大文字の拡張子のEXEも埋め込みXP3を展開先に置かない",
+			inputName:        "ゲーム.EXE",
+			input:            exe,
+			wantEmbeddedName: "ゲーム_0.xp3",
+		},
+		{
+			name:      "正常系: XP3の入力では展開先以外の一時ディレクトリを作らない",
+			inputName: "data.xp3",
+			input:     archive,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			input := filepath.Join(dir, tt.inputName)
+			require.NoError(t, os.WriteFile(input, tt.input, 0o600))
+
+			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
+			p.freeSpace = func(string) (uint64, error) { return math.MaxUint64, nil }
+
+			got, err := p.executeExtract(buildArtifacts{})
+			require.NoError(t, err)
+
+			entries, err := os.ReadDir(got.extractDir)
+			require.NoError(t, err)
+			names := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+			assert.Equal(t, []string{"startup.tjs"}, names)
+
+			otherDirs := slices.DeleteFunc(slices.Clone(p.tempDirs), func(d string) bool { return d == got.extractDir })
+			var embeddedPaths []string
+			if tt.wantEmbeddedName != "" {
+				require.Len(t, otherDirs, 1)
+				embeddedPath := filepath.Join(otherDirs[0], tt.wantEmbeddedName)
+				assert.FileExists(t, embeddedPath)
+				assert.Equal(t, filepath.Dir(got.extractDir), filepath.Dir(otherDirs[0]))
+				embeddedPaths = append(embeddedPaths, embeddedPath)
+			} else {
+				assert.Empty(t, otherDirs)
+			}
+
+			p.cleanupTempDirs()
+
+			assert.NoDirExists(t, got.extractDir)
+			for _, path := range embeddedPaths {
+				assert.NoFileExists(t, path)
+				assert.NoDirExists(t, filepath.Dir(path))
+			}
 		})
 	}
 }

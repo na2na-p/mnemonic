@@ -65,9 +65,9 @@ func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error)
 }
 
 // executeExtract はEXTRACTフェーズを実行する: XP3アーカイブを展開し、
-// ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を抽出してから展開する。
-// 展開の前に、必要な容量が一時ディレクトリの空き容量に収まるかを確認する
-// （checkExtractSpace）。
+// ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を展開先とは別の一時
+// ディレクトリへ抽出してから展開する。展開の前に、必要な容量が一時ディレクトリの
+// 空き容量に収まるかを確認する（checkExtractSpace）。
 func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error) {
 	extractDir, err := b.newTempDir("mnemonic_extract_")
 	if err != nil {
@@ -76,7 +76,6 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 	a.extractDir = extractDir
 
 	archivePaths := []string{b.config.InputPath}
-	var embeddedSizes []int64
 
 	if strings.ToLower(filepath.Ext(b.config.InputPath)) == ".exe" {
 		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
@@ -84,18 +83,22 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 			return a, err
 		}
 
-		embeddedPath, found, err := extractor.Extract(extractDir)
+		// why not: 抽出したXP3をextractDirへ書き出さない。extractDirの中身は
+		// CONVERTフェーズのcopyTreeでconvertDirへ、BUILDフェーズでconvertDirから
+		// assets/dataへそのまま写されるため、展開後は使わないアーカイブがAPKに
+		// 入る。
+		embeddedDir, err := b.newTempDir("mnemonic_embedded_")
+		if err != nil {
+			return a, err
+		}
+
+		embeddedPath, found, err := extractor.Extract(embeddedDir)
 		if err != nil {
 			return a, err
 		}
 		archivePaths = nil
 		if found {
 			archivePaths = []string{embeddedPath}
-		}
-
-		embeddedSizes, err = fileSizes(archivePaths)
-		if err != nil {
-			return a, err
 		}
 	}
 
@@ -110,7 +113,7 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 		planned = append(planned, archive.PlannedOutputSize())
 	}
 
-	if err := b.checkExtractSpace(extractDir, requiredExtractSpace(planned, embeddedSizes)); err != nil {
+	if err := b.checkExtractSpace(extractDir, requiredExtractSpace(planned)); err != nil {
 		return a, err
 	}
 
@@ -141,25 +144,25 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 // どれもnewTempDirがos.MkdirTemp("", ...)で作るため、同じos.TempDir()の下、
 // つまり容量を確認するextractDirと同じファイルシステムに置かれる。
 //
+// why not: EXEから抽出した埋め込みXP3は数えない。展開先とは別の一時ディレクトリに
+// 1つだけ置かれて複製されず、容量確認の時点で書き出し済みのため、確認時点の
+// 空き容量から既に差し引かれている。
+//
 // why not: Gradleのビルド中間生成物とAPK、projectDirへ展開するテンプレートと
 // ダウンロードするSDL2のソースは数えない。前者の量はGradleとAndroid Gradle
 // Pluginの挙動で、後者の量はテンプレートとSDL2の版で決まり、展開するアーカイブ
 // からは導けないため。変換によるサイズの増減も変換前には分からないため数えない。
 const extractFootprintCopies = 3
 
-// requiredExtractSpace は、アーカイブごとの展開結果の見積もりplannedと、容量確認の
-// 時点で一時ディレクトリへ書き出し済みのファイルのサイズwrittenから、確認時点以降に
-// 必要な空き容量を返す。writtenは展開結果と同じくextractFootprintCopies個に
-// 複製されるが、1つ目は既に空き容量から差し引かれている。int64を超える場合は
-// math.MaxInt64を返す。
-func requiredExtractSpace(planned, written []int64) int64 {
-	writtenTotal := saturatingSum(written)
-	total := saturate.Add(saturatingSum(planned), writtenTotal)
+// requiredExtractSpace は、アーカイブごとの展開結果の見積もりplannedから、容量確認
+// の時点以降に必要な空き容量を返す。int64を超える場合はmath.MaxInt64を返す。
+func requiredExtractSpace(planned []int64) int64 {
+	total := saturatingSum(planned)
 	if total > math.MaxInt64/extractFootprintCopies {
 		return math.MaxInt64
 	}
 
-	return total*extractFootprintCopies - writtenTotal
+	return total * extractFootprintCopies
 }
 
 // saturatingSum は非負の値valuesの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
@@ -199,20 +202,6 @@ func (b *BuildPipeline) checkExtractSpace(dir string, required int64) error {
 	}
 
 	return nil
-}
-
-// fileSizes はpathsの各ファイルのサイズを返す。
-func fileSizes(paths []string) ([]int64, error) {
-	sizes := make([]int64, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("抽出したファイルの情報を取得できません: %w", err)
-		}
-		sizes = append(sizes, info.Size())
-	}
-
-	return sizes, nil
 }
 
 // executeConvert はCONVERTフェーズを実行する: 抽出されたアセットをAndroid
