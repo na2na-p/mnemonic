@@ -342,9 +342,9 @@ dependencies {
 	t.Run("正常系: 既存noCompressが2行目以降にある場合も構文を壊さない", func(t *testing.T) {
 		t.Parallel()
 
-		// レビュー指摘: noCompressLinePatternのgroup1（直前行との改行を含む
-		// 先頭空白）を捨てて置換すると、noCompressがaaptOptionsブロックの
-		// 2行目以降にある場合に直前行と連結され構文エラーになる回帰テスト。
+		// noCompressLinePatternのgroup1（直前行との改行を含む先頭空白）を
+		// 捨てて置換すると、noCompressがaaptOptionsブロックの2行目以降にある
+		// 場合に直前行と連結され構文エラーになる。
 		projectPath := filepath.Join(t.TempDir(), "existing_no_compress_project")
 		buildGradle := filepath.Join(projectPath, "app", "build.gradle")
 		require.NoError(t, os.MkdirAll(filepath.Dir(buildGradle), 0o750))

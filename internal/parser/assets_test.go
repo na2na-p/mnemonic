@@ -230,8 +230,8 @@ func TestAssetScanner_Classification(t *testing.T) {
 		{".bmp", parser.AssetImage, parser.ConvertCopy, ""},
 		{".jpg", parser.AssetImage, parser.ConvertCopy, ""},
 		// .jpegはkrkrsdl2がネイティブサポートするためCOPY（変換なし）になる。
-		// .jpgのみを検証すると拡張子分岐の網羅にならないため、レビュー指摘に
-		// 従い.jpegも明示的に検証する。
+		// .jpgのみを検証すると拡張子分岐の網羅にならないため、.jpegも明示的に
+		// 検証する。
 		{".jpeg", parser.AssetImage, parser.ConvertCopy, ""},
 		{".png", parser.AssetImage, parser.ConvertCopy, ""},
 		{".ogg", parser.AssetAudio, parser.ConvertCopy, ""},

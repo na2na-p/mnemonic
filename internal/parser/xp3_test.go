@@ -689,13 +689,10 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 // TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice は
 // segmのoffsetがint64範囲を超える（safeInt64が失敗する）ケース。
 //
-// 修正前はOffsetもSize/OriginalSizeと同じくゼロ値（オフセット0）へ
-// フォールバックしていたため、「オフセット0（=アーカイブヘッダー付近）から
-// Size/OriginalSizeバイト読む」動作になり、無関係なアーカイブヘッダーの
-// バイト列を展開結果に混入させていた（reviewer実測の情報漏えい）。
-// 修正後はOffsetが範囲外の場合そのセグメントを丸ごと破棄する。この例では
-// エントリが持つ唯一のセグメントが破棄されるため、name/segments判定により
-// エントリ自体も破棄され、ヘッダーバイト列を含むファイルは一切生成されない。
+// Offsetが範囲外のセグメントは、ゼロ値（オフセット0）へフォールバックせず丸ごと
+// 破棄される（理由はparseSegments内のwhy not参照）。この例ではエントリが持つ
+// 唯一のセグメントが破棄されるため、name/segments判定によりエントリ自体も
+// 破棄され、ヘッダーバイト列を含むファイルは一切生成されない。
 func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *testing.T) {
 	t.Parallel()
 
@@ -1488,11 +1485,9 @@ func TestXP3Archive_EngineProtectedFlag(t *testing.T) {
 // TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize は、悪意ある
 // アーカイブが同一オフセットを指す大量のsegmレコードを持つケース。
 //
-// 修正前は各セグメントが個別に「オフセット以降の残量」でのみクランプされて
-// おり、エントリ全体での累積読み取り量には上限がなかった。同一オフセットの
-// セグメントを大量に積み重ねると、セグメント数×クランプ後サイズ分の
-// アロケーションが発生しうる（reviewer実測: 52KBの細工アーカイブ・同一
-// オフセットのセグメント20,000件で5.1GB RSS）。修正後はextractEntryが
+// セグメントごとに「オフセット以降の残量」でクランプするだけでは、エントリ全体の
+// 累積読み取り量に上限がなく、同一オフセットのセグメントを大量に積み重ねると
+// セグメント数×クランプ後サイズ分のアロケーションが発生しうる。extractEntryは
 // エントリ全体でbudget（=fileSize）を管理し、セグメントをまたいで消費させる
 // ため、累積読み取り量はfileSizeを超えない。
 func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {

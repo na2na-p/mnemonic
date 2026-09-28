@@ -117,11 +117,10 @@ func TestLZSSDecoder_Decode(t *testing.T) {
 func TestLZSSDecoder_Decode_DictionaryPersistsAcrossCalls(t *testing.T) {
 	t.Parallel()
 
-	// DEFECT 2の回帰防止: krkrz TVPLoadTLG5はスライド辞書を画像1枚のデコード
-	// （全チャンク）を通じて持続させる。同一LZSSDecoderへの2回目のDecodeは、
-	// 1回目が辞書へ書き込んだバイトをバックリファレンスで参照できなければ
-	// ならない。旧実装（チャンクごとに辞書をゼロ初期化）ではここで
-	// []byte{0,0,0}が返り、このテストは失敗する。
+	// krkrz TVPLoadTLG5はスライド辞書を画像1枚のデコード（全チャンク）を通じて
+	// 持続させる。同一LZSSDecoderへの2回目のDecodeは、1回目が辞書へ書き込んだ
+	// バイトをバックリファレンスで参照できなければならない。チャンクごとに辞書を
+	// ゼロ初期化する実装ではここで[]byte{0,0,0}が返り、このテストは失敗する。
 	d := tlg.NewLZSSDecoder()
 
 	first, err := d.Decode(append([]byte{0x00}, []byte("ABC")...), 3)

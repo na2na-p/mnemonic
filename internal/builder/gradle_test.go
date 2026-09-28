@@ -302,7 +302,7 @@ func TestGradleBuilder_GetAPKPath(t *testing.T) {
 
 		// why not: krkrsdl2テンプレートのapp/build.gradleはoutputFileNameを
 		// "${app_name}_${architecture}.apk"へカスタマイズしており、標準名の
-		// APKが生成されないことがある（T-218で判明した実ビルドでの回帰）。
+		// APKが生成されないことがある。
 		dir := t.TempDir()
 		apkDir := filepath.Join(dir, "app", "build", "outputs", "apk", "release")
 		require.NoError(t, os.MkdirAll(apkDir, 0o750))

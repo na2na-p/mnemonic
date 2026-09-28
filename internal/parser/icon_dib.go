@@ -22,7 +22,7 @@ const (
 	// 無いと、biWidth/biHeightに攻撃的な値(例:
 	// 2147483646、int32の最大値付近)を書き込んだ壊れたEXEに対し
 	// image.NewNRGBAがmakeslice panicを起こすか、実データサイズに見合わない
-	// 数GB単位のメモリ確保を試みる(レビューで実証済み)。1024×1024×4byte
+	// 数GB単位のメモリ確保を試みる。1024×1024×4byte
 	// (32bpp)は4MiB強で、通常のビルド処理において無視できるサイズ。
 	maxICODimension = 1024
 )

@@ -289,9 +289,8 @@ func TestExeIconExtractor_Extract(t *testing.T) {
 		// Windowsローダー/pefile/icoextractはIMAGE_DIRECTORY_ENTRY_RESOURCEの
 		// RVAでリソーステーブルを解決し、セクション名は見ない。セクションを
 		// ".rsrc"以外(".data")へリネームしても、データディレクトリを
-		// 正しく設定していれば抽出できることを確認する回帰テスト
-		// (レビューで実証: 名前だけで探す実装は同じPEのセクションを
-		// リネームしただけで抽出に失敗していた)。
+		// 正しく設定していれば抽出できることを確認する（セクション名だけで探す
+		// 実装は、同じPEのセクションをリネームしただけで抽出に失敗する）。
 		images := []fixtureIconImage{{id: 101, width: 16, height: 16, bitCount: 32, data: build32bppDIB(16, 16, solidColor(9, 8, 7, 255))}}
 		rsrc := buildRsrcWithIconGroup(t, images)
 		peBytes := buildMinimalPEWithSection(t, ".data", rsrc, true)
@@ -312,7 +311,7 @@ func TestExeIconExtractor_Extract(t *testing.T) {
 		// biWidth/biHeightにint32上限付近の値(2147483646)を書き込んだ
 		// 壊れたDIB。次元チェックがimage.NewNRGBAより前に無いと、
 		// makeslice panicまたは実データサイズに見合わない巨大確保を
-		// 引き起こす(レビューで実証済みのケース)。
+		// 引き起こす。
 		const attackDimension = 2147483646
 		images := []fixtureIconImage{
 			{id: 101, width: 32, height: 32, bitCount: 32, data: buildRawDIBHeader(attackDimension, attackDimension, 32, 0)},

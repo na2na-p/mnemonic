@@ -72,8 +72,8 @@ func TestNewSDL2SourceCache(t *testing.T) {
 //
 // why: ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換える。MIDI変換の
 // 失敗がスクリプト調整より後に判明する順序だと、実体の無い.oggを指す参照へ
-// 書き換えられたツリーが出来上がる。この並びこそがT-220のBGM無音バグの原因で
-// あり、コメントだけでは順序を入れ替えても誰も気付けないためテストで固定する。
+// 書き換えられたツリーが出来上がる。コメントだけでは順序を入れ替えても誰も
+// 気付けないためテストで固定する。
 func TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite(t *testing.T) {
 	t.Parallel()
 

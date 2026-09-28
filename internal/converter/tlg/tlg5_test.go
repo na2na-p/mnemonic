@@ -116,11 +116,11 @@ func tlg5Chunk(mark byte, compressed []byte) []byte {
 func TestTLG5Decoder_Decode_DictionaryPersistsAcrossBlocks(t *testing.T) {
 	t.Parallel()
 
-	// DEFECT 2の回帰防止（実アセットレベルのピン留め）: 2ブロックのTLG5画像で、
+	// Decode全体を通したピン留め: 2ブロックのTLG5画像で、
 	// ブロック2の先頭チャンネル(B)を「ブロック1の各チャンネルで辞書へ書き込まれた
 	// バイトを指すバックリファレンス」でエンコードする。スライド辞書がブロック
 	// 境界をまたいで持続する場合のみ、このバックリファレンスは正しいバイト列
-	// [10,20,30,40]を復元する。辞書をチャンクごとにリセットする旧実装では
+	// [10,20,30,40]を復元する。辞書をチャンクごとにリセットする実装では
 	// [0,0,0,0]が復元され、期待ピクセルと一致せずテストが失敗する。
 	//
 	// width=2, height=4, blockHeight=2 -> 2ブロック。colorDepth=3(RGB, 3チャンネル)。
@@ -153,9 +153,9 @@ func TestTLG5Decoder_Decode_DictionaryPersistsAcrossBlocks(t *testing.T) {
 
 	// デルタデコード後の期待RGB値。辞書持続の効果はBチャンネル(channels[0])に
 	// 現れる: ブロック2のBプレーンは辞書のslide[0..3]=[10,20,30,40]を参照して
-	// 復元されるため、y=2,3のB値は 50,130,80,200 になる。辞書をリセットする旧実装
+	// 復元されるため、y=2,3のB値は 50,130,80,200 になる。辞書をリセットする実装
 	// ではブロック2のBデルタが[0,0,0,0]になり、これらB値が 40,100,40,100 に化けて
-	// 期待値と一致しなくなる（＝DEFECT 2のピン留め）。
+	// 期待値と一致しなくなる。
 	expected := [8][3]uint8{
 		{90, 50, 10},   // (0,0)
 		{190, 110, 30}, // (1,0)
@@ -338,7 +338,7 @@ func TestTLG5Decoder_Decode(t *testing.T) {
 		}
 	})
 
-	t.Run("異常系: block_heightが0の場合ErrTLG5InvalidBlockHeightを返す(ゼロ除算panicの回帰防止)", func(t *testing.T) {
+	t.Run("異常系: block_heightが0の場合ErrTLG5InvalidBlockHeightを返しゼロ除算でpanicしない", func(t *testing.T) {
 		t.Parallel()
 
 		d := tlg.NewTLG5Decoder()
@@ -350,13 +350,13 @@ func TestTLG5Decoder_Decode(t *testing.T) {
 		assert.ErrorIs(t, err, tlg.ErrTLG5InvalidBlockHeight)
 	})
 
-	t.Run("異常系: width/heightが巨大な場合ErrTLG5InvalidDimensionsを返す(makeslice panicの回帰防止)", func(t *testing.T) {
+	t.Run("異常系: width/heightが巨大な場合ErrTLG5InvalidDimensionsを返しmakesliceでpanicしない", func(t *testing.T) {
 		t.Parallel()
 
-		// レビュー指摘の回帰防止: width=height=0xFFFFFFFFの24バイト最小
-		// ヘッダーはmake([]byte, width*height)を呼ぶ前に拒否されなければ
-		// ならない（許容されると約17GBの確保でpanicする）。テストが
-		// 実際に大きな確保を試みていないこと自体もこのテストの検証対象。
+		// width=height=0xFFFFFFFFの24バイト最小ヘッダーは
+		// make([]byte, width*height)を呼ぶ前に拒否されなければならない
+		// （width*heightがintで溢れて負になり、makesliceがpanicする）。
+		// テストが実際に大きな確保を試みていないこと自体もこのテストの検証対象。
 		d := tlg.NewTLG5Decoder()
 		data := tlg5Header(32, 0xFFFFFFFF, 0xFFFFFFFF, 4)
 

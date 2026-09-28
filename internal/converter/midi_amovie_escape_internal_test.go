@@ -75,11 +75,11 @@ func writeTestWAV(t *testing.T, path string, audibleSeconds, silentSeconds float
 // 実ffprobe(モックなし)を使い、amovieフィルタへ渡すパスにシングルクォート・
 // コロン・バックスラッシュを含む場合でも末尾無音を検出できることを検証する。
 //
-// why: 不具合の再発防止。escapeLavfiPathForAmovieの単体テストは
-// 文字列変換の形だけを見ており、実際にamovieフィルタが
-// そのエスケープ結果を正しく解釈できるかまでは検証していなかった
-// （旧実装のシェル風エスケープ(閉じクォート+バックスラッシュ+クォート+開きクォート)
-// はamovieでは機能せず、パスからクォートが消えてファイルを開けなかった）。
+// why: escapeLavfiPathForAmovieの単体テストは文字列変換の形だけを見ており、
+// 実際にamovieフィルタがそのエスケープ結果を正しく解釈できるかまでは検証できない。
+// 形の上ではもっともらしいエスケープでもamovieでは機能しないことがある
+// （シェル風エスケープ(閉じクォート+バックスラッシュ+クォート+開きクォート)は
+// パスからクォートが消えてファイルを開けない）ため、実ffprobeで確かめる。
 func TestTrailingSilenceDetector_silenceStart_SpecialCharacterPaths(t *testing.T) {
 	t.Parallel()
 	requireFunctionalFFprobe(t)

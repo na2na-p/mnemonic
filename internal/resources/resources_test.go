@@ -115,7 +115,7 @@ func TestSystemPolyfillFS_MenuFilesBraceBalance(t *testing.T) {
 //
 // why not(対象を3ファイルに限定する理由): 同じ一覧に含まれる
 // MIDISoundBuffer_stub.tjs/VideoOverlay_stub.tjsは、この3ファイルとは別に
-// 元々BOM無しのまま同梱されており、この事実自体を変更する判断は本テストの
+// BOM無しのまま同梱されており、この事実自体を変更する判断は本テストの
 // スコープ外とする。判定基準を「非ASCIIバイトを含むかどうか」のような
 // 計算値にすると、後から日本語コメントが1行増えただけの無関係な変更で
 // このテストが新たに赤くなってしまうため、対象ファイル名を明示的に列挙する。
