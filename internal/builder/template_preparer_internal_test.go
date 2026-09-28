@@ -350,7 +350,7 @@ func TestGenerateActivityJava(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotContains(t, got, "getArguments")
-		assert.NotContains(t, got, "copyAssetsToInternal")
+		assert.NotContains(t, got, "sNativeLibDir")
 		assert.NotContains(t, got, `"-holdalpha=yes"`)
 	})
 
@@ -404,8 +404,31 @@ func TestGenerateGameActivityJava(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, got, "protected void onCreate(Bundle savedInstanceState)")
 		assert.Contains(t, got, "protected String[] getArguments()")
-		assert.Contains(t, got, "private void copyAssetsToInternal()")
+		assert.Contains(t, got, `"-krkrsdl2_pluginsearchpath=" + sNativeLibDir,`)
 		assert.Contains(t, got, `"-holdalpha=yes"`)
+	})
+
+	t.Run("正常系: 起動時にアセットを内部ストレージへコピーする処理を含まない", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := generateGameActivityJava("com.example.game")
+
+		require.NoError(t, err)
+		for _, s := range []string{
+			"copyAssetsToInternal",
+			"copyAssetFolder",
+			"copyAssetFile",
+			"ASSETS_DATA_DIR",
+			"getFilesDir()",
+			"AssetManager",
+			"FileOutputStream",
+			"InputStream",
+			"OutputStream",
+			"IOException",
+			"import java.io.File;",
+		} {
+			assert.NotContains(t, got, s)
+		}
 	})
 
 	t.Run("正常系: onCreateがsuper.onCreateを呼び出す（fork側のonCreateへ連鎖させるため）", func(t *testing.T) {
@@ -417,7 +440,7 @@ func TestGenerateGameActivityJava(t *testing.T) {
 		assert.Contains(t, got, "super.onCreate(savedInstanceState);")
 	})
 
-	t.Run("正常系: onCreateの内部処理がsNativeLibDir設定→copyAssetsToInternal→super.onCreateの順序で実行される", func(t *testing.T) {
+	t.Run("正常系: onCreateの内部処理がsNativeLibDir設定→super.onCreateの順序で実行される", func(t *testing.T) {
 		t.Parallel()
 
 		// SDLActivity.onCreate()はgetArguments()を呼び、getArgumentsは
@@ -432,15 +455,12 @@ func TestGenerateGameActivityJava(t *testing.T) {
 		require.NoError(t, err)
 
 		idxSetNativeLibDir := strings.Index(got, "sNativeLibDir = getApplicationInfo()")
-		idxCopyAssets := strings.Index(got, "copyAssetsToInternal();")
 		idxSuperOnCreate := strings.Index(got, "super.onCreate(")
 
 		require.NotEqual(t, -1, idxSetNativeLibDir, "sNativeLibDirの設定処理が見つからない")
-		require.NotEqual(t, -1, idxCopyAssets, "copyAssetsToInternal()の呼び出しが見つからない")
 		require.NotEqual(t, -1, idxSuperOnCreate, "super.onCreate()の呼び出しが見つからない")
 
 		assert.Less(t, idxSetNativeLibDir, idxSuperOnCreate, "sNativeLibDirの設定はsuper.onCreate()より前である必要がある")
-		assert.Less(t, idxCopyAssets, idxSuperOnCreate, "copyAssetsToInternal()はsuper.onCreate()より前である必要がある")
 	})
 
 	t.Run("正常系: 必要なimportが重複なく含まれる", func(t *testing.T) {

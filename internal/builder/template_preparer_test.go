@@ -738,7 +738,7 @@ func TestTemplatePreparer_UpdateJavaSource(t *testing.T) {
 func TestTemplatePreparer_GameActivity(t *testing.T) {
 	t.Parallel()
 
-	t.Run("正常系: KirikiriSDL2ActivityをextendsするサブクラスとしてonCreate/getArguments/copyAssets系メソッドが生成される", func(t *testing.T) {
+	t.Run("正常系: KirikiriSDL2ActivityをextendsするサブクラスとしてonCreate/getArgumentsが生成されアセットコピー処理は含まない", func(t *testing.T) {
 		t.Parallel()
 
 		projectDir := newFullyPreparableProject(t)
@@ -754,7 +754,7 @@ func TestTemplatePreparer_GameActivity(t *testing.T) {
 		assert.Contains(t, text, "public class KirikiriSDL2GameActivity extends KirikiriSDL2Activity {")
 		assert.Contains(t, text, "protected void onCreate(Bundle savedInstanceState)")
 		assert.Contains(t, text, "protected String[] getArguments()")
-		assert.Contains(t, text, "private void copyAssetsToInternal()")
+		assert.NotContains(t, text, "copyAssetsToInternal")
 		assert.Contains(t, text, "super.onCreate(savedInstanceState);")
 	})
 }
