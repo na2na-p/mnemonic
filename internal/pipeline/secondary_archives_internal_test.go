@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -588,17 +589,34 @@ func TestBuildPipeline_ExecuteConvert_SecondaryArchiveFailures(t *testing.T) {
 			},
 		},
 		{
-			name: "異常系: アーカイブの形式によらない展開の失敗はアーカイブ名だけを添え、移す案内をしない",
+			name: "異常系: ファイルとディレクトリを兼ねるエントリ名があればフォルダから移して再実行するよう案内する",
 			writeBad: func(t *testing.T, path string) {
 				t.Helper()
-				// "a"をファイルとして書いた後に"a/b"のためのディレクトリ"a"を作れず、
-				// 展開がENOTDIRで失敗する。
 				require.NoError(t, os.WriteFile(path, storedXP3EntriesBytes([]storedEntry{
 					{name: "a", data: []byte("file")},
 					{name: "a/b", data: []byte("child")},
 				}), 0o600))
 			},
-			wantNotErr: []error{ErrSecondaryArchiveUnreadable, parser.ErrInvalidXP3},
+			wantErr:    []error{ErrSecondaryArchiveUnreadable, parser.ErrEntryPathConflict},
+			wantNotErr: []error{parser.ErrInvalidXP3},
+			wantPrefix: ErrSecondaryArchiveUnreadable.Error() + ": bad.xp3: ",
+			wantMessages: []string{
+				`"a" と "a/b"`,
+				"bad.xp3を{dir}から別の場所へ移して再実行してください",
+			},
+		},
+		{
+			name: "異常系: アーカイブの形式によらない展開の失敗はアーカイブ名だけを添え、移す案内をしない",
+			writeBad: func(t *testing.T, path string) {
+				t.Helper()
+				// 1要素の名前長の上限が255バイトのファイルシステムでは、それを超える名前の
+				// 展開がENAMETOOLONGで失敗する。
+				require.NoError(t, os.WriteFile(path, storedXP3EntriesBytes([]storedEntry{
+					{name: strings.Repeat("a", 300) + ".ks", data: []byte("*a\n")},
+				}), 0o600))
+			},
+			wantErr:    []error{syscall.ENAMETOOLONG},
+			wantNotErr: []error{ErrSecondaryArchiveUnreadable, parser.ErrInvalidXP3, parser.ErrEntryPathConflict},
 			wantPrefix: "bad.xp3: ",
 			wantAbsent: []string{"別の場所へ移して再実行してください", ErrSecondaryArchiveUnreadable.Error()},
 		},
