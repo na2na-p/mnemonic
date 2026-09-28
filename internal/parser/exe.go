@@ -21,14 +21,13 @@ var ErrEXENotFound = errors.New("EXEファイルが見つかりません")
 type EmbeddedXP3Info struct {
 	// Offset はEXE内でのXP3開始オフセット。
 	Offset int64
-	// EstimatedSize は推定サイズ（次のXP3の開始位置またはEXE終端までのバイト数）。
+	// EstimatedSize はOffsetからEXE終端までのバイト数。
 	EstimatedSize int64
 }
 
 // EmbeddedXP3Extractor はEXEファイルから埋め込みXP3を抽出する。
 //
 // Windows EXE形式のゲームファイルには、XP3アーカイブが埋め込まれていることがある。
-// このクラスは、EXEファイル内のXP3オフセットを検出し、抽出する機能を提供する。
 type EmbeddedXP3Extractor struct {
 	exePath string
 }
@@ -44,81 +43,82 @@ func NewEmbeddedXP3Extractor(exePath string) (*EmbeddedXP3Extractor, error) {
 	return &EmbeddedXP3Extractor{exePath: exePath}, nil
 }
 
-// FindEmbeddedXP3 はEXE内の埋め込みXP3を検索する。
+// FindEmbeddedXP3 はEXE内の埋め込みXP3を検索する。見つからなければfalseを返す。
 //
-// EXEファイルをスキャンし、XP3マジックバイトを検出する。
-// 複数のXP3が埋め込まれている場合、すべてをオフセット順に返す。
-func (e *EmbeddedXP3Extractor) FindEmbeddedXP3() ([]EmbeddedXP3Info, error) {
-	content, err := os.ReadFile(e.exePath) //nolint:gosec // コンストラクタでexists検証済みのユーザー指定EXEパスを読む用途のため妥当
-	if err != nil {
-		return nil, fmt.Errorf("EXEファイルの読み込みに失敗しました: %w", err)
-	}
+// "MZ"で始まるファイルでは、オフセット16から16バイト刻みで最初にマジックが
+// 現れた位置をアーカイブの先頭とし、EXE終端までをアーカイブとする。"MZ"で
+// 始まらずマジックで始まるファイルはオフセット0のアーカイブとして扱う。
+//
+// why not: 1バイト刻みで探したり、2つ目以降のマジックを別のアーカイブとして
+// 扱ったりしない。krkrz（base/XP3Archive.cpp のTVPGetXP3ArchiveOffset）は
+// 自己完結EXEを開くとき上記の規則で1つだけ選び、索引とセグメントの位置を
+// その先頭からの相対値として読み、終端はファイル終端のみで区切る。コード中の
+// 偶然の一致やアーカイブ内のデータに現れるマジックで区切ると、エンジンが
+// 読めるアーカイブを途中で切り詰めてしまう。
+func (e *EmbeddedXP3Extractor) FindEmbeddedXP3() (EmbeddedXP3Info, bool, error) {
+	info, _, found, err := e.locate()
 
-	fileSize := int64(len(content))
-
-	// XP3マジックバイトをスキャンしてオフセットを記録する。
-	// posをoffset+1から再開することで、1バイトずつ前進しながら重複を許容した
-	// 探索を行う（bytes.Indexは重複開始位置を見逃さないため、offset+len(magic)
-	// からの再開よりも安全）。
-	var offsets []int64
-	pos := 0
-	for {
-		idx := bytes.Index(content[pos:], XP3Magic)
-		if idx == -1 {
-			break
-		}
-		offset := pos + idx
-		offsets = append(offsets, int64(offset))
-		pos = offset + 1
-	}
-
-	result := make([]EmbeddedXP3Info, 0, len(offsets))
-	for i, offset := range offsets {
-		var estimatedSize int64
-		if i+1 < len(offsets) {
-			estimatedSize = offsets[i+1] - offset
-		} else {
-			estimatedSize = fileSize - offset
-		}
-		result = append(result, EmbeddedXP3Info{Offset: offset, EstimatedSize: estimatedSize})
-	}
-
-	return result, nil
+	return info, found, err
 }
 
-// ExtractAll は検出したすべてのXP3をoutputDirへ抽出する。
-//
-// 抽出されたファイルはexeファイル名のstemに連番を付与した名前
-// （例: game_0.xp3）で保存される。
-func (e *EmbeddedXP3Extractor) ExtractAll(outputDir string) ([]string, error) {
-	if err := os.MkdirAll(outputDir, 0o750); err != nil {
-		return nil, fmt.Errorf("出力ディレクトリの作成に失敗しました: %w", err)
-	}
-
-	xp3List, err := e.FindEmbeddedXP3()
-	if err != nil {
-		return nil, err
-	}
-	if len(xp3List) == 0 {
-		return []string{}, nil
-	}
-
+func (e *EmbeddedXP3Extractor) locate() (EmbeddedXP3Info, []byte, bool, error) {
 	content, err := os.ReadFile(e.exePath) //nolint:gosec // コンストラクタでexists検証済みのユーザー指定EXEパスを読む用途のため妥当
 	if err != nil {
-		return nil, fmt.Errorf("EXEファイルの読み込みに失敗しました: %w", err)
+		return EmbeddedXP3Info{}, nil, false, fmt.Errorf("EXEファイルの読み込みに失敗しました: %w", err)
+	}
+
+	offset, found := embeddedXP3Offset(content)
+	if !found {
+		return EmbeddedXP3Info{}, nil, false, nil
+	}
+
+	return EmbeddedXP3Info{Offset: offset, EstimatedSize: int64(len(content)) - offset}, content, true, nil
+}
+
+// exeXP3SearchStart と exeXP3SearchStep は、krkrzがEXE内のマジックを探す開始位置と
+// 刻み幅（段落境界）。
+const (
+	exeXP3SearchStart = 16
+	exeXP3SearchStep  = 16
+)
+
+func embeddedXP3Offset(content []byte) (int64, bool) {
+	if bytes.HasPrefix(content, []byte("MZ")) {
+		// why not: マジックの直後に1バイトも無い位置は採らない。krkrzの探索条件
+		// （p + 11 < read）がマジックの末尾をファイルの最終バイトに置かないため。
+		for off := exeXP3SearchStart; off+len(XP3Magic) < len(content); off += exeXP3SearchStep {
+			if bytes.HasPrefix(content[off:], XP3Magic) {
+				return int64(off), true
+			}
+		}
+
+		return 0, false
+	}
+	if bytes.HasPrefix(content, XP3Magic) {
+		return 0, true
+	}
+
+	return 0, false
+}
+
+// Extract は埋め込みXP3をoutputDirへ<EXEのファイル名のstem>_0.xp3として書き出し、
+// そのパスを返す。埋め込みXP3が無ければ何も書き出さずにfalseを返す。
+func (e *EmbeddedXP3Extractor) Extract(outputDir string) (string, bool, error) {
+	info, content, found, err := e.locate()
+	if err != nil || !found {
+		return "", false, err
+	}
+
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		return "", false, fmt.Errorf("出力ディレクトリの作成に失敗しました: %w", err)
 	}
 
 	baseName := strings.TrimSuffix(filepath.Base(e.exePath), filepath.Ext(e.exePath))
-
-	extracted := make([]string, 0, len(xp3List))
-	for i, info := range xp3List {
-		data := content[info.Offset : info.Offset+info.EstimatedSize]
-		outputFile := filepath.Join(outputDir, fmt.Sprintf("%s_%d.xp3", baseName, i))
-		if err := os.WriteFile(outputFile, data, 0o600); err != nil { //nolint:gosec // outputFileはoutputDirとEXEファイル名由来の固定書式で構築され外部入力を含まない
-			return nil, fmt.Errorf("XP3ファイルの書き込みに失敗しました: %w", err)
-		}
-		extracted = append(extracted, outputFile)
+	outputFile := filepath.Join(outputDir, baseName+"_0.xp3")
+	data := content[info.Offset : info.Offset+info.EstimatedSize]
+	if err := os.WriteFile(outputFile, data, 0o600); err != nil { //nolint:gosec // outputFileはoutputDirとEXEファイル名由来の固定書式で構築され外部入力を含まない
+		return "", false, fmt.Errorf("XP3ファイルの書き込みに失敗しました: %w", err)
 	}
 
-	return extracted, nil
+	return outputFile, true, nil
 }

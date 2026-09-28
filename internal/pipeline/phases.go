@@ -53,11 +53,11 @@ func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error)
 		return a, err
 	}
 
-	xp3List, err := extractor.FindEmbeddedXP3()
+	_, found, err := extractor.FindEmbeddedXP3()
 	if err != nil {
 		return a, err
 	}
-	if len(xp3List) == 0 {
+	if !found {
 		return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
 	}
 
@@ -84,9 +84,13 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 			return a, err
 		}
 
-		archivePaths, err = extractor.ExtractAll(extractDir)
+		embeddedPath, found, err := extractor.Extract(extractDir)
 		if err != nil {
 			return a, err
+		}
+		archivePaths = nil
+		if found {
+			archivePaths = []string{embeddedPath}
 		}
 
 		embeddedSizes, err = fileSizes(archivePaths)
@@ -95,8 +99,6 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 		}
 	}
 
-	// why not: アーカイブごとに容量を確認しない。展開結果はすべて同じextractDirに
-	// 並んで残るため、1件ずつ同じ空き容量と比べると合計の不足を見逃す。
 	archives := make([]*parser.XP3Archive, 0, len(archivePaths))
 	planned := make([]int64, 0, len(archivePaths))
 	for _, path := range archivePaths {
