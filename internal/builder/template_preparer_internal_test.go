@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -471,6 +472,20 @@ func TestGenerateGameActivityJava(t *testing.T) {
 		require.NoError(t, err)
 		for _, imp := range mnemonicJavaImports {
 			assert.Equal(t, 1, strings.Count(got, imp), "import %sが重複または欠落している", imp)
+		}
+	})
+
+	t.Run("正常系: importした型はすべてクラス本体で使われている", func(t *testing.T) {
+		t.Parallel()
+
+		for _, imp := range mnemonicJavaImports {
+			_, simpleName, found := strings.CutLast(strings.TrimSuffix(imp, ";"), ".")
+			require.True(t, found, "%sから型名を取り出せない", imp)
+
+			// 部分一致では getApplicationInfo() が ApplicationInfo の使用と
+			// 誤判定されるため、識別子境界で一致させる。
+			used := regexp.MustCompile(`\b` + regexp.QuoteMeta(simpleName) + `\b`).MatchString(gameActivityMembers)
+			assert.True(t, used, "%sの型%sがクラス本体で使われていない", imp, simpleName)
 		}
 	})
 
