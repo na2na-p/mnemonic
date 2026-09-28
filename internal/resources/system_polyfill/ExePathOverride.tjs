@@ -1,0 +1,12 @@
+﻿// ExePathOverride.tjs - System.exePathをプロジェクトディレクトリへ向け直す
+//
+// Androidのkrkrsdl2ではSystem.exePathがzygoteの実行ファイルのディレクトリ
+// (file://./system/bin/)を指すため、System.exePath + "x.xp3" で探す
+// アーカイブはAPKのassets/data/に置いても見つからない。
+//
+// why not(直接代入): System.exePathはネイティブの読み取り専用プロパティで、
+// 代入すると"Invalid operation for Read-only or Write-only property"の
+// 例外になる。deleteでメンバーを消してから代入すると、以後のスクリプトから
+// 見える値が置き換わることを実機で確認している。
+delete System.exePath;
+System.exePath = "file://./data/";

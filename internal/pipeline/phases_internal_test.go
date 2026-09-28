@@ -18,6 +18,7 @@ import (
 	"github.com/na2na-p/mnemonic/internal/cache"
 	"github.com/na2na-p/mnemonic/internal/converter"
 	"github.com/na2na-p/mnemonic/internal/fsutil"
+	"github.com/na2na-p/mnemonic/internal/resources"
 )
 
 // why not: t.Setenvはt.Parallel()を呼んだテストでは使えない
@@ -94,7 +95,7 @@ func TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite(t 
 	}}
 	midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, runner)
 
-	err := p.finalizeConvertedTree(dir, converter.ConversionSummary{}, midiConverter)
+	err := p.finalizeConvertedTree(dir, converter.ConversionSummary{}, midiConverter, false)
 
 	require.ErrorIs(t, err, ErrMidiConversionUnavailable)
 
@@ -149,7 +150,7 @@ func TestBuildPipeline_FinalizeConvertedTree_RemoveStaleVideoSourceFilesPrecedes
 	p := newTestPipeline(t)
 	midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, fakeCommandRunner{})
 
-	require.NoError(t, p.finalizeConvertedTree(dir, summary, midiConverter))
+	require.NoError(t, p.finalizeConvertedTree(dir, summary, midiConverter, false))
 
 	// removeStaleVideoSourceFilesがnormalizeCriticalFilenamesより後に走ると、
 	// 大文字のOP.WMVは既にnormalizeCriticalFilenamesによって小文字の
@@ -161,6 +162,100 @@ func TestBuildPipeline_FinalizeConvertedTree_RemoveStaleVideoSourceFilesPrecedes
 	assert.NoFileExists(t, staleFile)
 	assert.NoFileExists(t, filepath.Join(dir, "op.wmv"))
 	assert.FileExists(t, filepath.Join(dir, "op.mpg"))
+}
+
+// TestBuildPipeline_FinalizeConvertedTree_ExePathOverride は、後処理を
+// 通した後のツリーにsystem/exepathoverride.tjsが埋め込みの内容のまま
+// 残るのは、書き換えを指定したときだけであることを固定する。
+func TestBuildPipeline_FinalizeConvertedTree_ExePathOverride(t *testing.T) {
+	t.Parallel()
+
+	want, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + resources.ExePathOverrideFile)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name                string
+		withExePathOverride bool
+		wantPresent         bool
+	}{
+		{name: "正常系: 指定しなければ書かない", withExePathOverride: false, wantPresent: false},
+		{name: "正常系: 指定すれば埋め込みの内容のまま残る", withExePathOverride: true, wantPresent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			// copyFontFileが実ネットワークへ出ないよう既存のfont.ttfを置く。
+			require.NoError(t, os.MkdirAll(filepath.Join(dir, "system"), 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "system", "font.ttf"), []byte("stub font"), 0o600))
+
+			p := newTestPipeline(t)
+			midiConverter := converter.NewMidiConverter("", 0, "", 0, time.Second, fakeCommandRunner{})
+
+			require.NoError(t, p.finalizeConvertedTree(dir, converter.ConversionSummary{}, midiConverter, tt.withExePathOverride))
+
+			overridePath := filepath.Join(dir, "system", "exepathoverride.tjs")
+			if !tt.wantPresent {
+				assert.NoFileExists(t, overridePath)
+
+				return
+			}
+			got, readErr := os.ReadFile(overridePath) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+			require.NoError(t, readErr)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestBuildPipeline_ExecuteConvert_ExePathOverride は、CONVERTフェーズが
+// buildArtifacts.shipsSecondaryArchivesに従ってsystem/exepathoverride.tjsを
+// 書くかどうかを決めることを固定する。
+//
+// why not: extractDirにsystem/font.ttfを置かないと、copyFontFileが既定の
+// FontFetcher経由で実キャッシュや実ネットワークに触れる。copyTreeで
+// convertDirへ写させ、既存ファイルのガードで早期に戻らせる。
+func TestBuildPipeline_ExecuteConvert_ExePathOverride(t *testing.T) {
+	t.Parallel()
+
+	want, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + resources.ExePathOverrideFile)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name                   string
+		shipsSecondaryArchives bool
+		wantPresent            bool
+	}{
+		{name: "正常系: 副アーカイブを同梱しなければ書かない", shipsSecondaryArchives: false, wantPresent: false},
+		{name: "正常系: 副アーカイブを同梱すれば埋め込みの内容を書く", shipsSecondaryArchives: true, wantPresent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			extractDir := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(extractDir, "system"), 0o750))
+			require.NoError(t, os.WriteFile(filepath.Join(extractDir, "system", "font.ttf"), []byte("stub font"), 0o600))
+
+			p := newTestPipeline(t)
+			t.Cleanup(p.cleanupTempDirs)
+
+			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir, shipsSecondaryArchives: tt.shipsSecondaryArchives})
+			require.NoError(t, err)
+
+			overridePath := filepath.Join(a.convertDir, "system", "exepathoverride.tjs")
+			if !tt.wantPresent {
+				assert.NoFileExists(t, overridePath)
+
+				return
+			}
+			got, readErr := os.ReadFile(overridePath) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
+			require.NoError(t, readErr)
+			assert.Equal(t, want, got)
+		})
+	}
 }
 
 // TestBuildPipeline_NewMidiConverter はConfig.SoundfontPathがMIDI変換器へ

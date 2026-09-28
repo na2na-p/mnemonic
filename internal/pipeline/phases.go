@@ -272,7 +272,7 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		return a, err
 	}
 
-	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter())
+	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter(), a.shipsSecondaryArchives)
 }
 
 // maxReportedAssets はアセットごとの報告で1件1行に列挙する最大件数。
@@ -466,6 +466,7 @@ func (b *BuildPipeline) finalizeConvertedTree(
 	directory string,
 	summary converter.ConversionSummary,
 	midiConverter *converter.MidiConverter,
+	withExePathOverride bool,
 ) error {
 	removeStaleVideoSourceFiles(summary)
 
@@ -480,7 +481,7 @@ func (b *BuildPipeline) finalizeConvertedTree(
 	}
 
 	// krkrsdl2 polyfillファイルをコピー
-	if err := b.copyPolyfillFiles(directory); err != nil {
+	if err := b.copyPolyfillFiles(directory, withExePathOverride); err != nil {
 		return err
 	}
 

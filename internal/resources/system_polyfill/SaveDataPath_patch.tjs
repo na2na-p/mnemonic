@@ -2,7 +2,8 @@
 // This patch redirects save data to System.dataPath (writable location)
 // Copyright (C) W.Dee and contributors - 改変・配布は自由です
 //
-// On Android, System.exePath is read-only (inside APK).
+// On Android, System.exePath is a read-only native property that points to
+// the directory of the zygote binary (file://./system/bin/), not into the APK.
 // Save data must be written to System.dataPath instead.
 
 // Store original exePath

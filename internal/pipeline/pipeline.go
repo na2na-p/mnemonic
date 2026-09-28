@@ -112,6 +112,10 @@ type buildArtifacts struct {
 	projectDir    string
 	unsignedAPK   string
 	gameStructure *parser.GameStructure
+
+	// shipsSecondaryArchives は起動アーカイブ以外のXP3アーカイブもAPKへ
+	// 同梱するかを表す。trueのときだけsystem/exepathoverride.tjsを書く。
+	shipsSecondaryArchives bool
 }
 
 // NewBuildPipeline はconfigをもとにBuildPipelineを初期化する。

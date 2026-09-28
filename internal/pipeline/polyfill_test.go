@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 
 		dir := t.TempDir()
 
-		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), nopLogger{}))
+		require.NoError(t, copyPolyfillFilesUsing(dir, false, offlineFontFetcher(t), nopLogger{}))
 
 		assert.DirExists(t, filepath.Join(dir, "system"))
 	})
@@ -32,7 +33,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 
 		dir := t.TempDir()
 
-		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), nopLogger{}))
+		require.NoError(t, copyPolyfillFilesUsing(dir, false, offlineFontFetcher(t), nopLogger{}))
 
 		systemDir := filepath.Join(dir, "system")
 		for _, name := range resources.SystemPolyfillFiles {
@@ -47,6 +48,52 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 		assert.NoFileExists(t, filepath.Join(systemDir, "SaveDataPath_patch.tjs"))
 	})
 
+	t.Run("正常系: exePathの書き換えを指定しなければexepathoverride.tjsを書かない", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		require.NoError(t, copyPolyfillFilesUsing(dir, false, offlineFontFetcher(t), nopLogger{}))
+
+		systemDir := filepath.Join(dir, "system")
+		entries, err := os.ReadDir(systemDir)
+		require.NoError(t, err)
+		for _, e := range entries {
+			assert.NotEqual(t, "exepathoverride.tjs", strings.ToLower(e.Name()))
+		}
+	})
+
+	t.Run("正常系: exePathの書き換えを指定するとsystem/exepathoverride.tjsへ埋め込みの内容を書く", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+
+		require.NoError(t, copyPolyfillFilesUsing(dir, true, offlineFontFetcher(t), nopLogger{}))
+
+		want, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/ExePathOverride.tjs")
+		require.NoError(t, err)
+		got, readErr := os.ReadFile(filepath.Join(dir, "system", "exepathoverride.tjs")) //nolint:gosec // 埋め込みリソースをコピーしたテスト用ファイルを読む用途のため妥当
+		require.NoError(t, readErr)
+		assert.Equal(t, want, got)
+
+		for _, name := range resources.SystemPolyfillFiles {
+			assert.FileExists(t, filepath.Join(dir, "system", name))
+		}
+	})
+
+	t.Run("異常系: exepathoverride.tjsを書き込めなければエラーを返す", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		// 同名のディレクトリを置いて書き込みを失敗させる。
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "system", "exepathoverride.tjs"), 0o750))
+
+		err := copyPolyfillFilesUsing(dir, true, offlineFontFetcher(t), nopLogger{})
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "exepathoverride.tjs")
+	})
+
 	t.Run("正常系: フォント取得に失敗してもビルドは継続する", func(t *testing.T) {
 		t.Parallel()
 
@@ -55,7 +102,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 
 		logger := &recordingLogger{}
 
-		err := copyPolyfillFilesUsing(dir, fetcher, logger)
+		err := copyPolyfillFilesUsing(dir, false, fetcher, logger)
 
 		require.NoError(t, err)
 		assert.NoFileExists(t, filepath.Join(dir, "system", "font.ttf"))
@@ -70,7 +117,7 @@ func TestBuildPipeline_CopyPolyfillFiles(t *testing.T) {
 		dir := t.TempDir()
 		logger := &recordingLogger{}
 
-		require.NoError(t, copyPolyfillFilesUsing(dir, offlineFontFetcher(t), logger))
+		require.NoError(t, copyPolyfillFilesUsing(dir, false, offlineFontFetcher(t), logger))
 
 		assert.Empty(t, logger.messages("WARNING"))
 	})
