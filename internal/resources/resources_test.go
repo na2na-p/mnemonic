@@ -25,6 +25,7 @@ func TestSystemPolyfillFS_ContainsAllEmbeddedFiles(t *testing.T) {
 		"MIDISoundBuffer_stub.tjs",
 		"VideoOverlay_stub.tjs",
 		"SaveDataPath_patch.tjs",
+		"ExePathOverride.tjs",
 	}
 
 	for _, name := range allFiles {
@@ -132,6 +133,128 @@ func TestSystemPolyfillFS_MenuFilesHaveUTF8BOM(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.True(t, bytes.HasPrefix(data, utf8BOM), "UTF-8のBOMが先頭にありません")
+		})
+	}
+}
+
+func TestExePathOverrideFile(t *testing.T) {
+	t.Parallel()
+
+	data, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + resources.ExePathOverrideFile)
+	require.NoError(t, err)
+	content := string(data)
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "埋め込みファイル名はExePathOverride.tjsである",
+			check: func(t *testing.T) {
+				t.Helper()
+				assert.Equal(t, "ExePathOverride.tjs", resources.ExePathOverrideFile)
+			},
+		},
+		{
+			name: "system/へ書き込むときの名前はPolyfillInitialize.tjsが読む小文字名である",
+			check: func(t *testing.T) {
+				t.Helper()
+				assert.Equal(t, "exepathoverride.tjs", resources.ExePathOverrideStorage)
+			},
+		},
+		{
+			name: "常にコピーする一覧には含まれない",
+			check: func(t *testing.T) {
+				t.Helper()
+				assert.NotContains(t, resources.SystemPolyfillFiles, resources.ExePathOverrideFile)
+			},
+		},
+		{
+			name: "日本語コメントを含むため先頭にUTF-8のBOMを持つ",
+			check: func(t *testing.T) {
+				t.Helper()
+				assert.True(t, bytes.HasPrefix(data, utf8BOM), "UTF-8のBOMが先頭にありません")
+			},
+		},
+		{
+			name: "System.exePathをdeleteしてからfile://./data/を代入する",
+			check: func(t *testing.T) {
+				t.Helper()
+				deleteAt := strings.Index(content, "\ndelete System.exePath;\n")
+				assignAt := strings.Index(content, "\nSystem.exePath = \"file://./data/\";\n")
+				require.NotEqual(t, -1, deleteAt, "delete文がありません")
+				require.NotEqual(t, -1, assignAt, "代入文がありません")
+				assert.Less(t, deleteAt, assignAt, "代入の前にdeleteする必要があります")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.check(t)
+		})
+	}
+}
+
+// TestSystemPolyfillFS_PolyfillInitializeRunsExePathOverride は
+// PolyfillInitialize.tjsがexepathoverride.tjsを、存在するときだけ、
+// KirikiriPolyfillRootの決定後かつ他のpolyfill読み込みより前に実行することを
+// 文字列として確認する（TJSをこのテスト環境で実行できないため）。
+func TestSystemPolyfillFS_PolyfillInitializeRunsExePathOverride(t *testing.T) {
+	t.Parallel()
+
+	data, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/PolyfillInitialize.tjs")
+	require.NoError(t, err)
+	content := string(data)
+
+	guarded := "\tif (global.Storages.isExistentStorage(global.KirikiriPolyfillRoot + \"exepathoverride.tjs\"))\n" +
+		"\t{\n" +
+		"\t\tglobal.Scripts.execStorage(global.KirikiriPolyfillRoot + \"exepathoverride.tjs\");\n" +
+		"\t}\n"
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "存在確認で囲んだexecStorageを含む",
+			check: func(t *testing.T) {
+				t.Helper()
+				assert.Contains(t, content, guarded)
+				assert.Equal(t, 1, strings.Count(content, "exepathoverride.tjs\");"), "execStorageは1箇所だけ")
+			},
+		},
+		{
+			name: "KirikiriPolyfillRootの既定値を設定した後に実行する",
+			check: func(t *testing.T) {
+				t.Helper()
+				rootAt := strings.Index(content, "global.KirikiriPolyfillRoot = \"system/\";")
+				guardAt := strings.Index(content, guarded)
+				require.NotEqual(t, -1, rootAt)
+				require.NotEqual(t, -1, guardAt)
+				assert.Less(t, rootAt, guardAt)
+			},
+		},
+		{
+			name: "他のpolyfill読み込み・プラグインリンクより前に実行する",
+			check: func(t *testing.T) {
+				t.Helper()
+				guardAt := strings.Index(content, guarded)
+				require.NotEqual(t, -1, guardAt)
+				for _, other := range []string{"Plugins.link(", "menuitem_stub.tjs", "kagparser.tjs"} {
+					otherAt := strings.Index(content, other)
+					require.NotEqual(t, -1, otherAt, other)
+					assert.Less(t, guardAt, otherAt, other)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.check(t)
 		})
 	}
 }

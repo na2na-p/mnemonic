@@ -65,6 +65,22 @@ go build -o mnemonic ./cmd/mnemonic
 mnemonic build <input.exe> -o <output.apk>
 ```
 
+入力にはゲームの `.exe` か `.xp3` を1つ指定する。Windows版の吉里吉里は `.exe` と
+同じフォルダの `content-data` フォルダ、`data.xp3`、`data.exe`、`.exe` に埋め込まれた
+XP3アーカイブ、`data` フォルダの順に確かめ、最初に見つかったものを読み込む。
+mnemonicは `.exe` を指定されると、同じフォルダの `data.xp3` があればそれを、無ければ
+`.exe` に埋め込まれたXP3アーカイブを使う。`content-data` フォルダと `data.exe` には
+対応しておらず、Windows版がそちらを読み込む場合は警告する。`data.xp3` も埋め込み
+アーカイブも無い場合（`data` フォルダだけのゲームなど）はエラーになる。
+
+`.exe` か `data.xp3` を指定した場合、同じフォルダにある他の `.xp3` ファイル
+（`patch.xp3`、`bgm.xp3`、`voice.xp3` など）はすべて変換してAPKに同梱する。
+どれを読み込むかは、Windows版と同じくゲームのスクリプトが決める。
+大きなアーカイブ（数GBの `voice.xp3` など）があるとビルドに時間がかかり、
+一時ディレクトリにも展開後のサイズに比例した空き容量が必要になる。
+APKに含めたくないアーカイブは、ビルドの前にフォルダから移しておく。
+`data.xp3` 以外の名前の `.xp3` を指定した場合は、そのアーカイブだけをAPKに含める。
+
 `mnemonic build --help` の出力:
 
 <!-- build-help:start -->

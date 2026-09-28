@@ -106,11 +106,20 @@ func (nopLogger) Debug(string)   {}
 // 直接書き換える必要がある。値で渡すことで流れが引数と戻り値に現れ、各フェーズを
 // 引数だけでテストできる。
 type buildArtifacts struct {
+	archive       startupArchive
 	extractDir    string
 	convertDir    string
 	projectDir    string
 	unsignedAPK   string
 	gameStructure *parser.GameStructure
+
+	// secondaries は起動アーカイブと一緒にAPKへ同梱する同じフォルダの.xp3ファイル。
+	secondaries []secondaryArchive
+
+	// shipsSecondaryArchives は起動アーカイブ以外のXP3アーカイブを1つ以上
+	// APKへ同梱したかを表す。CONVERTフェーズが決め、trueのときだけ
+	// system/exepathoverride.tjsを書く。
+	shipsSecondaryArchives bool
 }
 
 // NewBuildPipeline はconfigをもとにBuildPipelineを初期化する。

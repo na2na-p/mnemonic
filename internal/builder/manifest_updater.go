@@ -98,7 +98,7 @@ func (u *manifestUpdater) Update(packageName string) error {
 
 	// 起動activityはforkActivityClassName（パッケージ名書き換えのみで
 	// 素通し出力されるfork版クラス）ではなく、mnemonic独自機能
-	// （アセットコピー等）を実装するgameActivityClassNameを起動させる
+	// （起動引数設定等）を実装するgameActivityClassNameを起動させる
 	// 必要がある。activityNameForkClassPattern・rewriteActivityName参照。
 	text = activityNameForkClassPattern.ReplaceAllStringFunc(text, func(match string) string {
 		return rewriteActivityName(match, packageName)

@@ -36,37 +36,57 @@ var ErrInsufficientDiskSpace = errors.New("一時ディレクトリの空き容�
 // （オフラインモードで未取得の場合など）のエラー。
 var ErrTemplateUnavailable = errors.New("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-// executeAnalyze はANALYZEフェーズを実行する: EXEの入力がXP3アーカイブを
-// 埋め込んでいるかを確認する。
+// executeAnalyze はANALYZEフェーズを実行する: 展開するXP3アーカイブと
+// 同梱する同じフォルダの.xp3ファイルをresolveStartupArchiveで選び、EXEと同じ
+// フォルダのdata.xp3を選んだこと、同梱する.xp3ファイル、Windows版が代わりに
+// 読み込むものがあること、読まない.xp3ファイルと同梱しないものを知らせる。
 //
 // why not: XP3の暗号化を索引から判定しない。krkrzのゲーム固有の暗号化は読み出し後に
 // 施されるフィルタ（base/XP3Archive.cpp のTVPXP3ArchiveExtractionFilter）であり、
 // 索引には現れない。infoのflagsのビット31は展開ツールからの保護の印
 // （TVP_XP3_FILE_PROTECTED）であって、krkrzは既定でこれを無視して読む。
 func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error) {
-	if strings.ToLower(filepath.Ext(b.config.InputPath)) != ".exe" {
-		return a, nil
-	}
-
-	extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
+	archive, err := resolveStartupArchive(b.config.InputPath)
 	if err != nil {
 		return a, err
 	}
+	a.archive = archive
 
-	_, found, err := extractor.FindEmbeddedXP3()
-	if err != nil {
-		return a, err
+	if archive.adjacent {
+		unused := ""
+		if archive.embeddedUnused {
+			unused = "（EXEに埋め込まれたXP3アーカイブは使いません）"
+		}
+		b.log().Info(fmt.Sprintf("EXEと同じフォルダの%sを読み込みます%s: %s", filepath.Base(archive.path), unused, archive.path))
 	}
-	if !found {
-		return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
+	if archive.windowsLoads != "" {
+		packaged := filepath.Base(archive.path)
+		if archive.embedded {
+			packaged += "に埋め込まれたXP3アーカイブ"
+		}
+		b.log().Warning(fmt.Sprintf("Windows版は同じフォルダの%sを読み込みますが、APKには%sの内容を含めます", archive.windowsLoads, packaged))
+	}
+	if len(archive.secondaries) > 0 {
+		b.log().Info(fmt.Sprintf("%sと同じフォルダで見つかった次のXP3アーカイブを変換します: %s",
+			filepath.Base(archive.path), strings.Join(archive.secondaries, ", ")))
+	}
+	if len(archive.ignored) > 0 {
+		b.log().Warning(fmt.Sprintf("%sと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: %s",
+			filepath.Base(archive.path), strings.Join(archive.ignored, ", ")))
+	}
+	if len(archive.unbundled) > 0 {
+		b.log().Warning(fmt.Sprintf("%sと同じフォルダの次のものはAPKに含まれません（Windows版ではゲームが読み込むことがあります）: %s",
+			filepath.Base(archive.path), strings.Join(archive.unbundled, ", ")))
 	}
 
 	return a, nil
 }
 
-// executeExtract はEXTRACTフェーズを実行する: XP3アーカイブを展開し、
-// ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を抽出してから展開する。
-// 展開の前に、必要な容量が一時ディレクトリの空き容量に収まるかを確認する
+// executeExtract はEXTRACTフェーズを実行する: ANALYZEフェーズで選んだXP3
+// アーカイブ（a.archive）を展開し、ゲーム構造を解析する。埋め込みXP3の場合は
+// 展開先とは別の一時ディレクトリへ抽出してから展開する。同梱する.xp3ファイルは
+// 読み込むだけで、展開はCONVERTフェーズで行う。展開の前に、同梱する.xp3ファイルも
+// 合わせて必要な容量が一時ディレクトリの空き容量に収まるかを確認する
 // （checkExtractSpace）。
 func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error) {
 	extractDir, err := b.newTempDir("mnemonic_extract_")
@@ -75,27 +95,30 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 	}
 	a.extractDir = extractDir
 
-	archivePaths := []string{b.config.InputPath}
-	var embeddedSizes []int64
+	archivePaths := []string{a.archive.path}
 
-	if strings.ToLower(filepath.Ext(b.config.InputPath)) == ".exe" {
-		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
+	if a.archive.embedded {
+		extractor, err := parser.NewEmbeddedXP3Extractor(a.archive.path)
 		if err != nil {
 			return a, err
 		}
 
-		embeddedPath, found, err := extractor.Extract(extractDir)
+		// why not: 抽出したXP3をextractDirへ書き出さない。extractDirの中身は
+		// CONVERTフェーズのcopyTreeでconvertDirへ、BUILDフェーズでconvertDirから
+		// assets/dataへそのまま写されるため、展開後は使わないアーカイブがAPKに
+		// 入る。
+		embeddedDir, err := b.newTempDir("mnemonic_embedded_")
+		if err != nil {
+			return a, err
+		}
+
+		embeddedPath, found, err := extractor.Extract(embeddedDir)
 		if err != nil {
 			return a, err
 		}
 		archivePaths = nil
 		if found {
 			archivePaths = []string{embeddedPath}
-		}
-
-		embeddedSizes, err = fileSizes(archivePaths)
-		if err != nil {
-			return a, err
 		}
 	}
 
@@ -110,7 +133,16 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 		planned = append(planned, archive.PlannedOutputSize())
 	}
 
-	if err := b.checkExtractSpace(extractDir, requiredExtractSpace(planned, embeddedSizes)); err != nil {
+	secondaryDir := filepath.Dir(a.archive.path)
+	secondaries, err := openSecondaryArchives(secondaryDir, a.archive.secondaries)
+	if err != nil {
+		return a, err
+	}
+	for _, s := range secondaries {
+		planned = append(planned, s.archive.PlannedOutputSize())
+	}
+
+	if err := b.checkExtractSpace(extractDir, requiredExtractSpace(planned)); err != nil {
 		return a, err
 	}
 
@@ -119,6 +151,11 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 			return a, err
 		}
 	}
+
+	if err := checkSecondaryRootConflict(extractDir, secondaryDir, secondaries); err != nil {
+		return a, err
+	}
+	a.secondaries = secondaries
 
 	detector, err := parser.NewGameDetector(extractDir)
 	if err != nil {
@@ -135,11 +172,19 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 }
 
 // extractFootprintCopies は、展開結果がRunの終了まで一時ディレクトリの
-// ファイルシステム上に同時に置かれる数。extractDir、そのcopyTreeによる複製で
-// あるconvertDir、convertDirをBUILDフェーズでprojectDirのassetsへ写した複製の
-// 3つで、いずれもRun終了時のcleanupTempDirsまで削除されない。3つのディレクトリは
+// ファイルシステム上に同時に置かれる数の上限。起動アーカイブではextractDir、
+// そのcopyTreeによる複製であるconvertDir、convertDirをBUILDフェーズでprojectDirの
+// assetsへ写した複製の3つで、いずれもRun終了時のcleanupTempDirsまで削除されない。
+// 同梱する.xp3ファイルでは専用の展開ツリー、その複製である変換ツリー、詰め直した
+// XP3の3つが同時に置かれ、展開ツリーと変換ツリーは詰め直した直後に消す。
+// 詰め直したXP3はconvertDirへ名前の変更で移り、BUILDフェーズでassetsへ1つ
+// 複製されるので、この時点でも2つである。これらのディレクトリは
 // どれもnewTempDirがos.MkdirTemp("", ...)で作るため、同じos.TempDir()の下、
 // つまり容量を確認するextractDirと同じファイルシステムに置かれる。
+//
+// why not: EXEから抽出した埋め込みXP3は数えない。展開先とは別の一時ディレクトリに
+// 1つだけ置かれて複製されず、容量確認の時点で書き出し済みのため、確認時点の
+// 空き容量から既に差し引かれている。
 //
 // why not: Gradleのビルド中間生成物とAPK、projectDirへ展開するテンプレートと
 // ダウンロードするSDL2のソースは数えない。前者の量はGradleとAndroid Gradle
@@ -147,19 +192,15 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 // からは導けないため。変換によるサイズの増減も変換前には分からないため数えない。
 const extractFootprintCopies = 3
 
-// requiredExtractSpace は、アーカイブごとの展開結果の見積もりplannedと、容量確認の
-// 時点で一時ディレクトリへ書き出し済みのファイルのサイズwrittenから、確認時点以降に
-// 必要な空き容量を返す。writtenは展開結果と同じくextractFootprintCopies個に
-// 複製されるが、1つ目は既に空き容量から差し引かれている。int64を超える場合は
-// math.MaxInt64を返す。
-func requiredExtractSpace(planned, written []int64) int64 {
-	writtenTotal := saturatingSum(written)
-	total := saturate.Add(saturatingSum(planned), writtenTotal)
+// requiredExtractSpace は、アーカイブごとの展開結果の見積もりplannedから、容量確認
+// の時点以降に必要な空き容量を返す。int64を超える場合はmath.MaxInt64を返す。
+func requiredExtractSpace(planned []int64) int64 {
+	total := saturatingSum(planned)
 	if total > math.MaxInt64/extractFootprintCopies {
 		return math.MaxInt64
 	}
 
-	return total*extractFootprintCopies - writtenTotal
+	return total * extractFootprintCopies
 }
 
 // saturatingSum は非負の値valuesの和を返す。和がint64を超える場合はmath.MaxInt64を返す。
@@ -201,23 +242,10 @@ func (b *BuildPipeline) checkExtractSpace(dir string, required int64) error {
 	return nil
 }
 
-// fileSizes はpathsの各ファイルのサイズを返す。
-func fileSizes(paths []string) ([]int64, error) {
-	sizes := make([]int64, 0, len(paths))
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("抽出したファイルの情報を取得できません: %w", err)
-		}
-		sizes = append(sizes, info.Size())
-	}
-
-	return sizes, nil
-}
-
 // executeConvert はCONVERTフェーズを実行する: 抽出されたアセットをAndroid
 // 互換形式に変換する。まず全ファイルをコピーし（ゲームコアファイルを含む）、
-// その後変換対象ファイルを変換（上書き）する。
+// その後変換対象ファイルを変換（上書き）する。同梱する.xp3ファイルは1つずつ
+// 変換してXP3に詰め直し、起動アーカイブの後処理の後でconvertDirの直下へ置く。
 func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error) {
 	if a.extractDir == "" {
 		return a, errors.New("抽出フェーズが完了していません")
@@ -233,6 +261,35 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 		return a, err
 	}
 
+	summary, err := b.convertAssets(a.extractDir, a.convertDir)
+	if err != nil {
+		return a, err
+	}
+
+	midiConverter := b.newMidiConverter()
+	staged, err := b.packSecondaryArchives(a.secondaries, a.convertDir, midiConverter)
+	if err != nil {
+		return a, err
+	}
+	a.shipsSecondaryArchives = len(staged) > 0
+	if a.shipsSecondaryArchives {
+		names := make([]string, 0, len(staged))
+		for _, s := range staged {
+			names = append(names, s.name)
+		}
+		b.log().Info("次のXP3アーカイブをAPKに同梱します: " + strings.Join(names, ", "))
+	}
+
+	if err := b.finalizeConvertedTree(a.convertDir, summary, midiConverter, a.shipsSecondaryArchives); err != nil {
+		return a, err
+	}
+
+	return a, placeStagedArchives(a.convertDir, staged)
+}
+
+// convertAssets はextractDirのアセットをconvertDirへ変換し、結果を報告する。
+// 変換に失敗したアセットがあればconversionFailureErrorのエラーを返す。
+func (b *BuildPipeline) convertAssets(extractDir, convertDir string) (converter.ConversionSummary, error) {
 	converters := []converter.Converter{
 		converter.NewEncodingConverter("", b.config.SourceEncoding),
 		converter.NewImageConverter(),
@@ -245,35 +302,31 @@ func (b *BuildPipeline) executeConvert(a buildArtifacts) (buildArtifacts, error)
 	manager := converter.NewConversionManager(converters, nil, 0, nil)
 
 	// why not: converter.ConvertDirectoryはsourceDir（ここではextractDir）が
-	// 存在しない場合にerrorを返す。extractDirは直前のEXTRACTフェーズが
-	// os.MkdirTempで必ず作成しているため、通常の実行経路でこのエラー分岐に
+	// 存在しない場合にerrorを返す。extractDirは呼び出し元がnewTempDir
+	// （os.MkdirTemp）で必ず作成しているため、通常の実行経路でこのエラー分岐に
 	// 到達することはない。到達するとすればextractDirが実行中に消失した異常系
 	// であり、そのケースを空サマリーで握りつぶさず、CONVERTフェーズの失敗
 	// として明示的に報告する（「エラーはerrorとして呼び出し元へ伝播する」
 	// という他フェーズと同じ契約に沿うほうが、黙って空の変換結果を返すより
 	// 安全なため）。
-	summary, err := manager.ConvertDirectory(a.extractDir, a.convertDir, true)
+	summary, err := manager.ConvertDirectory(extractDir, convertDir, true)
 	if err != nil {
-		return a, fmt.Errorf("アセット変換に失敗しました: %w", err)
+		return summary, fmt.Errorf("アセット変換に失敗しました: %w", err)
 	}
 
 	b.log().Info(fmt.Sprintf(
 		"アセット変換: 成功 %d 件 / 失敗 %d 件 / スキップ %d 件",
 		summary.Success, summary.Failed, summary.Skipped,
 	))
-	logConversionNotes(b.log(), a.extractDir, summary.Results)
+	logConversionNotes(b.log(), extractDir, summary.Results)
 
-	logPreferredSourceSkips(b.log(), a.extractDir, summary)
+	logPreferredSourceSkips(b.log(), extractDir, summary)
 
 	// why not: 変換に失敗したアセットがあってもビルドを続けると、素材が欠けた
 	// り未変換のまま残ったりしたAPKができ、原因は後段の別エラー（スクリプト
 	// 調整の失敗など）として現れて特定しにくい。後処理に進む前に、失敗した
 	// 全ファイルとその原因を報告して止める。
-	if err := conversionFailureError(a.extractDir, summary); err != nil {
-		return a, err
-	}
-
-	return a, b.finalizeConvertedTree(a.convertDir, summary, b.newMidiConverter())
+	return summary, conversionFailureError(extractDir, summary)
 }
 
 // maxReportedAssets はアセットごとの報告で1件1行に列挙する最大件数。
@@ -467,6 +520,7 @@ func (b *BuildPipeline) finalizeConvertedTree(
 	directory string,
 	summary converter.ConversionSummary,
 	midiConverter *converter.MidiConverter,
+	withExePathOverride bool,
 ) error {
 	removeStaleVideoSourceFiles(summary)
 
@@ -481,7 +535,7 @@ func (b *BuildPipeline) finalizeConvertedTree(
 	}
 
 	// krkrsdl2 polyfillファイルをコピー
-	if err := b.copyPolyfillFiles(directory); err != nil {
+	if err := b.copyPolyfillFiles(directory, withExePathOverride); err != nil {
 		return err
 	}
 

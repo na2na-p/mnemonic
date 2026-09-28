@@ -436,11 +436,16 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 // 切り詰め、値が変われば投げる。探しているチャンクを見つけた時点で戻るため、
 // 3つがそろった後ろのチャンクは読まない。
 //
-// infoから名前を得られなかった場合、またはsegmが28バイト未満などでセグメントを
-// 1つも持てなかった場合はokにfalseを返す。krkrzが読めないセグメントを持つ場合
-// （parseSegments参照）は、エントリ名を添えたエラーを返す。
+// why not: 同じ名前のサブチャンクが複数あっても、後ろのinfoで名前を上書きしたり、
+// 後ろのsegmのセグメントを継ぎ足したりしない。krkrzはinfo、segm、adlrをそれぞれ
+// Fileチャンクの先頭からFindChunkで探し、最初に一致したものだけを読む。
 //
-// why not: 名前が空のエントリやセグメントを持たないエントリはエラーにしない。
+// 最初のinfoから名前を得られなかった場合、または最初のsegmが28バイト未満などで
+// セグメントを1つも持てなかった場合はokにfalseを返す。krkrzが読めないセグメントを
+// 持つ場合（parseSegments参照）は、名前があればそれを添えたエラーを返す。名前が
+// 空のエントリで確かめるのはエンコード方式だけである。
+//
+// why not: 名前が空であること自体や、セグメントを持たないこと自体はエラーにしない。
 // krkrz は長さ0の名前も、28バイト未満のsegm（セグメント0件）も投げずに索引へ
 // 加える。
 func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
@@ -451,7 +456,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		foundInfo bool
 		foundSegm bool
 		foundAdlr bool
-		segmData  [][]byte
+		segmData  []byte
 	)
 
 	for {
@@ -470,7 +475,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		}
 
 		switch {
-		case bytes.Equal(subChunkName, []byte("info")):
+		case !foundInfo && bytes.Equal(subChunkName, []byte("info")):
 			foundInfo = true
 			infoData := readChunk(stream, subChunkSize)
 			// why not: flagsのビット31を暗号化の印として扱わない。krkrz（base/XP3Archive.h）
@@ -486,10 +491,10 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 					name = decodeUTF16LE(infoData[22 : 22+nameLen*2])
 				}
 			}
-		case bytes.Equal(subChunkName, []byte("segm")):
+		case !foundSegm && bytes.Equal(subChunkName, []byte("segm")):
 			foundSegm = true
-			segmData = append(segmData, readChunk(stream, subChunkSize))
-		case bytes.Equal(subChunkName, []byte("adlr")):
+			segmData = readChunk(stream, subChunkSize)
+		case !foundAdlr && bytes.Equal(subChunkName, []byte("adlr")):
 			foundAdlr = true
 			skipChunk(stream, subChunkSize)
 		default:
@@ -509,18 +514,21 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		return XP3FileEntry{}, false, entryError(name, "Fileチャンクにadlrサブチャンクがありません")
 	}
 	if name == "" {
+		// why not: 名前が空のエントリでもエンコード方式を確かめずには捨てない。krkrzは
+		// 名前によらず最初のsegmの全レコードを読み、方式が不明なら投げる。元サイズや
+		// 格納サイズの範囲はkrkrzが索引の読み取りで確かめないため、ここでは問わない。
+		if err := checkSegmEncodeMethods(segmData); err != nil {
+			return XP3FileEntry{}, false, err
+		}
+
 		return XP3FileEntry{}, false, nil
 	}
 
 	// why not: segmをinfoより先に見つけた時点ではパースしない。サブチャンクの順序は
 	// 決まっておらず、エラーにエントリ名を添えるにはinfoを読み終えている必要がある。
-	var segments []XP3Segment
-	for _, data := range segmData {
-		parsed, err := parseSegments(data)
-		if err != nil {
-			return XP3FileEntry{}, false, fmt.Errorf("%s: %w", name, err)
-		}
-		segments = append(segments, parsed...)
+	segments, err := parseSegments(segmData)
+	if err != nil {
+		return XP3FileEntry{}, false, fmt.Errorf("%s: %w", name, err)
 	}
 	if len(segments) == 0 {
 		return XP3FileEntry{}, false, nil
@@ -549,6 +557,8 @@ const (
 	segmEncodeZlib       = 0x01
 )
 
+const segmentRecordSize = 28
+
 // parseSegments はsegmサブチャンクのデータを28バイト単位のセグメント列としてパースする。
 //
 // why not: 宣言されたsubChunkSizeではなく、実際に読み取れたsegmData
@@ -570,7 +580,9 @@ const (
 // SetData）ため、どちらもアーカイブから満たせない。0に読み替えると空のファイルとして
 // 展開してしまう。非圧縮セグメントの格納サイズはkrkrzが読まないため範囲を問わない。
 func parseSegments(segmData []byte) ([]XP3Segment, error) {
-	const segmentRecordSize = 28
+	if err := checkSegmEncodeMethods(segmData); err != nil {
+		return nil, err
+	}
 
 	numSegments := len(segmData) / segmentRecordSize
 	if numSegments == 0 {
@@ -581,14 +593,8 @@ func parseSegments(segmData []byte) ([]XP3Segment, error) {
 	for i := range numSegments {
 		record := segmData[i*segmentRecordSize : (i+1)*segmentRecordSize]
 
-		var segment XP3Segment
-		switch binary.LittleEndian.Uint32(record[0:4]) & segmEncodeMethodMask {
-		case segmEncodeRaw:
-			segment.IsCompressed = false
-		case segmEncodeZlib:
-			segment.IsCompressed = true
-		default:
-			return nil, fmt.Errorf("セグメント%dのエンコード方式が不明です", i)
+		segment := XP3Segment{
+			IsCompressed: segmEncodeMethod(record) == segmEncodeZlib,
 		}
 
 		// why not: OffsetがsafeInt64で範囲外と判定された場合にゼロ値へ
@@ -622,6 +628,26 @@ func parseSegments(segmData []byte) ([]XP3Segment, error) {
 	}
 
 	return segments, nil
+}
+
+// checkSegmEncodeMethods はsegmDataの28バイト単位の全レコードについて、エンコード
+// 方式が0（非圧縮）か1（zlib）であることを確かめる。末尾の28バイト未満の断片は
+// parseSegmentsと同じくレコードとみなさない。
+func checkSegmEncodeMethods(segmData []byte) error {
+	for i := range len(segmData) / segmentRecordSize {
+		method := segmEncodeMethod(segmData[i*segmentRecordSize:])
+		if method != segmEncodeRaw && method != segmEncodeZlib {
+			return fmt.Errorf("セグメント%dのエンコード方式が不明です", i)
+		}
+	}
+
+	return nil
+}
+
+// segmEncodeMethod はrecordの先頭4バイトだけを読むため、後続のレコードを含む
+// スライスをそのまま渡せる。
+func segmEncodeMethod(record []byte) uint32 {
+	return binary.LittleEndian.Uint32(record[0:4]) & segmEncodeMethodMask
 }
 
 // readChunk はstreamからsizeバイトを読み取る。

@@ -18,6 +18,14 @@ with(global.Window)
 		global.KirikiriPolyfillRoot = "system/";
 	}
 
+	// why not(無条件に書き換える): System.exePathの書き換えはゲーム全体に
+	// 効くため、System.exePathを基準にアーカイブを探す必要があるビルドだけが
+	// exepathoverride.tjsを置き、それ以外のビルドでは値を変えない。
+	if (global.Storages.isExistentStorage(global.KirikiriPolyfillRoot + "exepathoverride.tjs"))
+	{
+		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "exepathoverride.tjs");
+	}
+
 	// Try loading menu.dll plugin
 	if (typeof(global.MenuItem) !== "Object")
 	{
@@ -77,11 +85,12 @@ with(global.Window)
 	// 場合にのみ読み込む(標準krkrsdl2/kirikiriZにはどちらのAPIも無く、
 	// 未提供の環境では何もしない)。
 	//
-	// why not("Object"判定): このファイル内の他の存在確認(22, 43, 64, 70,
-	// 77, 90行目)は全て`typeof(...) === "Object"`でネイティブメンバーの
-	// 有無を調べており、実行実績があるのはこの形のみ。存在しないメンバーに
-	// 対するtypeofが本当に"undefined"を返すかはこの環境で検証できないため、
-	// 実行実績のある判定式に合わせる。
+	// why not("Object"判定): このファイル内の他の存在確認(MenuItem、
+	// KAGParser、Storages.isExistentPlugin、MIDISoundBuffer、VideoOverlay、
+	// System.setArgument、Font、Font.addFont)は全て`typeof(...)`と"Object"の
+	// 比較でネイティブメンバーの有無を調べており、実行実績があるのはこの形
+	// のみ。存在しないメンバーに対するtypeofが本当に"undefined"を返すかは
+	// この環境で検証できないため、実行実績のある判定式に合わせる。
 	if (typeof(global.System.showSelectList) === "Object" && typeof(global.System.setMenuBarCallback) === "Object")
 	{
 		global.Scripts.execStorage(global.KirikiriPolyfillRoot + "menuopener.tjs");

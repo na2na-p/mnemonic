@@ -10,6 +10,30 @@ import (
 )
 
 // adjustScripts はdirectory配下の全.ks/.tjsファイルにScriptAdjusterを適用する。
+// 「このソフトについて」の表示内容はdirectory配下のabout.ksから読み、startup.tjsには
+// polyfillの読み込みを加える。
+func (b *BuildPipeline) adjustScripts(directory string) error {
+	about, err := loadAboutDialog(directory)
+	if err != nil {
+		return err
+	}
+
+	return b.adjustScriptsWith(directory, about, true)
+}
+
+// loadAboutDialog はdirectory配下のabout.ksからAboutDialogを読む。
+func loadAboutDialog(directory string) (converter.AboutDialog, error) {
+	about, err := converter.LoadAboutDialog(directory)
+	if err != nil {
+		return converter.AboutDialog{}, fmt.Errorf("スクリプトの調整に失敗しました: %w", &rootRelativeError{root: directory, err: err})
+	}
+
+	return about, nil
+}
+
+// adjustScriptsWith はdirectory配下の全.ks/.tjsファイルにScriptAdjusterを適用する。
+// aboutを「このソフトについて」の表示内容とし、withStartupDirectiveがtrueのときだけ
+// startup.tjsへpolyfillの読み込みを加える。
 //
 // why not: 大文字小文字のバリエーション（.ks/.KS/.Ks/.tjs/.TJS/.Tjs）ごとに
 // 走査を繰り返す方式も考えられるが、大文字小文字を区別しないファイル
@@ -23,18 +47,13 @@ import (
 // 登録されず動画ファイルは無変換のまま(拡張子も実体も元のまま)なので、
 // DefaultRulesのまま適用すると参照だけが.mpgへ書き換わり、実体の無い.mpgを
 // 指す参照が残る不具合になる。
-func (b *BuildPipeline) adjustScripts(directory string) error {
+func (b *BuildPipeline) adjustScriptsWith(directory string, about converter.AboutDialog, withStartupDirective bool) error {
 	var rules []converter.AdjustmentRule
 	if b.config.SkipVideo {
 		rules = converter.DefaultRulesWithoutVideoExtensions()
 	}
 
-	about, err := converter.LoadAboutDialog(directory)
-	if err != nil {
-		return fmt.Errorf("スクリプトの調整に失敗しました: %w", &rootRelativeError{root: directory, err: err})
-	}
-
-	adjuster := converter.NewScriptAdjuster(rules, true).WithAboutDialog(about)
+	adjuster := converter.NewScriptAdjuster(rules, withStartupDirective).WithAboutDialog(about)
 
 	return filepath.WalkDir(directory, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

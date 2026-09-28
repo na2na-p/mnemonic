@@ -9,7 +9,7 @@ import (
 )
 
 // javaSourceGenerator はfork版KirikiriSDL2Activity.javaを起点に、パッケージ名
-// 書き換えのみの素通しファイルと、mnemonic独自機能（アセットコピー等）を
+// 書き換えのみの素通しファイルと、mnemonic独自機能（起動引数設定等）を
 // 実装するKirikiriSDL2GameActivityサブクラスを生成する。
 type javaSourceGenerator struct {
 	projectDir string
@@ -26,7 +26,7 @@ func newJavaSourceGenerator(projectDir string) *javaSourceGenerator {
 var forkJavaSourceRelPath = filepath.Join("app", "src", "main", "java", "pw", "uyjulian", "krkrsdl2", "KirikiriSDL2Activity.java")
 
 // Generate はfork版KirikiriSDL2Activity.javaを起点にパッケージ名の書き換えのみを
-// 行った素通しファイルと、mnemonic独自機能（アセットコピー等）を実装する
+// 行った素通しファイルと、mnemonic独自機能（起動引数設定等）を実装する
 // KirikiriSDL2GameActivityサブクラスの2ファイルを、対象パッケージの
 // ディレクトリへ出力する。
 //
@@ -104,7 +104,7 @@ func (g *javaSourceGenerator) Generate(packageName string) error {
 const forkActivityClassName = "KirikiriSDL2Activity"
 
 // gameActivityClassName はforkActivityClassNameをextendsする、mnemonic独自の
-// アセットコピー・起動引数設定を実装するサブクラスのクラス名
+// 起動引数設定を実装するサブクラスのクラス名
 // （出力ファイル名にも使う）。ゲーム固有の名前やmnemonic固有の名前を含めない
 // 汎用名にすることで、生成元プロジェクトに依存しない安定した命名にする。
 const gameActivityClassName = "KirikiriSDL2GameActivity"
@@ -113,13 +113,7 @@ const gameActivityClassName = "KirikiriSDL2GameActivity"
 var mnemonicJavaImports = []string{
 	"import android.os.Bundle;",
 	"import android.content.pm.ApplicationInfo;",
-	"import android.content.res.AssetManager;",
 	"import android.util.Log;",
-	"import java.io.File;",
-	"import java.io.FileOutputStream;",
-	"import java.io.IOException;",
-	"import java.io.InputStream;",
-	"import java.io.OutputStream;",
 }
 
 // gameActivityMembers はKirikiriSDL2GameActivityのクラス本体
@@ -127,7 +121,6 @@ var mnemonicJavaImports = []string{
 // そのまま出力される。
 const gameActivityMembers = `
     private static final String TAG = "KirikiriSDL2";
-    private static final String ASSETS_DATA_DIR = "data";
     private static String sNativeLibDir = null;
 
     @Override
@@ -136,7 +129,6 @@ const gameActivityMembers = `
         sNativeLibDir = getApplicationInfo().nativeLibraryDir;
         Log.i(TAG, "Native library directory: " + sNativeLibDir);
 
-        copyAssetsToInternal();
         super.onCreate(savedInstanceState);
     }
 
@@ -168,89 +160,6 @@ const gameActivityMembers = `
             "-cpusse2=no"
         };
     }
-
-    /**
-     * assets/data/配下のファイルを内部ストレージにコピーする
-     * 既存ファイルはスキップする（初回のみコピー）
-     */
-    private void copyAssetsToInternal() {
-        AssetManager assetManager = getAssets();
-        File destDir = getFilesDir();
-
-        try {
-            copyAssetFolder(assetManager, ASSETS_DATA_DIR, destDir);
-            Log.i(TAG, "Assets copied to: " + destDir.getAbsolutePath());
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to copy assets", e);
-        }
-    }
-
-    /**
-     * アセットフォルダを再帰的にコピーする
-     *
-     * @param assetManager アセットマネージャー
-     * @param srcPath コピー元のアセットパス
-     * @param destDir コピー先のディレクトリ
-     * @throws IOException コピーに失敗した場合
-     */
-    private void copyAssetFolder(AssetManager assetManager, String srcPath, File destDir)
-            throws IOException {
-        String[] files = assetManager.list(srcPath);
-        if (files == null || files.length == 0) {
-            // ファイルの場合
-            copyAssetFile(assetManager, srcPath, destDir);
-            return;
-        }
-
-        // ディレクトリの場合
-        for (String file : files) {
-            String srcFilePath = srcPath + "/" + file;
-            File destFile = new File(destDir, file);
-
-            String[] subFiles = assetManager.list(srcFilePath);
-            if (subFiles != null && subFiles.length > 0) {
-                // サブディレクトリ
-                destFile.mkdirs();
-                copyAssetFolder(assetManager, srcFilePath, destFile);
-            } else {
-                // ファイル
-                copyAssetFile(assetManager, srcFilePath, destDir);
-            }
-        }
-    }
-
-    /**
-     * アセットファイルを単一コピーする
-     * 既に存在するファイルはスキップする
-     *
-     * @param assetManager アセットマネージャー
-     * @param srcPath コピー元のアセットパス
-     * @param destDir コピー先のディレクトリ
-     * @throws IOException コピーに失敗した場合
-     */
-    private void copyAssetFile(AssetManager assetManager, String srcPath, File destDir)
-            throws IOException {
-        String fileName = srcPath.contains("/")
-                ? srcPath.substring(srcPath.lastIndexOf("/") + 1)
-                : srcPath;
-        File destFile = new File(destDir, fileName);
-
-        // 既存ファイルはスキップ
-        if (destFile.exists()) {
-            return;
-        }
-
-        destFile.getParentFile().mkdirs();
-
-        try (InputStream in = assetManager.open(srcPath);
-             OutputStream out = new FileOutputStream(destFile)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                out.write(buffer, 0, read);
-            }
-        }
-    }
 `
 
 // javaPackageDeclPattern はJavaソース先頭のpackage宣言にマッチする。
@@ -262,7 +171,7 @@ var javaPackageNamePattern = regexp.MustCompile(`^[A-Za-z_][\w.]*$`)
 // generateActivityJava はfork版KirikiriSDL2Activity.javaのソース(forkSource)を
 // パッケージ名の書き換えのみで素通しする。
 //
-// why not: mnemonic独自メンバ（アセットコピー等）をここに注入する方式は、
+// why not: mnemonic独自メンバ（起動引数設定等）をここに注入する方式は、
 // fork側が独自にonCreateをオーバーライドした場合（krkrsdl2 fork側で
 // WindowInsetsリスナー登録のため実際に追加された）にjavacのメソッド
 // 二重定義エラーを起こす。mnemonic独自機能はgenerateGameActivityJavaが
@@ -283,8 +192,8 @@ func generateActivityJava(forkSource, packageName string) (string, error) {
 // KirikiriSDL2Activity.java（パッケージ名書き換えのみで素通し出力される。
 // generateActivityJava参照）へ直接注入すると、fork側が独自にonCreateを
 // オーバーライドした場合にjavacのメソッド二重定義エラーになる。onCreateは
-// アセットコピー後にsuper.onCreate()を呼ぶ構成にすることで、fork側の
-// onCreate（存在する場合）へ連鎖させる。
+// ネイティブライブラリディレクトリの記録後にsuper.onCreate()を呼ぶ構成に
+// することで、fork側のonCreate（存在する場合）へ連鎖させる。
 //
 // why not（JNI互換性）: krkrsdl2ネイティブはSDL_AndroidGetActivity()で
 // 得たjobjectをGetObjectClassに渡して実行時クラス（このサブクラス）を
@@ -297,8 +206,7 @@ func generateActivityJava(forkSource, packageName string) (string, error) {
 const gameActivityClassJavadoc = `/**
  * KirikiriSDL2用のメインアクティビティ
  *
- * アプリ起動時にassets/data/配下のゲームファイルを
- * 内部ストレージにコピーしてkrkrsdl2が読み込めるようにする。
+ * krkrsdl2へプラグイン検索パスと互換性向上のための起動引数を渡す。
  */
 `
 
