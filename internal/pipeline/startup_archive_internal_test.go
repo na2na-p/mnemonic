@@ -28,7 +28,10 @@ func TestResolveStartupArchive(t *testing.T) {
 		wantUnused   bool
 		wantWindows  string
 		wantIgnored  []string
-		wantErr      string
+		// wantSecondaries は同梱する.xp3ファイルの名前、wantUnbundledは同梱しないものの表示名。
+		wantSecondaries []string
+		wantUnbundled   []string
+		wantErr         string
 	}{
 		{
 			name:     "正常系: XP3の入力はそのまま展開する",
@@ -37,7 +40,7 @@ func TestResolveStartupArchive(t *testing.T) {
 			wantPath: "data.xp3",
 		},
 		{
-			name:  "正常系: XP3の入力と同じフォルダの他の.xp3ファイルだけを名前順に読まないものとして返す",
+			name:  "正常系: data.xp3の入力と同じフォルダの他の.xp3ファイルだけを名前順に同梱するものとして返す",
 			input: "data.xp3",
 			files: map[string][]byte{
 				"data.xp3":   archive,
@@ -45,9 +48,50 @@ func TestResolveStartupArchive(t *testing.T) {
 				"patch.xp3":  archive,
 				"readme.txt": []byte("readme"),
 			},
-			dirs:        []string{"bgm.xp3"},
-			wantPath:    "data.xp3",
-			wantIgnored: []string{"patch.xp3", "voice.XP3"},
+			dirs:            []string{"bgm.xp3"},
+			wantPath:        "data.xp3",
+			wantSecondaries: []string{"patch.xp3", "voice.XP3"},
+		},
+		{
+			name:            "正常系: data.xp3の入力の名前は大文字小文字を区別しない",
+			input:           "DATA.xp3",
+			files:           map[string][]byte{"DATA.xp3": archive, "patch.xp3": archive},
+			wantPath:        "DATA.xp3",
+			wantSecondaries: []string{"patch.xp3"},
+		},
+		{
+			name:        "正常系: data.xp3以外の名前のXP3の入力は同じフォルダの.xp3ファイルを同梱せず読まないものとして返す",
+			input:       "game_0.xp3",
+			files:       map[string][]byte{"game_0.xp3": archive, "patch.xp3": archive, "Override2.tjs": []byte("//")},
+			dirs:        []string{"video"},
+			wantPath:    "game_0.xp3",
+			wantIgnored: []string{"patch.xp3"},
+		},
+		{
+			name:  "正常系: サブフォルダ直下の.xp3とEXEの横のOverride2.tjs・AfterInit2.tjs・videoフォルダは同梱しないものとして返す",
+			input: "game.exe",
+			files: map[string][]byte{
+				"game.exe":           plainExe,
+				"data.xp3":           archive,
+				"Override2.tjs":      []byte("//"),
+				"afterinit2.TJS":     []byte("//"),
+				"sub/extra.XP3":      archive,
+				"sub/readme.txt":     []byte("readme"),
+				"sub/deep/deep.xp3":  archive,
+				"other/override.tjs": []byte("//"),
+			},
+			dirs:          []string{"Video"},
+			wantPath:      "data.xp3",
+			wantAdjacent:  true,
+			wantUnbundled: []string{"Override2.tjs", "Videoフォルダ", "afterinit2.TJS", filepath.Join("sub", "extra.XP3")},
+		},
+		{
+			name:         "正常系: videoという名前のファイルとOverride2.tjsという名前のフォルダは同梱しないものに挙げない",
+			input:        "game.exe",
+			files:        map[string][]byte{"game.exe": plainExe, "data.xp3": archive, "video": []byte("file")},
+			dirs:         []string{"Override2.tjs"},
+			wantPath:     "data.xp3",
+			wantAdjacent: true,
 		},
 		{
 			name:         "正常系: data.xp3が無ければEXEの埋め込みXP3を展開する",
@@ -110,17 +154,17 @@ func TestResolveStartupArchive(t *testing.T) {
 				"voice.xp3": archive,
 				"patch.xp3": archive,
 			},
-			wantPath:     "data.xp3",
-			wantAdjacent: true,
-			wantIgnored:  []string{"patch.xp3", "voice.xp3"},
+			wantPath:        "data.xp3",
+			wantAdjacent:    true,
+			wantSecondaries: []string{"patch.xp3", "voice.xp3"},
 		},
 		{
-			name:         "正常系: 埋め込みXP3を選んだ場合は同じフォルダの.xp3ファイルをすべて読まないものとして返す",
-			input:        "game.exe",
-			files:        map[string][]byte{"game.exe": embeddedExe, "patch.xp3": archive},
-			wantPath:     "game.exe",
-			wantEmbedded: true,
-			wantIgnored:  []string{"patch.xp3"},
+			name:            "正常系: 埋め込みXP3を選んだ場合は同じフォルダの.xp3ファイルをすべて同梱するものとして返す",
+			input:           "game.exe",
+			files:           map[string][]byte{"game.exe": embeddedExe, "patch.xp3": archive},
+			wantPath:        "game.exe",
+			wantEmbedded:    true,
+			wantSecondaries: []string{"patch.xp3"},
 		},
 		{
 			name:         "正常系: data.xp3を選んでもcontent-dataフォルダがあればWindows版はそちらを読み込む",
@@ -229,7 +273,9 @@ func TestResolveStartupArchive(t *testing.T) {
 
 			dir := t.TempDir()
 			for name, data := range tt.files {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+				path := filepath.Join(dir, filepath.FromSlash(name))
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+				require.NoError(t, os.WriteFile(path, data, 0o600))
 			}
 			for _, name := range tt.dirs {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0o750))
@@ -252,7 +298,47 @@ func TestResolveStartupArchive(t *testing.T) {
 				embeddedUnused: tt.wantUnused,
 				windowsLoads:   tt.wantWindows,
 				ignored:        tt.wantIgnored,
+				secondaries:    tt.wantSecondaries,
+				unbundled:      tt.wantUnbundled,
 			}, got)
+		})
+	}
+}
+
+func TestCheckSecondaryNameCollision(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join("games", "sample")
+
+	tests := []struct {
+		name        string
+		names       []string
+		wantMessage string
+	}{
+		{name: "正常系: 小文字にしても重ならなければエラーにしない", names: []string{"bgm.xp3", "Patch.xp3", "voice.XP3"}},
+		{name: "正常系: 同梱するものが無ければエラーにしない", names: nil},
+		{
+			name:  "異常系: 小文字にすると同じ名前になるものを重なるものごとに挙げる",
+			names: []string{"BGM.xp3", "Patch.xp3", "bgm.XP3", "patch.xp3", "voice.xp3"},
+			wantMessage: "同梱するXP3アーカイブの名前は小文字にするため、次のものがAPKで同じ名前になります: " +
+				"BGM.xp3, bgm.XP3 / Patch.xp3, patch.xp3。" +
+				"使わない方を" + dir + "から別の場所へ移して再実行してください",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkSecondaryNameCollision(dir, tt.names)
+
+			if tt.wantMessage == "" {
+				require.NoError(t, err)
+
+				return
+			}
+			require.ErrorIs(t, err, ErrSecondaryArchiveNameCollision)
+			assert.Equal(t, ErrSecondaryArchiveNameCollision.Error()+": "+tt.wantMessage, err.Error())
 		})
 	}
 }

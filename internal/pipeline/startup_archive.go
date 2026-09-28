@@ -22,8 +22,14 @@ type startupArchive struct {
 	// windowsLoads は、Windows版がpathの代わりに読み込む同じフォルダのものの表示名。
 	// Windows版もpathを読み込む場合は空。
 	windowsLoads string
-	// ignored はpathと同じフォルダにあって展開しない.xp3ファイルの名前（名前順）。
+	// ignored はpathと同じフォルダにあって読まない.xp3ファイルの名前（名前順）。
+	// 同じフォルダの.xp3ファイルを同梱しない入力（名前がdata.xp3でないXP3）だけで使う。
 	ignored []string
+	// secondaries はpathと同じフォルダにあって変換してAPKへ同梱する.xp3ファイルの名前（名前順）。
+	secondaries []string
+	// unbundled はpathと同じフォルダにあってWindows版のゲームが読み込みうるが、
+	// APKに含めないものの表示名（findUnbundledの順）。
+	unbundled []string
 }
 
 // windowsProbe はWindows版がEXEのフォルダで確かめる名前と、それがフォルダで
@@ -65,6 +71,15 @@ var (
 // why not: 名前を大文字小文字を区別して比べない。Win32版は"data.xp3"などの
 // 文字列をパスに連結してWindowsのファイルシステムに問い合わせるため、
 // Data.XP3のような表記でも見つかる。
+//
+// EXEの入力と名前がdata.xp3のXP3の入力では、同じフォルダの他の.xp3ファイルを
+// secondariesに、Windows版のゲームが読み込みうるが同梱しないものをunbundledに入れる。
+// secondariesに小文字にすると同じ名前になるものがあればエラーを返す。
+// それ以外のXP3の入力では、同じフォルダの他の.xp3ファイルをignoredに入れる。
+//
+// why not: 名前がdata.xp3でないXP3の入力では同じフォルダの.xp3ファイルを同梱しない。
+// EXEから取り出した埋め込みアーカイブのように、ゲームのフォルダの外で単独で
+// 扱われているアーカイブでは、同じフォルダの.xp3ファイルが同じゲームのものとは限らない。
 func resolveStartupArchive(inputPath string) (startupArchive, error) {
 	dir := filepath.Dir(inputPath)
 	entries, err := os.ReadDir(dir)
@@ -109,16 +124,28 @@ func resolveStartupArchive(inputPath string) (startupArchive, error) {
 	if err != nil {
 		return startupArchive{}, fmt.Errorf("アーカイブの情報を取得できません: %w", err)
 	}
+	var siblings []string
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.EqualFold(filepath.Ext(name), ".xp3") {
 			continue
 		}
 		info, err := os.Stat(filepath.Join(dir, name))
-		if err == nil && !info.IsDir() && !os.SameFile(info, chosenInfo) {
-			chosen.ignored = append(chosen.ignored, name)
+		if err == nil && info.Mode().IsRegular() && !os.SameFile(info, chosenInfo) {
+			siblings = append(siblings, name)
 		}
 	}
+
+	if !strings.EqualFold(filepath.Ext(inputPath), ".exe") && !strings.EqualFold(filepath.Base(inputPath), probeDataXP3.name) {
+		chosen.ignored = siblings
+
+		return chosen, nil
+	}
+	if err := checkSecondaryNameCollision(dir, siblings); err != nil {
+		return startupArchive{}, err
+	}
+	chosen.secondaries = siblings
+	chosen.unbundled = findUnbundled(dir, entries)
 
 	return chosen, nil
 }

@@ -113,8 +113,12 @@ type buildArtifacts struct {
 	unsignedAPK   string
 	gameStructure *parser.GameStructure
 
-	// shipsSecondaryArchives は起動アーカイブ以外のXP3アーカイブもAPKへ
-	// 同梱するかを表す。trueのときだけsystem/exepathoverride.tjsを書く。
+	// secondaries は起動アーカイブと一緒にAPKへ同梱する同じフォルダの.xp3ファイル。
+	secondaries []secondaryArchive
+
+	// shipsSecondaryArchives は起動アーカイブ以外のXP3アーカイブを1つ以上
+	// APKへ同梱したかを表す。CONVERTフェーズが決め、trueのときだけ
+	// system/exepathoverride.tjsを書く。
 	shipsSecondaryArchives bool
 }
 

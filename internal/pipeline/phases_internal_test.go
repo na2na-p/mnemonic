@@ -209,55 +209,6 @@ func TestBuildPipeline_FinalizeConvertedTree_ExePathOverride(t *testing.T) {
 	}
 }
 
-// TestBuildPipeline_ExecuteConvert_ExePathOverride は、CONVERTフェーズが
-// buildArtifacts.shipsSecondaryArchivesに従ってsystem/exepathoverride.tjsを
-// 書くかどうかを決めることを固定する。
-//
-// why not: extractDirにsystem/font.ttfを置かないと、copyFontFileが既定の
-// FontFetcher経由で実キャッシュや実ネットワークに触れる。copyTreeで
-// convertDirへ写させ、既存ファイルのガードで早期に戻らせる。
-func TestBuildPipeline_ExecuteConvert_ExePathOverride(t *testing.T) {
-	t.Parallel()
-
-	want, err := resources.SystemPolyfillFS.ReadFile("system_polyfill/" + resources.ExePathOverrideFile)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name                   string
-		shipsSecondaryArchives bool
-		wantPresent            bool
-	}{
-		{name: "正常系: 副アーカイブを同梱しなければ書かない", shipsSecondaryArchives: false, wantPresent: false},
-		{name: "正常系: 副アーカイブを同梱すれば埋め込みの内容を書く", shipsSecondaryArchives: true, wantPresent: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			extractDir := t.TempDir()
-			require.NoError(t, os.MkdirAll(filepath.Join(extractDir, "system"), 0o750))
-			require.NoError(t, os.WriteFile(filepath.Join(extractDir, "system", "font.ttf"), []byte("stub font"), 0o600))
-
-			p := newTestPipeline(t)
-			t.Cleanup(p.cleanupTempDirs)
-
-			a, err := p.executeConvert(buildArtifacts{extractDir: extractDir, shipsSecondaryArchives: tt.shipsSecondaryArchives})
-			require.NoError(t, err)
-
-			overridePath := filepath.Join(a.convertDir, "system", "exepathoverride.tjs")
-			if !tt.wantPresent {
-				assert.NoFileExists(t, overridePath)
-
-				return
-			}
-			got, readErr := os.ReadFile(overridePath) //nolint:gosec // テストで自身が書き出した一時ファイルを読む用途のため妥当
-			require.NoError(t, readErr)
-			assert.Equal(t, want, got)
-		})
-	}
-}
-
 // TestBuildPipeline_NewMidiConverter はConfig.SoundfontPathがMIDI変換器へ
 // 引き渡されることを検証する（--soundfontフラグの経路の終端）。
 func TestBuildPipeline_NewMidiConverter(t *testing.T) {
@@ -692,6 +643,7 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 		name        string
 		inputName   string
 		input       []byte
+		siblings    map[string][]byte
 		freeSpace   func(string) (uint64, error)
 		wantErr     error
 		wantMessage string
@@ -741,6 +693,25 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 			wantFiles: []string{"startup.tjs"},
 		},
 		{
+			name:      "正常系: 同梱する.xp3ファイルの展開結果も合わせた3つ分ちょうどなら起動アーカイブだけを展開する",
+			inputName: "data.xp3",
+			input:     archive,
+			siblings:  map[string][]byte{"patch.xp3": secondArchive},
+			freeSpace: fixedFree(3 * 2 * planned),
+			wantFiles: []string{"startup.tjs"},
+		},
+		{
+			name:        "異常系: 同梱する.xp3ファイルの展開結果も合わせた3つ分に1バイト足りなければ何も展開せずにエラーを返す",
+			inputName:   "data.xp3",
+			input:       archive,
+			siblings:    map[string][]byte{"patch.xp3": secondArchive},
+			freeSpace:   fixedFree(3*2*planned - 1),
+			wantErr:     ErrInsufficientDiskSpace,
+			wantMessage: "展開に必要な容量 600 B が一時ディレクトリ ",
+			wantFree:    3*2*planned - 1,
+			wantFiles:   []string{},
+		},
+		{
 			name:      "正常系: 空き容量が非常に大きくても比較できる",
 			inputName: "data.xp3",
 			input:     archive,
@@ -764,6 +735,9 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 			dir := t.TempDir()
 			input := filepath.Join(dir, tt.inputName)
 			require.NoError(t, os.WriteFile(input, tt.input, 0o600))
+			for name, data := range tt.siblings {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+			}
 
 			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
 			t.Cleanup(p.cleanupTempDirs)
@@ -950,13 +924,13 @@ func TestBuildPipeline_ExecuteAnalyze_ChoosesStartupArchive(t *testing.T) {
 			wantWarnings: []string{"Windows版は同じフォルダのcontent-dataフォルダを読み込みますが、APKにはdata.xp3の内容を含めます"},
 		},
 		{
-			name:        "正常系: Windows版が埋め込みXP3の代わりにdata.exeを読み込む場合は警告し、続けて展開しない.xp3ファイルを警告する",
+			name:        "正常系: Windows版が埋め込みXP3の代わりにdata.exeを読み込む場合は警告し、同梱する.xp3ファイルを知らせる",
 			input:       "game.exe",
 			files:       map[string][]byte{"game.exe": embeddedExe, "data.exe": plainExe, "patch.xp3": dataArchive},
 			wantStartup: "// embedded",
+			wantInfo:    []string{"game.exeと同じフォルダで見つかった次のXP3アーカイブを変換します: patch.xp3"},
 			wantWarnings: []string{
 				"Windows版は同じフォルダのdata.exeを読み込みますが、APKにはgame.exeに埋め込まれたXP3アーカイブの内容を含めます",
-				"game.exeと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3",
 			},
 		},
 		{
@@ -966,7 +940,7 @@ func TestBuildPipeline_ExecuteAnalyze_ChoosesStartupArchive(t *testing.T) {
 			wantStartup: "// embedded",
 		},
 		{
-			name:  "正常系: 展開しない.xp3ファイルを1行の警告で知らせる",
+			name:  "正常系: 同梱する.xp3ファイルを1行で知らせる",
 			input: "game.exe",
 			files: map[string][]byte{
 				"game.exe":  plainExe,
@@ -974,23 +948,49 @@ func TestBuildPipeline_ExecuteAnalyze_ChoosesStartupArchive(t *testing.T) {
 				"voice.xp3": dataArchive,
 				"patch.xp3": dataArchive,
 			},
-			wantStartup:  "// data",
-			wantInfo:     []string{"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3"},
-			wantWarnings: []string{"data.xp3と同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3, voice.xp3"},
+			wantStartup: "// data",
+			wantInfo: []string{
+				"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3",
+				"data.xp3と同じフォルダで見つかった次のXP3アーカイブを変換します: patch.xp3, voice.xp3",
+			},
 		},
 		{
-			name:         "正常系: 埋め込みXP3を展開する場合も同じフォルダの.xp3ファイルを警告する",
-			input:        "game.exe",
-			files:        map[string][]byte{"game.exe": embeddedExe, "patch.xp3": dataArchive},
-			wantStartup:  "// embedded",
-			wantWarnings: []string{"game.exeと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3"},
+			name:        "正常系: 埋め込みXP3を展開する場合も同じフォルダの.xp3ファイルを同梱することを知らせる",
+			input:       "game.exe",
+			files:       map[string][]byte{"game.exe": embeddedExe, "patch.xp3": dataArchive},
+			wantStartup: "// embedded",
+			wantInfo:    []string{"game.exeと同じフォルダで見つかった次のXP3アーカイブを変換します: patch.xp3"},
 		},
 		{
-			name:         "正常系: XP3の入力でも同じフォルダの他の.xp3ファイルを警告する",
-			input:        "data.xp3",
-			files:        map[string][]byte{"data.xp3": dataArchive, "bgm.xp3": dataArchive},
+			name:        "正常系: data.xp3の入力でも同じフォルダの他の.xp3ファイルを同梱することを知らせる",
+			input:       "data.xp3",
+			files:       map[string][]byte{"data.xp3": dataArchive, "bgm.xp3": dataArchive},
+			wantStartup: "// data",
+			wantInfo:    []string{"data.xp3と同じフォルダで見つかった次のXP3アーカイブを変換します: bgm.xp3"},
+		},
+		{
+			name:         "正常系: data.xp3以外の名前のXP3の入力では同じフォルダの他の.xp3ファイルを読まないことを警告する",
+			input:        "game_0.xp3",
+			files:        map[string][]byte{"game_0.xp3": dataArchive, "bgm.xp3": dataArchive},
 			wantStartup:  "// data",
-			wantWarnings: []string{"data.xp3と同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: bgm.xp3"},
+			wantWarnings: []string{"game_0.xp3と同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: bgm.xp3"},
+		},
+		{
+			name:  "正常系: 同梱しないサブフォルダの.xp3とEXEの横のファイル・フォルダを1行で警告する",
+			input: "game.exe",
+			files: map[string][]byte{
+				"game.exe":       plainExe,
+				"data.xp3":       dataArchive,
+				"AfterInit2.tjs": []byte("//"),
+				"sub/extra.xp3":  dataArchive,
+			},
+			dirs:        []string{"video"},
+			wantStartup: "// data",
+			wantInfo:    []string{"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3"},
+			wantWarnings: []string{
+				"data.xp3と同じフォルダの次のものはAPKに含まれません（Windows版ではゲームが読み込むことがあります）: " +
+					"AfterInit2.tjs, " + filepath.Join("sub", "extra.xp3") + ", videoフォルダ",
+			},
 		},
 	}
 
@@ -1000,7 +1000,9 @@ func TestBuildPipeline_ExecuteAnalyze_ChoosesStartupArchive(t *testing.T) {
 
 			dir := t.TempDir()
 			for name, data := range tt.files {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+				path := filepath.Join(dir, filepath.FromSlash(name))
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o750))
+				require.NoError(t, os.WriteFile(path, data, 0o600))
 			}
 			for _, name := range tt.dirs {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0o750))
