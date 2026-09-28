@@ -60,6 +60,20 @@ type BuildPipeline struct {
 	// 差し替え可能にする（executePhaseと同じ設計方針）。
 	freeSpace func(path string) (uint64, error)
 
+	// prepareProject はBUILDフェーズでGradleプロジェクトを用意し、その
+	// ディレクトリを返す関数。既定値はb.prepareGradleProject。プラグインと
+	// SDL2ソースはConfig.TemplateOfflineでも、キャッシュが無ければダウンロード
+	// を試みる。Gradleの失敗がResult.Errへ届く経路を
+	// ネットワークから切り離してテストできるよう差し替え可能にする
+	// （executePhaseと同じ設計方針）。
+	prepareProject func(a buildArtifacts, packageName, appName string) (string, error)
+
+	// newGradleBuilder はGradleビルドを担うgradleBuilderの生成関数。既定値は
+	// newExecGradleBuilder。実物はgradlewを実行するため、Gradle無しでBUILD
+	// フェーズの失敗の伝わり方をテストできるよう差し替え可能にする
+	// （executePhaseと同じ設計方針）。
+	newGradleBuilder func(projectDir string, timeout time.Duration) (gradleBuilder, error)
+
 	logger Logger
 }
 
@@ -108,6 +122,8 @@ func NewBuildPipeline(config Config) *BuildPipeline {
 	b.keystoreGenerate = generateDebugKeystoreFile
 	b.cacheDir = cache.Dir
 	b.freeSpace = fsutil.FreeSpace
+	b.prepareProject = b.prepareGradleProject
+	b.newGradleBuilder = newExecGradleBuilder
 
 	return b
 }

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"errors"
+	"time"
 
 	"github.com/na2na-p/mnemonic/internal/builder"
 )
@@ -12,6 +13,20 @@ import (
 // 伴うため、失敗時に全出力をどこへ記録するかをGradle無しでテストできない。
 type gradleBuilder interface {
 	Build(buildType string) (builder.BuildResult, error)
+}
+
+// newExecGradleBuilder はprojectDirでgradlewを実行するgradleBuilderを返す
+// （BuildPipeline.newGradleBuilderの既定実装）。
+//
+// why not: builder.NewGradleBuilderの戻り値をそのまま返さない。失敗時のnilの
+// *builder.GradleBuilderをgradleBuilderへ入れると、nilでないインターフェースになる。
+func newExecGradleBuilder(projectDir string, timeout time.Duration) (gradleBuilder, error) {
+	gradle, err := builder.NewGradleBuilder(projectDir, timeout, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return gradle, nil
 }
 
 // runGradleBuild はreleaseビルドを実行し、生成されたAPKのパスを返す。
