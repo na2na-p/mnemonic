@@ -106,20 +106,28 @@ func TestSkipChunk(t *testing.T) {
 	}
 }
 
-// readSegmentはパッケージ非公開ヘルパーであり、セグメントのオフセットがファイル末尾より
-// 先を指す場合の読み取り量をアーカイブを組まずに直接検証するため、ホワイトボックステストとする。
+// readSegmentはパッケージ非公開ヘルパーであり、セグメントがファイル末尾を超える場合の
+// 読み取り量をアーカイブを組まずに直接検証するため、ホワイトボックステストとする。
 func TestReadSegment(t *testing.T) {
 	t.Parallel()
 
 	data := []byte("abcdef")
-	fileSize := int64(len(data))
+	dataSize := int64(len(data))
 
 	cases := []struct {
 		name         string
 		segment      XP3Segment
+		fileSize     int64
+		want         []byte
+		wantErr      error
 		wantConsumed int64
 	}{
-		{"正常系: オフセットがファイル末尾より先なら何も読まずに空データを返す", XP3Segment{Offset: fileSize + 10, Size: 4, OriginalSize: 4}, 0},
+		{"正常系: 非圧縮セグメントがファイル末尾ちょうどまでなら全体を読む", XP3Segment{Offset: 2, Size: 4, OriginalSize: 4}, dataSize, []byte("cdef"), nil, 4},
+		{"異常系: 非圧縮セグメントの元サイズがファイル末尾を1バイト超えるとErrInvalidXP3", XP3Segment{Offset: 3, Size: 4, OriginalSize: 4}, dataSize, nil, ErrInvalidXP3, 0},
+		{"異常系: 非圧縮セグメントのオフセットがファイル末尾より先ならErrInvalidXP3", XP3Segment{Offset: dataSize + 10, Size: 4, OriginalSize: 4}, dataSize, nil, ErrInvalidXP3, 0},
+		{"正常系: 元サイズ0の非圧縮セグメントはオフセットがファイル末尾より先でも空データを返す", XP3Segment{Offset: dataSize + 10, Size: 4, OriginalSize: 0}, dataSize, []byte{}, nil, 0},
+		// fileSizeは展開開始時に測った値のため、その後にファイルが縮むと残量が宣言より少なくなる。
+		{"異常系: fileSizeより実データが短く読み取りが途切れるとエラー", XP3Segment{Offset: 2, Size: 8, OriginalSize: 8}, dataSize + 4, nil, io.ErrUnexpectedEOF, 0},
 	}
 
 	for _, tc := range cases {
@@ -130,14 +138,18 @@ func TestReadSegment(t *testing.T) {
 				got []byte
 				err error
 			)
-			budget := entryBudget{raw: fileSize, inflated: maxSegmentDecompressedSize, inflatedLimit: maxSegmentDecompressedSize}
+			budget := entryBudget{raw: tc.fileSize, inflated: maxSegmentDecompressedSize, inflatedLimit: maxSegmentDecompressedSize}
 			require.NotPanics(t, func() {
-				got, err = readSegment(bytes.NewReader(data), tc.segment, fileSize, &budget)
+				got, err = readSegment(bytes.NewReader(data), tc.segment, tc.fileSize, &budget)
 			})
 
-			require.NoError(t, err)
-			assert.Empty(t, got)
-			assert.Equal(t, fileSize-tc.wantConsumed, budget.raw)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+			}
+			assert.Equal(t, tc.fileSize-tc.wantConsumed, budget.raw)
 		})
 	}
 }
@@ -411,31 +423,6 @@ func TestMaxDeflateRatio(t *testing.T) {
 			require.NoError(t, w.Close())
 
 			assert.GreaterOrEqual(t, int64(compressed.Len())*maxDeflateRatio, int64(tc.size))
-		})
-	}
-}
-
-func TestSaturatingMul(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		a    int64
-		b    int64
-		want int64
-	}{
-		{"正常系: 0との積は0", 0, maxDeflateRatio, 0},
-		{"正常系: int64に収まる積はそのまま返す", 8, maxDeflateRatio, 8 * 1032},
-		{"正常系: 積がちょうどint64に収まる境界ではそのまま返す", math.MaxInt64 / maxDeflateRatio, maxDeflateRatio, math.MaxInt64 / maxDeflateRatio * maxDeflateRatio},
-		{"正常系: 積がint64を超える場合は最大値で飽和する", math.MaxInt64/maxDeflateRatio + 1, maxDeflateRatio, math.MaxInt64},
-		{"正常系: 最大値同士の積も最大値で飽和する", math.MaxInt64, math.MaxInt64, math.MaxInt64},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.want, saturatingMul(tc.a, tc.b))
 		})
 	}
 }

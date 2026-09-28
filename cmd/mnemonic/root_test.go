@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -386,7 +388,7 @@ func TestBuildCommand_Failure(t *testing.T) {
 
 	withStubBuildPipeline(t, &stubBuildRunner{
 		validateErrs: nil,
-		runResult:    pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"},
+		runResult:    pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました", Err: builder.ErrGradleBuildFailed},
 	})
 
 	result := invoke(t, []string{"build", inputFile})
@@ -482,7 +484,7 @@ func TestBuildCommand_LogFile_PipelineLogger(t *testing.T) {
 		},
 		{
 			name:         "異常系: ビルド失敗の理由をファイルへ記録する",
-			runResult:    pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"},
+			runResult:    pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました", Err: builder.ErrGradleBuildFailed},
 			wantExitCode: int(apperr.ExitError),
 			wantFile:     []string{"ERROR: Gradleビルドに失敗しました"},
 			wantStdout:   []string{"ビルド失敗: Gradleビルドに失敗しました"},
@@ -536,28 +538,33 @@ func TestBuildCommand_GradleOutputHint(t *testing.T) {
 	outputFile := filepath.Join(dir, "output.apk")
 	logFile := filepath.Join(dir, "build.log")
 
-	gradleFailure := (&builder.GradleBuildError{
+	gradleErr := &builder.GradleBuildError{
 		ExitCode: 1,
 		Output:   "Welcome to Gradle 7.5!\n* What went wrong:\nExecution failed for task ':app:mergeReleaseResources'.\n\n* Try:\n",
-	}).Error()
+	}
+	gradleFailure := gradleErr.Error()
 	apkMissing := pipeline.ErrGradleAPKMissing.Error()
+	wrappedGradleErr := fmt.Errorf("BUILDフェーズ: %w", gradleErr)
+	rerunHint := "Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます\n"
 
 	tests := []struct {
 		name         string
 		extraArgs    []string
 		errorMessage string
+		err          error
 		wantStdout   string
 	}{
 		{
 			name:         "異常系: ログファイル無しなら--log-fileか-vvでの再実行を案内する",
 			errorMessage: gradleFailure,
-			wantStdout: "ビルド失敗: " + gradleFailure + "\n" +
-				"Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます\n",
+			err:          gradleErr,
+			wantStdout:   "ビルド失敗: " + gradleFailure + "\n" + rerunHint,
 		},
 		{
 			name:         "異常系: ログファイル指定時はそのファイルに記録したことを案内する",
 			extraArgs:    []string{"--log-file", logFile},
 			errorMessage: gradleFailure,
+			err:          gradleErr,
 			wantStdout: "ビルド失敗: " + gradleFailure + "\n" +
 				"Gradleの出力全文は " + logFile + " に記録しました\n",
 		},
@@ -565,17 +572,31 @@ func TestBuildCommand_GradleOutputHint(t *testing.T) {
 			name:         "異常系: -vv指定時は出力全文が端末に出ているため案内しない",
 			extraArgs:    []string{"-vv"},
 			errorMessage: gradleFailure,
+			err:          gradleErr,
 			wantStdout:   "ビルド失敗: " + gradleFailure + "\n",
 		},
 		{
 			name:         "異常系: APKが見つからない場合も出力全文の在りかを案内する",
 			errorMessage: apkMissing,
-			wantStdout: "ビルド失敗: " + apkMissing + "\n" +
-				"Gradleの出力全文は --log-file <パス> か -vv を付けて再実行すると確認できます\n",
+			err:          pipeline.ErrGradleAPKMissing,
+			wantStdout:   "ビルド失敗: " + apkMissing + "\n" + rerunHint,
+		},
+		{
+			name:         "異常系: 文脈を前置きしてラップされたGradleの失敗も案内する",
+			errorMessage: wrappedGradleErr.Error(),
+			err:          wrappedGradleErr,
+			wantStdout:   "ビルド失敗: " + wrappedGradleErr.Error() + "\n" + rerunHint,
+		},
+		{
+			name:         "異常系: メッセージがGradleの失敗の文言でもErrが無ければ案内しない",
+			errorMessage: gradleFailure,
+			err:          nil,
+			wantStdout:   "ビルド失敗: " + gradleFailure + "\n",
 		},
 		{
 			name:         "異常系: Gradle以外の失敗では案内しない",
 			errorMessage: "変換フェーズが完了していません",
+			err:          errors.New("変換フェーズが完了していません"),
 			wantStdout:   "ビルド失敗: 変換フェーズが完了していません\n",
 		},
 	}
@@ -583,7 +604,7 @@ func TestBuildCommand_GradleOutputHint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			withStubBuildPipeline(t, &stubBuildRunner{
-				runResult: pipeline.Result{Success: false, ErrorMessage: tt.errorMessage},
+				runResult: pipeline.Result{Success: false, ErrorMessage: tt.errorMessage, Err: tt.err},
 			})
 
 			args := append([]string{"build", inputFile, "-o", outputFile}, tt.extraArgs...)
@@ -634,7 +655,7 @@ func TestBuildCommand_LogFile_WriteError(t *testing.T) {
 		},
 		{
 			name:         "異常系: ビルドに失敗した場合は警告しても終了コードをビルド失敗のままにする",
-			stub:         &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"}},
+			stub:         &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました", Err: builder.ErrGradleBuildFailed}},
 			wantExitCode: int(apperr.ExitError),
 			wantStdout:   "ビルド失敗: Gradleビルドに失敗しました",
 		},
@@ -699,7 +720,7 @@ func TestBuildCommand_LogFile_Close(t *testing.T) {
 		return &stubBuildRunner{runResult: pipeline.Result{Success: true, OutputPath: &outputFile}}
 	}
 	buildFailure := func() *stubBuildRunner {
-		return &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました"}}
+		return &stubBuildRunner{runResult: pipeline.Result{Success: false, ErrorMessage: "Gradleビルドに失敗しました", Err: builder.ErrGradleBuildFailed}}
 	}
 	validateFailure := func() *stubBuildRunner {
 		return &stubBuildRunner{validateErrs: []string{"入力ファイルが不正です"}}

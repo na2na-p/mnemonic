@@ -194,7 +194,7 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 	// キャッシュを消さないため。
 	if b.config.CleanCache {
 		if err := b.cleanCache(); err != nil {
-			return Result{Success: false, OutputPath: nil, ErrorMessage: err.Error()}
+			return Result{Success: false, OutputPath: nil, ErrorMessage: err.Error(), Err: err}
 		}
 	}
 
@@ -221,6 +221,7 @@ func (b *BuildPipeline) Run(progressCallback ProgressCallback) Result {
 				Success:         false,
 				OutputPath:      nil,
 				ErrorMessage:    err.Error(),
+				Err:             err,
 				PhasesCompleted: phasesCompleted,
 				Statistics:      statistics,
 			}
