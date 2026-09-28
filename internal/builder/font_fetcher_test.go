@@ -182,9 +182,9 @@ func TestFontFetcher_GetCachedFontPath(t *testing.T) {
 	})
 }
 
-// TestFontFetcher_ZeroValue_DoesNotPanic はレビュー指摘の回帰テスト:
-// NewFontFetcherを介さずbuilder.FontFetcher{}のゼロ値を直接構築した場合でも、
-// HTTPClientフィールドがnilのままnilポインタ参照でpanicしないことを確認する
+// TestFontFetcher_ZeroValue_DoesNotPanic は、NewFontFetcherを介さず
+// builder.FontFetcher{}のゼロ値を直接構築した場合でも、HTTPClientフィールドが
+// nilのままnilポインタ参照でpanicしないことを確認する
 // （TemplateDownloaderと同じ方針）。
 func TestFontFetcher_ZeroValue_DoesNotPanic(t *testing.T) {
 	t.Parallel()

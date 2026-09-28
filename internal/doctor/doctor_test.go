@@ -88,8 +88,8 @@ func TestDependencies_ContainsRequiredTools(t *testing.T) {
 // いることを検証する。
 //
 // why: FluidSynthはMIDIアセットを含むゲームのビルドでは必須だが、含まない
-// ゲームでは不要である。doctor全体をブロックしないためRequired=falseのまま
-// 据え置き、代わりにNoteで「MIDIを含むゲームでは必須」という条件を利用者へ
+// ゲームでは不要である。doctor全体をブロックしないためRequired=falseとし、
+// 代わりにNoteで「MIDIを含むゲームでは必須」という条件を利用者へ
 // 伝える。Required=trueにするとMIDIを持たないゲームのビルドまで
 // FluidSynthのインストールを強制することになる。
 func TestDependencies_ContainsOptionalTools(t *testing.T) {
@@ -163,7 +163,7 @@ func TestCheckDependency_FoundNote(t *testing.T) {
 // 場合、その条件（Note）が利用者向けメッセージへ現れることを検証する。
 //
 // why: doctorが「オプション」とだけ表示すると、MIDIを含むゲームでビルドが
-// 失敗する理由を利用者が事前に知る手段が無くなる（T-220の無音APK問題）。
+// 失敗する理由を利用者が事前に知る手段が無くなる。
 func TestCheckDependency_NoteIsSurfacedWhenMissing(t *testing.T) {
 	t.Parallel()
 

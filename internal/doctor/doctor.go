@@ -62,7 +62,7 @@ var Dependencies = []DependencyInfo{
 	},
 	{Name: "FFmpeg", Command: "ffmpeg", VersionFlag: "-version", Required: true},
 	// why not: FluidSynthはMIDIアセットを含むゲームのビルドでは必須
-	// （T-220以降、MIDIがあるのにFluidSynthが無い場合はビルドを失敗させる）
+	// （MIDIがあるのにFluidSynthが無い場合はビルドを失敗させる）
 	// だが、含まないゲームでは不要なためRequired=trueにはしない。必須にすると
 	// MIDI資産を持たないゲームのビルドまでインストールを強制してしまう。
 	// 代わりにNoteで条件を伝え、未インストール時に利用者が判断できるようにする。

@@ -435,9 +435,9 @@ func TestTemplateDownloader_Download_RetriesOnTransientNetworkError(t *testing.T
 	assert.Equal(t, content, got)
 }
 
-// TestTemplateDownloader_Download_DoesNotRetryOnHTTPServerError はレビュー指摘の
-// 回帰テスト: 5xxはサーバーが応答済み（接続は成功している）エラーであり、
-// 再試行しても解決しないため、downloadFileはこれを再試行しない
+// TestTemplateDownloader_Download_DoesNotRetryOnHTTPServerError は、5xxを
+// downloadFileが再試行しないことを検証する。5xxはサーバーが応答済み（接続は
+// 成功している）エラーであり、再試行しても解決しない
 // （errRetryableDownloadのwhy not参照）。
 func TestTemplateDownloader_Download_DoesNotRetryOnHTTPServerError(t *testing.T) {
 	t.Parallel()
@@ -470,10 +470,9 @@ func TestTemplateDownloader_Download_DoesNotRetryOnHTTPServerError(t *testing.T)
 	assert.Equal(t, 1, downloadAttempts, "5xxは再試行対象外のため試行は1回のみのはず")
 }
 
-// TestTemplateDownloader_ZeroValue_DoesNotPanic はレビュー指摘の回帰テスト:
-// NewTemplateDownloaderを介さずbuilder.TemplateDownloader{}のゼロ値を直接構築
-// した場合でも、HTTPClientフィールドがnilのままnilポインタ参照でpanicしない
-// ことを確認する。
+// TestTemplateDownloader_ZeroValue_DoesNotPanic は、NewTemplateDownloaderを
+// 介さずbuilder.TemplateDownloader{}のゼロ値を直接構築した場合でも、
+// HTTPClientフィールドがnilのままnilポインタ参照でpanicしないことを確認する。
 func TestTemplateDownloader_ZeroValue_DoesNotPanic(t *testing.T) {
 	t.Parallel()
 

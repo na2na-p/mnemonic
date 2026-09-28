@@ -53,11 +53,11 @@ func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error)
 		return a, err
 	}
 
-	xp3List, err := extractor.FindEmbeddedXP3()
+	_, found, err := extractor.FindEmbeddedXP3()
 	if err != nil {
 		return a, err
 	}
-	if len(xp3List) == 0 {
+	if !found {
 		return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
 	}
 
@@ -84,9 +84,13 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 			return a, err
 		}
 
-		archivePaths, err = extractor.ExtractAll(extractDir)
+		embeddedPath, found, err := extractor.Extract(extractDir)
 		if err != nil {
 			return a, err
+		}
+		archivePaths = nil
+		if found {
+			archivePaths = []string{embeddedPath}
 		}
 
 		embeddedSizes, err = fileSizes(archivePaths)
@@ -95,8 +99,6 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 		}
 	}
 
-	// why not: アーカイブごとに容量を確認しない。展開結果はすべて同じextractDirに
-	// 並んで残るため、1件ずつ同じ空き容量と比べると合計の不足を見逃す。
 	archives := make([]*parser.XP3Archive, 0, len(archivePaths))
 	planned := make([]int64, 0, len(archivePaths))
 	for _, path := range archivePaths {
@@ -513,31 +515,15 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 
 	appName := cmp.Or(b.config.AppName, baseName)
 
-	projectDir, err := b.newTempDir("mnemonic_project_")
-	if err != nil {
-		return a, err
-	}
+	projectDir, err := b.prepareProject(a, packageName, appName)
 	a.projectDir = projectDir
-
-	templatePath, err := b.resolveTemplate()
 	if err != nil {
-		return a, err
-	}
-
-	if err := extractTemplateZip(templatePath, projectDir); err != nil {
-		return a, err
-	}
-
-	plugins := b.fetchPlugins()
-
-	preparer := b.newTemplatePreparer(projectDir)
-	if err := preparer.Prepare(packageName, appName, a.convertDir, b.findGameIcon(a.extractDir), plugins); err != nil {
 		return a, err
 	}
 
 	gradleTimeout := time.Duration(b.config.GradleTimeoutSeconds) * time.Second
 
-	gradle, err := builder.NewGradleBuilder(projectDir, gradleTimeout, nil)
+	gradle, err := b.newGradleBuilder(projectDir, gradleTimeout)
 	if err != nil {
 		return a, err
 	}
@@ -550,6 +536,34 @@ func (b *BuildPipeline) executeBuild(a buildArtifacts) (buildArtifacts, error) {
 	a.unsignedAPK = unsignedAPK
 
 	return a, nil
+}
+
+// prepareGradleProject は一時ディレクトリへテンプレートを展開し、ゲームファイル・
+// プラグイン・アイコンを配置したGradleプロジェクトを用意する
+// （BuildPipeline.prepareProjectの既定実装）。
+func (b *BuildPipeline) prepareGradleProject(a buildArtifacts, packageName, appName string) (string, error) {
+	projectDir, err := b.newTempDir("mnemonic_project_")
+	if err != nil {
+		return "", err
+	}
+
+	templatePath, err := b.resolveTemplate()
+	if err != nil {
+		return projectDir, err
+	}
+
+	if err := extractTemplateZip(templatePath, projectDir); err != nil {
+		return projectDir, err
+	}
+
+	plugins := b.fetchPlugins()
+
+	preparer := b.newTemplatePreparer(projectDir)
+	if err := preparer.Prepare(packageName, appName, a.convertDir, b.findGameIcon(a.extractDir), plugins); err != nil {
+		return projectDir, err
+	}
+
+	return projectDir, nil
 }
 
 // newTemplatePreparer はprojectDirのテンプレートを準備するTemplatePreparerを返す。

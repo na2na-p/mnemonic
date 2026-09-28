@@ -149,11 +149,10 @@ func TestDefaultPasswordProvider_Priority(t *testing.T) {
 	})
 }
 
-// readPasswordFromTerminalの回帰テスト。
+// readPasswordFromTerminalのテスト。
 //
 // why not: term.GetStateが成功する経路（実端末にアタッチされた場合のSIGINT横取り）は
-// 疑似端末(pty)が無いと再現できず、pty用の追加依存を導入するコストに見合わない
-// （レビューで許容された「テスト困難なら本番経路の正しさを優先する」方針に従う）。
+// 疑似端末(pty)が無いと再現できず、pty用の追加依存を導入するコストに見合わない。
 // ここではterm.GetStateが失敗する経路（パイプ等、非端末なfd）で
 // goroutine/channelがハングせず正しくフォールバックすることのみを検証する。
 func TestReadPasswordFromTerminal_NonTerminalFallsBackWithoutHanging(t *testing.T) {

@@ -117,12 +117,12 @@ func buildMinimalPEWithSection(t *testing.T, sectionName string, rsrcData []byte
 }
 
 // fixtureGroupID はフィクスチャで使うRT_GROUP_ICONのName/ID値。全テストで
-// 単一グループのみを組み立てるため固定値とする(unparam指摘の回避も兼ねる。
+// 単一グループのみを組み立てるため固定値とする(unparamの報告の回避も兼ねる。
 // 値自体に意味は無くグループを一意に指せればよい)。
 const fixtureGroupID = 1
 
 // fixtureLangID はフィクスチャで使うLanguage階層のID値(en-US)。全テストで
-// 単一言語のみを組み立てるため固定値とする(unparam指摘の回避も兼ねる。
+// 単一言語のみを組み立てるため固定値とする(unparamの報告の回避も兼ねる。
 // 値自体に意味は無くテスト全体で一定であればよい)。
 const fixtureLangID = 0x0409
 

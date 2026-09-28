@@ -749,9 +749,9 @@ func TestSDL2SourceFetcher_Fetch(t *testing.T) {
 	})
 
 	// TestSDL2SourceFetcher_Fetch/異常系:_レスポンスボディ読み込み中のタイムアウト は
-	// レビュー指摘の回帰テスト: 上のケースはヘッダー受信前（client.Do自体）の
-	// タイムアウトしか検証できておらず、resp.Body.Read（io.ReadAll）側での
-	// タイムアウトがErrSDL2SourceFetchNetworkに誤分類される欠陥を見逃していた。
+	// 上のケースはヘッダー受信前（client.Do自体）のタイムアウトしか検証できず、
+	// resp.Body.Read（io.ReadAll）側でのタイムアウトがErrSDL2SourceFetchNetworkに
+	// 誤分類されても気付けない。
 	// ハンドラーでヘッダーを明示的にflushしてclient.Doを先に成功させ、
 	// ボディ転送中にタイムアウトさせることで、その分岐を検証する。
 	t.Run("異常系: レスポンスボディ読み込み中のタイムアウトの場合もErrSDL2SourceFetchTimeout", func(t *testing.T) {
@@ -961,11 +961,10 @@ func TestSDL2SourceFetcher_RequiredFiles(t *testing.T) {
 	})
 }
 
-// TestSDL2CacheCurrentVersion はレビュー指摘の回帰テスト: SDL2CacheCurrentVersionが
+// TestSDL2CacheCurrentVersion はSDL2CacheCurrentVersionが
 // krkrsdl2互換コミット(53dea9830964eee8b5c2a7ee0a65d6e268dc78a1)の先頭8文字と
-// 一致することをピン留めする。実装側はコメントによる手動同期ではなく
-// sdlCommit[:8]からの構造的な派生に変更済みだが、その値自体が意図した
-// コミットからずれていないかは外部から検証できる形で残す。
+// 一致することをピン留めする。実装側はsdlCommitから構造的に派生させているが、
+// その値自体が意図したコミットからずれていないかは外部から検証できる形で残す。
 func TestSDL2CacheCurrentVersion(t *testing.T) {
 	t.Parallel()
 
@@ -1030,10 +1029,10 @@ func TestSDL2SourceErrorHierarchy(t *testing.T) {
 	})
 }
 
-// TestSDL2SourceFetcher_ZeroValue_DoesNotPanic はレビュー指摘の回帰テスト:
-// NewSDL2SourceFetcherを介さずbuilder.SDL2SourceFetcher{}のゼロ値を直接構築した
-// 場合でも、HTTPClientフィールドがnilのままnilポインタ参照でpanicしないことを
-// 確認する（TemplateDownloaderと同じ方針）。
+// TestSDL2SourceFetcher_ZeroValue_DoesNotPanic は、NewSDL2SourceFetcherを
+// 介さずbuilder.SDL2SourceFetcher{}のゼロ値を直接構築した場合でも、
+// HTTPClientフィールドがnilのままnilポインタ参照でpanicしないことを確認する
+// （TemplateDownloaderと同じ方針）。
 func TestSDL2SourceFetcher_ZeroValue_DoesNotPanic(t *testing.T) {
 	t.Parallel()
 

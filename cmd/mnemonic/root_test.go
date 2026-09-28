@@ -199,7 +199,7 @@ func withCapturingBuildPipeline(t *testing.T, stub *stubBuildRunner) *pipeline.C
 // 配線されていることを検証する。
 //
 // why: MIDI変換のサウンドフォントはこのフラグでしか指定できない。既定の探索先は
-// Linuxの絶対パスのみで、macOS等ではこの経路が唯一の指定手段になる（T-220）。
+// Linuxの絶対パスのみで、macOS等ではこの経路が唯一の指定手段になる。
 func TestBuildCommand_SoundfontFlag(t *testing.T) {
 	dir := t.TempDir()
 	inputFile := filepath.Join(dir, "game.exe")

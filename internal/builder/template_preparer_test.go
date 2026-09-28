@@ -987,7 +987,7 @@ func TestTemplatePreparer_UpdateManifest(t *testing.T) {
 				assert.Contains(t, text, `android:name="android.intent.action.MAIN"`)
 
 				// 書き換え後のandroid:nameが実際に生成されたクラスファイルを
-				// 指していることを確認する（ActivityNotFoundException回帰防止）。
+				// 指していることを確認する。
 				packagePath := filepath.Join(strings.Split(tc.packageName, ".")...)
 				gameActivityFile := filepath.Join(projectDir, "app", "src", "main", "java", packagePath, "KirikiriSDL2GameActivity.java")
 				assert.FileExists(t, gameActivityFile)

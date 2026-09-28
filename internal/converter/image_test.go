@@ -77,7 +77,7 @@ func writePNGFixture(t *testing.T, path string, c color.RGBA) {
 // why not: 複数ブロック・可変block_height・画素値のバリエーションは
 // アルゴリズムレベルでinternal/converter/tlg/tlg5_test.goが既に網羅している
 // ため、image.go統合テスト側では変える必要が無い（golangci-lint unparamの
-// 指摘に対する対応でもある）。width/colorDepthのみを可変にし、TLGImageDecoder
+// 報告を避けるためでもある）。width/colorDepthのみを可変にし、TLGImageDecoder
 // /ImageConverterの結線（ヘッダ解析結果の伝播・BGRA→RGBA変換・decode成功時の
 // 画素値伝播）を検証するにはこれで十分。
 const (
@@ -382,7 +382,7 @@ func TestTLGImageDecoder_Decode(t *testing.T) {
 	t.Run("正常系: SDSコンテナ内のTLG5はアンラップ後の生TLG5と同一にデコードされる", func(t *testing.T) {
 		t.Parallel()
 
-		// DEFECT 1の回帰防止: 実TLGは TLG0.0\x00sds\x1a のSDSコンテナで包まれ、
+		// 実TLGは TLG0.0\x00sds\x1a のSDSコンテナで包まれ、
 		// 内部に生のTLG5データを持つ。SDSラッパー付きファイルとアンラップ済みの
 		// 生TLG5ファイルが同一の画像にデコードされることを検証する。
 		inner := buildTLG5Fixture(2, 32)

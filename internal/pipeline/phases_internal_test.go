@@ -72,8 +72,8 @@ func TestNewSDL2SourceCache(t *testing.T) {
 //
 // why: ScriptAdjusterは.mid/.midi参照を無条件に.oggへ書き換える。MIDI変換の
 // 失敗がスクリプト調整より後に判明する順序だと、実体の無い.oggを指す参照へ
-// 書き換えられたツリーが出来上がる。この並びこそがT-220のBGM無音バグの原因で
-// あり、コメントだけでは順序を入れ替えても誰も気付けないためテストで固定する。
+// 書き換えられたツリーが出来上がる。コメントだけでは順序を入れ替えても誰も
+// 気付けないためテストで固定する。
 func TestBuildPipeline_FinalizeConvertedTree_MidiFailurePrecedesScriptRewrite(t *testing.T) {
 	t.Parallel()
 
@@ -580,12 +580,15 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 
 	payload := bytes.Repeat([]byte{'s'}, 100)
 	archive := storedXP3Bytes("startup.tjs", payload)
-	exe := append([]byte("MZ-stub-"), archive...)
+	// krkrzと同じく、EXE内のXP3はオフセット16以降の16バイト境界からしか探されない。
+	exeStub := []byte("MZ-stub-16-bytes")
+	exe := append(append([]byte{}, exeStub...), archive...)
 	planned := uint64(len(payload))
 	embedded := uint64(len(archive))
 	secondArchive := storedXP3Bytes("second.tjs", payload)
-	twoArchivesExe := append(append([]byte("MZ-stub-"), archive...), secondArchive...)
-	twoArchivesRequired := 3*(2*planned+embedded+uint64(len(secondArchive))) - embedded - uint64(len(secondArchive))
+	twoArchivesExe := append(append(append([]byte{}, exeStub...), archive...), secondArchive...)
+	twoArchivesEmbedded := embedded + uint64(len(secondArchive))
+	twoArchivesRequired := 3*(planned+twoArchivesEmbedded) - twoArchivesEmbedded
 	errStatfs := errors.New("statfs failed")
 
 	fixedFree := func(free uint64) func(string) (uint64, error) {
@@ -638,21 +641,11 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 			wantFiles:   []string{"game_0.xp3"},
 		},
 		{
-			name:      "正常系: EXEに複数のXP3が埋め込まれていれば全XP3の展開結果の合計で確認して展開する",
+			name:      "正常系: EXEの最初のXP3の後ろに続くXP3は展開せず、EXE終端までを1つのXP3として書き出す",
 			inputName: "game.exe",
 			input:     twoArchivesExe,
 			freeSpace: fixedFree(twoArchivesRequired),
-			wantFiles: []string{"game_0.xp3", "game_1.xp3", "startup.tjs", "second.tjs"},
-		},
-		{
-			name:        "異常系: EXEの各XP3単独なら収まっても合計が1バイト足りなければどのXP3も展開せずにエラーを返す",
-			inputName:   "game.exe",
-			input:       twoArchivesExe,
-			freeSpace:   fixedFree(twoArchivesRequired - 1),
-			wantErr:     ErrInsufficientDiskSpace,
-			wantMessage: "展開に必要な容量",
-			wantFree:    twoArchivesRequired - 1,
-			wantFiles:   []string{"game_0.xp3", "game_1.xp3"},
+			wantFiles: []string{"game_0.xp3", "startup.tjs"},
 		},
 		{
 			name:      "正常系: 空き容量が非常に大きくても比較できる",

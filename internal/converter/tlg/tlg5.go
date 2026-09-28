@@ -33,13 +33,12 @@ var (
 	// ErrTLG5InvalidDimensions はwidth/heightが0以下、または許容上限
 	// （TLG5MaxDimension・TLG5MaxPixelCount）を超える場合のエラー。
 	//
-	// why not: レビュー指摘の回帰防止。width=height=0xFFFFFFFFのような
-	// 24バイトの不正な最小ヘッダーに対し、旧実装はmake([]byte, width*height)
-	// をチャンネル数分呼び出す前に何の検証も行っていなかった。
-	// ConversionManagerのワーカーgoroutineはrecoverを持たないため、この
-	// makeslice panicはビルド処理全体を巻き込んでクラッシュさせる
-	// （実際にpipeline経由で再現された）。信頼できないゲームアセットを
-	// 処理するCLIとして、確保前にサイズを検証し通常のerrorとして拒否する。
+	// why not: ヘッダーのwidth/heightを検証せずにmake([]byte, width*height)を
+	// チャンネル数分呼び出すと、width=height=0xFFFFFFFFのような24バイトの
+	// 不正な最小ヘッダー1つでmakeslice panicが起きる。ConversionManagerの
+	// ワーカーgoroutineはrecoverを持たないため、このpanicはビルド処理全体を
+	// 巻き込んでクラッシュさせる。信頼できないゲームアセットを処理するCLIとして、
+	// 確保前にサイズを検証し通常のerrorとして拒否する。
 	ErrTLG5InvalidDimensions = errors.New("画像サイズが不正です")
 
 	// ErrTLG5InvalidColorDepth はTLG5ヘッダーの色深度バイトが既知のいずれの
@@ -187,7 +186,7 @@ func (d *TLG5Decoder) Decode(data []byte) (image.Image, error) {
 
 	// why: width/height由来のバイト列確保(下のchannels := make(...))より
 	// 前に必ず検証する。この順序を破ると不正な巨大寸法でmakesliceが
-	// panicする（レビュー指摘の回帰防止）。
+	// panicする。
 	if dimErr := validateDimensions(header); dimErr != nil {
 		return nil, dimErr
 	}

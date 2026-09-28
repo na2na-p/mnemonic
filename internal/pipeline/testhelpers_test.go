@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"hash/adler32"
 	"os"
 	"path/filepath"
 	"sync"
@@ -131,7 +132,13 @@ func storedXP3BytesWithInfoFlags(name string, infoFlags uint32, data []byte) []b
 	chunk := func(name string, body []byte) []byte {
 		return append(le.AppendUint64([]byte(name), uint64(len(body))), body...)
 	}
-	table := chunk("File", append(chunk("info", info), chunk("segm", segm)...))
+	// krkrzのtTVPXP3Archive（base/XP3Archive.cpp）はadlrサブチャンクを欠くFileチャンクを
+	// 読み込みエラーにする。
+	var body []byte
+	body = append(body, chunk("info", info)...)
+	body = append(body, chunk("segm", segm)...)
+	body = append(body, chunk("adlr", le.AppendUint32(nil, adler32.Checksum(data)))...)
+	table := chunk("File", body)
 
 	archive := append([]byte{}, parser.XP3Magic...)
 	archive = le.AppendUint64(archive, uint64(headerSize+len(data)))

@@ -85,9 +85,9 @@ func TestFindAndroidBuildTool(t *testing.T) {
 		assert.Empty(t, result)
 	})
 
-	// レビュー指摘の回帰テスト: os.ReadDirのDirEntry.IsDir()はシンボリックリンク
-	// 自体の種別を見るためリンクされたバージョンディレクトリを除外してしまっていた。
-	// os.Stat（symlink解決）で判定するよう修正したことをピン留めする。
+	// os.ReadDirのDirEntry.IsDir()はシンボリックリンク自体の種別を見るため、
+	// それで判定するとリンクされたバージョンディレクトリを除外してしまう。
+	// os.Stat（symlink解決）で判定していることをピン留めする。
 	t.Run("正常系: バージョンディレクトリがシンボリックリンクでも検出", func(t *testing.T) {
 		androidHome := t.TempDir()
 		buildToolsDir := filepath.Join(androidHome, "build-tools")
