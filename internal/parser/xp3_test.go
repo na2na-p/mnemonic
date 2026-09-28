@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/adler32"
 	"io/fs"
 	"math"
 	"os"
@@ -329,7 +330,8 @@ func buildXP3Archive(t *testing.T, entries []xp3EntrySpec) []byte {
 // バイト列として構築する。
 // 各エントリはresolvedSegments()が返す1つ以上のセグメントとしてデータ領域に
 // 順に配置され、segmチャンクにも同じ順でセグメントレコードが書き込まれる
-// （複数segmレコードに対応したテストフィクスチャ）。
+// （複数segmレコードに対応したテストフィクスチャ）。各Fileチャンクはinfo、segm、
+// adlr（元データのAdler32）の順にサブチャンクを持つ。
 func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3IndexLayout) []byte {
 	t.Helper()
 
@@ -406,6 +408,12 @@ func buildXP3ArchiveWithLayout(t *testing.T, entries []xp3EntrySpec, layout xp3I
 		}
 		writeChunkHeader(&entryBody, "segm", segm.Bytes())
 
+		var original []byte
+		for _, seg := range e.resolvedSegments() {
+			original = append(original, seg.data...)
+		}
+		writeAdlrChunk(&entryBody, adler32.Checksum(original))
+
 		writeChunkHeader(&table, "File", entryBody.Bytes())
 	}
 
@@ -469,6 +477,16 @@ func writeZlibIndex(t *testing.T, buf *bytes.Buffer, table []byte) {
 	writeUint64(buf, uint64(len(compressedTable)))
 	writeUint64(buf, uint64(len(table)))
 	buf.Write(compressedTable)
+}
+
+// writeAdlrChunk は本体長4のadlrサブチャンクを書き込む。krkrrel（krkr2
+// kirikiri2/trunk/kirikiri2/src/tools/win32/krdevui/RelSettingsUnit.cpp）と
+// GARbro（ArcFormats/KiriKiri/ArcXP3.cs）はどちらも各Fileチャンクの末尾に
+// Adler32チェックサムを書く。
+func writeAdlrChunk(buf *bytes.Buffer, hash uint32) {
+	var body bytes.Buffer
+	writeUint32(&body, hash)
+	writeChunkHeader(buf, "adlr", body.Bytes())
 }
 
 func writeChunkHeader(buf *bytes.Buffer, name string, body []byte) {
@@ -623,8 +641,7 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		// "info"サブチャンクがsubChunkSize=MaxUint64を宣言するが、実データは
 		// 一切続かない（=数十バイトの細工ファイル）。readChunkが宣言値のまま
 		// make([]byte, size)を呼ぶとfatal error（回復不能なOOM）になる。
-		// stream.Len()でクランプされるため確保は起きず、segmサブチャンクを
-		// 欠くエントリとしてErrInvalidXP3になる。
+		// 本体長が32ビットに収まらないため、確保の前にErrInvalidXP3になる。
 		var entryBody bytes.Buffer
 		entryBody.WriteString("info")
 		writeUint64(&entryBody, math.MaxUint64)
@@ -649,7 +666,8 @@ func TestXP3Archive_MalformedEntry_DoesNotOOM(t *testing.T) {
 		// writeChunkHeaderは実データ長をそのままsubChunkSizeとして書き込むため
 		// 使えない（「宣言サイズ ≠ 実データ長」という攻撃条件を作れない）。
 		// ここではsubChunkSize=MaxUint64を宣言しつつ実データを一切続けない
-		// バイト列を手動で組み立てる。infoサブチャンクを欠くためErrInvalidXP3になる。
+		// バイト列を手動で組み立てる。本体長が32ビットに収まらないため、確保の前に
+		// ErrInvalidXP3になる。
 		var entryBody bytes.Buffer
 		entryBody.WriteString("segm")
 		writeUint64(&entryBody, math.MaxUint64)
@@ -701,6 +719,7 @@ func TestXP3Archive_CorruptSegmOffset_DiscardsSegmentInsteadOfHeaderSplice(t *te
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
 	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+	writeAdlrChunk(&entryBody, 0)
 
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -779,6 +798,7 @@ func TestNewXP3Archive_OutOfRangeSegmSize(t *testing.T) {
 			var entryBody bytes.Buffer
 			writeChunkHeader(&entryBody, "info", info.Bytes())
 			writeChunkHeader(&entryBody, "segm", segm.Bytes())
+			writeAdlrChunk(&entryBody, 0)
 
 			var table bytes.Buffer
 			writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -949,91 +969,114 @@ func TestXP3Archive_MultipleSegments(t *testing.T) {
 	})
 }
 
-// TestXP3Archive_HostileSegmentCount_TruncatedToActualData はGoal 4で要求された
-// 「宣言セグメント数（宣言サイズ）が実データより大きい悪意あるケース」の検証。
-//
-// segmサブチャンクがsubChunkSize=math.MaxUint64（事実上無制限のセグメント数）を
-// 宣言する一方、実際に後続するデータは28バイトレコード2件＋末尾に28バイト
-// 未満の断片（10バイト、不完全なレコード）だけという、宣言と実データが
-// 乖離したケース。parseSegmentsは宣言値ではなくreadChunkでstream残量に
-// クランプ済みの実データ長（=readChunkが持つハードニング、詳細はreadChunkの
-// why not参照）からセグメント数を算出するため、末尾の断片は無視され、
-// ちょうど2セグメントだけが安全にパースされる（OOMもパニックもしない）。
-func TestXP3Archive_HostileSegmentCount_TruncatedToActualData(t *testing.T) {
+// TestXP3Archive_HostileSegmentCount は、segmサブチャンクの宣言長が後続の実データ
+// （28バイトレコード2件と、28バイト未満の断片10バイト）より大きいケースを検証する。
+// 宣言長が32ビットに収まらなければ、krkrz の FindChunk（base/XP3Archive.cpp）と同じく
+// エントリ名を添えたErrInvalidXP3になる。32ビットに収まる場合は、parseSegmentsが
+// 宣言長ではなくreadChunkで残量にクランプした実データ長からセグメント数を求める
+// ため、断片は無視されて2セグメントだけがパースされる（OOMもパニックもしない）。
+// adlrはsegmより前に置き、segmが飲み込まないようにする。
+func TestXP3Archive_HostileSegmentCount(t *testing.T) {
 	t.Parallel()
 
-	const headerSize = 19 // 11(magic) + 8(info_offset)
-
-	seg1 := []byte("FIRST_SEGMENT_DATA_")
-	seg2 := []byte("SECOND_SEGMENT_DATA")
-	offset1 := int64(headerSize)
-	offset2 := offset1 + int64(len(seg1))
-
-	nameUTF16 := utf16.Encode([]rune("hostile.bin"))
-
-	var info bytes.Buffer
-	writeUint32(&info, 0)                           // flags
-	writeUint64(&info, uint64(len(seg1)+len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&info, uint64(len(seg1)+len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint16(&info, uint16(len(nameUTF16)))      //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
-	for _, u := range nameUTF16 {
-		writeUint16(&info, u)
+	cases := map[string]struct {
+		declaredSize uint64
+		wantErr      bool
+	}{
+		"異常系: segmの宣言長が32ビットに収まらないとエントリ名を添えたErrInvalidXP3": {
+			declaredSize: math.MaxUint64,
+			wantErr:      true,
+		},
+		"正常系: 32ビットに収まる宣言長なら実データの2セグメントだけを読み断片は無視する": {
+			declaredSize: math.MaxUint32,
+		},
 	}
 
-	var segm bytes.Buffer
-	writeUint32(&segm, 0)                 // セグメント1: flags（非圧縮）
-	writeUint64(&segm, uint64(offset1))   //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&segm, uint64(len(seg1))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&segm, uint64(len(seg1))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint32(&segm, 0)                 // セグメント2: flags（非圧縮）
-	writeUint64(&segm, uint64(offset2))   //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&segm, uint64(len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	writeUint64(&segm, uint64(len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
-	segm.WriteString("GARBAGE___")        // 28バイト未満の不完全な断片（無視されるべき）
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	var entryBody bytes.Buffer
-	writeChunkHeader(&entryBody, "info", info.Bytes())
-	entryBody.WriteString("segm")
-	writeUint64(&entryBody, math.MaxUint64) // 宣言サイズ: 事実上無制限のセグメント数を主張
-	entryBody.Write(segm.Bytes())           // 実データ: 66バイト（28*2+10）のみ
+			const headerSize = 19 // 11(magic) + 8(info_offset)
 
-	var table bytes.Buffer
-	writeChunkHeader(&table, "File", entryBody.Bytes())
+			seg1 := []byte("FIRST_SEGMENT_DATA_")
+			seg2 := []byte("SECOND_SEGMENT_DATA")
+			offset1 := int64(headerSize)
+			offset2 := offset1 + int64(len(seg1))
 
-	compressedTable := compressZlib(t, table.Bytes())
+			nameUTF16 := utf16.Encode([]rune("hostile.bin"))
 
-	dataSection := append(append([]byte{}, seg1...), seg2...)
+			var info bytes.Buffer
+			writeUint32(&info, 0)                           // flags
+			writeUint64(&info, uint64(len(seg1)+len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint64(&info, uint64(len(seg1)+len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint16(&info, uint16(len(nameUTF16)))      //nolint:gosec // テストヘルパーであり名前長は既知の小さい値
+			for _, u := range nameUTF16 {
+				writeUint16(&info, u)
+			}
 
-	var buf bytes.Buffer
-	buf.Write(parser.XP3Magic)
-	indexOffset := int64(headerSize) + int64(len(dataSection))
-	writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
-	buf.Write(dataSection)
+			var segm bytes.Buffer
+			writeUint32(&segm, 0)                 // セグメント1: flags（非圧縮）
+			writeUint64(&segm, uint64(offset1))   //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint64(&segm, uint64(len(seg1))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint64(&segm, uint64(len(seg1))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint32(&segm, 0)                 // セグメント2: flags（非圧縮）
+			writeUint64(&segm, uint64(offset2))   //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint64(&segm, uint64(len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			writeUint64(&segm, uint64(len(seg2))) //nolint:gosec // テストヘルパーであり非負であることが既知
+			segm.WriteString("GARBAGE___")        // 28バイト未満の不完全な断片
 
-	buf.WriteByte(0x01) // flag: zlib圧縮インデックス
-	writeUint64(&buf, uint64(len(compressedTable)))
-	writeUint64(&buf, uint64(table.Len()))
-	buf.Write(compressedTable)
+			var entryBody bytes.Buffer
+			writeChunkHeader(&entryBody, "info", info.Bytes())
+			writeAdlrChunk(&entryBody, 0)
+			entryBody.WriteString("segm")
+			writeUint64(&entryBody, tc.declaredSize)
+			entryBody.Write(segm.Bytes()) // 実データ: 66バイト（28*2+10）のみ
 
-	path := filepath.Join(t.TempDir(), "hostile_segment_count.xp3")
-	writeFile(t, path, buf.Bytes())
+			var table bytes.Buffer
+			writeChunkHeader(&table, "File", entryBody.Bytes())
 
-	archive, err := parser.NewXP3Archive(path)
-	require.NoError(t, err)
-	require.Equal(t, []string{"hostile.bin"}, archive.ListFiles())
+			compressedTable := compressZlib(t, table.Bytes())
 
-	outputDir := t.TempDir()
-	require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+			dataSection := append(append([]byte{}, seg1...), seg2...)
 
-	extracted, err := os.ReadFile(filepath.Join(outputDir, "hostile.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
-	require.NoError(t, err)
-	assert.Equal(t, dataSection, extracted)
+			var buf bytes.Buffer
+			buf.Write(parser.XP3Magic)
+			indexOffset := int64(headerSize) + int64(len(dataSection))
+			writeUint64(&buf, uint64(indexOffset)) //nolint:gosec // テストヘルパーであり非負であることが既知
+			buf.Write(dataSection)
+
+			buf.WriteByte(0x01) // flag: zlib圧縮インデックス
+			writeUint64(&buf, uint64(len(compressedTable)))
+			writeUint64(&buf, uint64(table.Len()))
+			buf.Write(compressedTable)
+
+			path := filepath.Join(t.TempDir(), "hostile_segment_count.xp3")
+			writeFile(t, path, buf.Bytes())
+
+			archive, err := parser.NewXP3Archive(path)
+			if tc.wantErr {
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				assert.Contains(t, err.Error(), "hostile.bin")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, []string{"hostile.bin"}, archive.ListFiles())
+
+			outputDir := t.TempDir()
+			require.NoError(t, extractAllWithinPlan(t, archive, outputDir))
+
+			extracted, err := os.ReadFile(filepath.Join(outputDir, "hostile.bin")) //nolint:gosec // テストで生成した既知のパスを読むだけのため妥当
+			require.NoError(t, err)
+			assert.Equal(t, dataSection, extracted)
+		})
+	}
 }
 
 // TestXP3Archive_EntryWithoutSegments_IsDiscarded は、infoチャンクで名前を
 // 確定できるがsegmチャンクを欠く場合はエントリ名を添えたErrInvalidXP3になり、
 // segmチャンクが28バイト未満で1件も有効なセグメントを構成できない場合は
-// エントリ自体が破棄されることをpinする。
+// エントリ自体が破棄されることをpinする。セグメントを持てないエントリでも
+// adlrチャンクを欠けば、破棄ではなくErrInvalidXP3になる。
 func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 	t.Parallel()
 
@@ -1080,6 +1123,7 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		writeChunkHeader(&entryBody, "info", buildInfoOnlyEntry("short_segm.bin"))
 		// 27バイトの不完全なsegmレコード（28バイト未満で1件も構成できない）。
 		writeChunkHeader(&entryBody, "segm", make([]byte, 27))
+		writeAdlrChunk(&entryBody, 0)
 
 		var table bytes.Buffer
 		writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -1093,6 +1137,25 @@ func TestXP3Archive_EntryWithoutSegments_IsDiscarded(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Empty(t, archive.ListFiles())
+	})
+
+	t.Run("異常系: セグメントを持てないエントリでもadlrチャンクを欠く場合はErrInvalidXP3", func(t *testing.T) {
+		t.Parallel()
+
+		var entryBody bytes.Buffer
+		writeChunkHeader(&entryBody, "info", buildInfoOnlyEntry("short_segm.bin"))
+		writeChunkHeader(&entryBody, "segm", make([]byte, 27))
+
+		var table bytes.Buffer
+		writeChunkHeader(&table, "File", entryBody.Bytes())
+
+		path := filepath.Join(t.TempDir(), "short_segm_no_adlr.xp3")
+		writeFile(t, path, buildXP3ArchiveWithUncompressedTable(table.Bytes()))
+
+		_, err := parser.NewXP3Archive(path)
+
+		require.ErrorIs(t, err, parser.ErrInvalidXP3)
+		assert.Contains(t, err.Error(), "short_segm.bin")
 	})
 }
 
@@ -1150,7 +1213,11 @@ func buildEngineLayoutXP3WithInfoFlags(name string, infoFlags uint32, segments [
 	chunk := func(name string, body []byte) []byte {
 		return append(le.AppendUint64([]byte(name), uint64(len(body))), body...)
 	}
-	table := chunk("File", append(chunk("info", info), chunk("segm", segm)...))
+	var body []byte
+	body = append(body, chunk("info", info)...)
+	body = append(body, chunk("segm", segm)...)
+	body = append(body, chunk("adlr", le.AppendUint32(nil, 0))...)
+	table := chunk("File", body)
 
 	archive := bytes.Clone(parser.XP3Magic)
 	archive = le.AppendUint64(archive, uint64(headerSize+len(data))) //nolint:gosec // テストで組み立てる既知の小さい値
@@ -1461,6 +1528,7 @@ func TestXP3Archive_ManySegmentsSameOffset_BoundedByFileSize(t *testing.T) {
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
 	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+	writeAdlrChunk(&entryBody, 0)
 
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -1542,6 +1610,7 @@ func buildUncompressedSingleEntryTable(name string) []byte {
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
 	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+	writeAdlrChunk(&entryBody, 0)
 
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -2232,6 +2301,7 @@ func buildSingleCompressedSegmentArchive(t *testing.T, payload []byte, originalS
 	var entryBody bytes.Buffer
 	writeChunkHeader(&entryBody, "info", info.Bytes())
 	writeChunkHeader(&entryBody, "segm", segm.Bytes())
+	writeAdlrChunk(&entryBody, 0)
 
 	var table bytes.Buffer
 	writeChunkHeader(&table, "File", entryBody.Bytes())
@@ -2565,6 +2635,18 @@ func TestXP3Archive_EngineTruncationRules(t *testing.T) {
 		'a', 'd', 'l', 'r', 0x04, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長4
 		0x78, 0x56, 0x34, 0x12, // +0 Adler32（L518）
 	}
+	// 本体長0の adlr サブチャンク。L518 は ch_adlr_size を見ずに ch_adlr_start から
+	// 4バイト読むため、後ろに info を置けばそのチャンク名がハッシュとして読まれる。
+	emptyAdlr := []byte{'a', 'd', 'l', 'r', 0, 0, 0, 0, 0, 0, 0, 0}
+	// 本体長 0xFFFFFFFFFFFFFFFF を宣言し、本体を持たない未知のサブチャンク。
+	hugeUnknown := []byte{'z', 'z', 'z', 'z', 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+	// subの本体長（L588 が読む8バイト）だけを declared に差し替える。
+	withDeclaredSize := func(sub []byte, declared ...byte) []byte {
+		out := bytes.Clone(sub)
+		clear(out[4:12])
+		copy(out[4:12], declared)
+		return out
+	}
 	// File チャンク（L438）。sizeは宣言する本体長。
 	file := func(size byte, subChunks ...[]byte) []byte {
 		chunk := []byte{'F', 'i', 'l', 'e', size, 0, 0, 0, 0, 0, 0, 0}
@@ -2643,6 +2725,38 @@ func TestXP3Archive_EngineTruncationRules(t *testing.T) {
 			content:        buildArchive(indexOffset24, file(0x34, info, adlr)),
 			wantOpenErr:    true,
 			wantEntryInErr: true,
+		},
+		"異常系: adlrサブチャンクを欠くFileチャンクはエントリ名を添えたErrInvalidXP3（L514-515）": {
+			content:        buildArchive(indexOffset24, file(0x4c, info, rawSegm(5))),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"異常系: 名前の文字数が0でもadlrサブチャンクを欠くFileチャンクはErrInvalidXP3（L514-515）": {
+			content:     buildArchive(indexOffset24, file(0x4a, emptyNameInfo, rawSegm(5))),
+			wantOpenErr: true,
+		},
+		"異常系: segmの宣言長が後ろのadlrまで覆うとadlrを見つけられずErrInvalidXP3（L514-515）": {
+			// segmの本体長44はsegmレコード28とadlr16の合計で、Fileチャンク末尾ちょうどまで。
+			// adlrの探索（L514）はinfo、segmと宣言長どおりに進み、Fileチャンクを抜けて終わる。
+			content:        buildArchive(indexOffset24, file(0x5c, info, withDeclaredSize(rawSegm(5), 0x2c), adlr)),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"異常系: adlrより後ろのsegmが32ビットに収まらない本体長を宣言するとErrInvalidXP3（L590-592）": {
+			// 本体長 0x100000000。segmの探索（L480）がこのチャンクで投げる。
+			content:        buildArchive(indexOffset24, file(0x5c, info, adlr, withDeclaredSize(rawSegm(5), 0, 0, 0, 0, 1))),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"正常系: info・segm・adlrより後ろのサブチャンクは32ビットに収まらない本体長でも受け入れる": {
+			// FindChunk（L577-602）は探しているチャンクを見つけた時点で戻るため、3つとも
+			// 見つかった後ろのチャンクの本体長は読まれない。
+			content: buildArchive(indexOffset24, file(0x68, info, rawSegm(5), adlr, hugeUnknown)),
+			want:    data,
+		},
+		"正常系: adlrの本体長が0でも受け入れる（L518は本体長を確かめない）": {
+			content: buildArchive(indexOffset24, file(0x58, emptyAdlr, info, rawSegm(5))),
+			want:    data,
 		},
 		"異常系: 非圧縮セグメントの元サイズがファイル末尾を1バイト超えると展開がErrInvalidXP3（L1014のReadBuffer）": {
 			content:        buildArchive(indexOffset24, file(0x5c, info, rawSegm(119), adlr)),

@@ -426,9 +426,16 @@ func (a *XP3Archive) parseFileEntries(tableData []byte) error {
 
 // parseSingleEntry は単一のファイルエントリをパースする。
 //
-// infoサブチャンクかsegmサブチャンクを欠く場合はエラーを返す（segmを欠く場合は
-// エントリ名を添える）。krkrz（base/XP3Archive.cpp の tTVPXP3Archive）はどちらも
-// FindChunkで見つからなければTVPReadErrorを投げる。
+// info、segm、adlrのいずれかのサブチャンクを欠く場合はエラーを返す（infoから名前を
+// 得られていればエントリ名を添える）。krkrz（base/XP3Archive.cpp の tTVPXP3Archive）は
+// どれもFindChunkで見つからなければTVPReadErrorを投げる。adlrの本体長は確かめない。
+// krkrzは本体長を見ずに先頭4バイトをハッシュとして読み、mnemonicはハッシュを使わない。
+//
+// 3つのサブチャンクがそろう前に本体長が32ビットに収まらないサブチャンクがあれば
+// エラーを返す。krkrzのFindChunkは辿ったチャンクの本体長をtjs_uint（32ビット）へ
+// 切り詰め、値が変われば投げる。探しているチャンクを見つけた時点で戻るため、
+// 3つがそろった後ろのチャンクは読まない。
+//
 // infoから名前を得られなかった場合、またはsegmが28バイト未満などでセグメントを
 // 1つも持てなかった場合はokにfalseを返す。krkrzが読めないセグメントを持つ場合
 // （parseSegments参照）は、エントリ名を添えたエラーを返す。
@@ -443,6 +450,7 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		name      string
 		foundInfo bool
 		foundSegm bool
+		foundAdlr bool
 		segmData  [][]byte
 	)
 
@@ -455,6 +463,10 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		subChunkSize, ok := readUint64(stream)
 		if !ok {
 			break
+		}
+		requiredFound := foundInfo && foundSegm && foundAdlr
+		if subChunkSize > math.MaxUint32 && !requiredFound {
+			return XP3FileEntry{}, false, entryError(name, "サブチャンクの長さが32ビットに収まりません")
 		}
 
 		switch {
@@ -477,9 +489,10 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		case bytes.Equal(subChunkName, []byte("segm")):
 			foundSegm = true
 			segmData = append(segmData, readChunk(stream, subChunkSize))
+		case bytes.Equal(subChunkName, []byte("adlr")):
+			foundAdlr = true
+			skipChunk(stream, subChunkSize)
 		default:
-			// adlr（Adler32チェックサム）を含む未知のサブチャンクは、既知チャンクと
-			// 同じくskipChunkでスキップする（詳細はskipChunkのwhy not参照）。
 			skipChunk(stream, subChunkSize)
 		}
 	}
@@ -488,10 +501,12 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		return XP3FileEntry{}, false, errors.New("Fileチャンクにinfoサブチャンクがありません")
 	}
 	if !foundSegm {
-		if name == "" {
-			return XP3FileEntry{}, false, errors.New("Fileチャンクにsegmサブチャンクがありません")
-		}
-		return XP3FileEntry{}, false, fmt.Errorf("%s: Fileチャンクにsegmサブチャンクがありません", name)
+		return XP3FileEntry{}, false, entryError(name, "Fileチャンクにsegmサブチャンクがありません")
+	}
+	// why not: 名前が空のエントリやセグメントを持たないエントリを捨てる判定より後に
+	// 確かめない。krkrzはadlrを欠けば名前やセグメント数によらず投げる。
+	if !foundAdlr {
+		return XP3FileEntry{}, false, entryError(name, "Fileチャンクにadlrサブチャンクがありません")
 	}
 	if name == "" {
 		return XP3FileEntry{}, false, nil
@@ -515,6 +530,15 @@ func parseSingleEntry(entryData []byte) (XP3FileEntry, bool, error) {
 		Name:     name,
 		Segments: segments,
 	}, true, nil
+}
+
+// entryError はnameが空でなければエントリ名を添えたエラーを返す。
+func entryError(name, message string) error {
+	if name == "" {
+		return errors.New(message)
+	}
+
+	return fmt.Errorf("%s: %s", name, message)
 }
 
 // segmレコードのflagsの値。krkrz base/XP3Archive.h の
