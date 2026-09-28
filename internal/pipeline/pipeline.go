@@ -106,6 +106,7 @@ func (nopLogger) Debug(string)   {}
 // 直接書き換える必要がある。値で渡すことで流れが引数と戻り値に現れ、各フェーズを
 // 引数だけでテストできる。
 type buildArtifacts struct {
+	archive       startupArchive
 	extractDir    string
 	convertDir    string
 	projectDir    string

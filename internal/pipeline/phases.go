@@ -36,38 +36,48 @@ var ErrInsufficientDiskSpace = errors.New("一時ディレクトリの空き容�
 // （オフラインモードで未取得の場合など）のエラー。
 var ErrTemplateUnavailable = errors.New("テンプレートが利用できません。オンラインモードで再実行してください。")
 
-// executeAnalyze はANALYZEフェーズを実行する: EXEの入力がXP3アーカイブを
-// 埋め込んでいるかを確認する。
+// executeAnalyze はANALYZEフェーズを実行する: 展開するXP3アーカイブを
+// resolveStartupArchiveで選び、EXEと同じフォルダのdata.xp3を選んだこと、
+// Windows版が代わりに読み込むものがあること、展開しない同じフォルダの
+// .xp3ファイルを知らせる。
 //
 // why not: XP3の暗号化を索引から判定しない。krkrzのゲーム固有の暗号化は読み出し後に
 // 施されるフィルタ（base/XP3Archive.cpp のTVPXP3ArchiveExtractionFilter）であり、
 // 索引には現れない。infoのflagsのビット31は展開ツールからの保護の印
 // （TVP_XP3_FILE_PROTECTED）であって、krkrzは既定でこれを無視して読む。
 func (b *BuildPipeline) executeAnalyze(a buildArtifacts) (buildArtifacts, error) {
-	if strings.ToLower(filepath.Ext(b.config.InputPath)) != ".exe" {
-		return a, nil
-	}
-
-	extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
+	archive, err := resolveStartupArchive(b.config.InputPath)
 	if err != nil {
 		return a, err
 	}
+	a.archive = archive
 
-	_, found, err := extractor.FindEmbeddedXP3()
-	if err != nil {
-		return a, err
+	if archive.adjacent {
+		unused := ""
+		if archive.embeddedUnused {
+			unused = "（EXEに埋め込まれたXP3アーカイブは使いません）"
+		}
+		b.log().Info(fmt.Sprintf("EXEと同じフォルダの%sを読み込みます%s: %s", filepath.Base(archive.path), unused, archive.path))
 	}
-	if !found {
-		return a, fmt.Errorf("EXEファイル内にXP3アーカイブが見つかりません: %s", b.config.InputPath)
+	if archive.windowsLoads != "" {
+		packaged := filepath.Base(archive.path)
+		if archive.embedded {
+			packaged += "に埋め込まれたXP3アーカイブ"
+		}
+		b.log().Warning(fmt.Sprintf("Windows版は同じフォルダの%sを読み込みますが、APKには%sの内容を含めます", archive.windowsLoads, packaged))
+	}
+	if len(archive.ignored) > 0 {
+		b.log().Warning(fmt.Sprintf("%sと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: %s",
+			filepath.Base(archive.path), strings.Join(archive.ignored, ", ")))
 	}
 
 	return a, nil
 }
 
-// executeExtract はEXTRACTフェーズを実行する: XP3アーカイブを展開し、
-// ゲーム構造を解析する。EXEファイルの場合は埋め込みXP3を展開先とは別の一時
-// ディレクトリへ抽出してから展開する。展開の前に、必要な容量が一時ディレクトリの
-// 空き容量に収まるかを確認する（checkExtractSpace）。
+// executeExtract はEXTRACTフェーズを実行する: ANALYZEフェーズで選んだXP3
+// アーカイブ（a.archive）を展開し、ゲーム構造を解析する。埋め込みXP3の場合は
+// 展開先とは別の一時ディレクトリへ抽出してから展開する。展開の前に、必要な
+// 容量が一時ディレクトリの空き容量に収まるかを確認する（checkExtractSpace）。
 func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error) {
 	extractDir, err := b.newTempDir("mnemonic_extract_")
 	if err != nil {
@@ -75,10 +85,10 @@ func (b *BuildPipeline) executeExtract(a buildArtifacts) (buildArtifacts, error)
 	}
 	a.extractDir = extractDir
 
-	archivePaths := []string{b.config.InputPath}
+	archivePaths := []string{a.archive.path}
 
-	if strings.ToLower(filepath.Ext(b.config.InputPath)) == ".exe" {
-		extractor, err := parser.NewEmbeddedXP3Extractor(b.config.InputPath)
+	if a.archive.embedded {
+		extractor, err := parser.NewEmbeddedXP3Extractor(a.archive.path)
 		if err != nil {
 			return a, err
 		}

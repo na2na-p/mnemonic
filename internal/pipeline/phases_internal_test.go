@@ -680,7 +680,10 @@ func TestBuildPipeline_ExecuteExtract_ChecksFreeSpace(t *testing.T) {
 				return tt.freeSpace(path)
 			}
 
-			got, err := p.executeExtract(buildArtifacts{})
+			analyzed, err := p.executeAnalyze(buildArtifacts{})
+			require.NoError(t, err)
+
+			got, err := p.executeExtract(analyzed)
 
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
@@ -775,7 +778,10 @@ func TestBuildPipeline_ExecuteExtract_KeepsEmbeddedArchiveOutOfExtractDir(t *tes
 			p := NewBuildPipeline(NewConfig(input, filepath.Join(dir, "output.apk")))
 			p.freeSpace = func(string) (uint64, error) { return math.MaxUint64, nil }
 
-			got, err := p.executeExtract(buildArtifacts{})
+			analyzed, err := p.executeAnalyze(buildArtifacts{})
+			require.NoError(t, err)
+
+			got, err := p.executeExtract(analyzed)
 			require.NoError(t, err)
 
 			entries, err := os.ReadDir(got.extractDir)
@@ -805,6 +811,126 @@ func TestBuildPipeline_ExecuteExtract_KeepsEmbeddedArchiveOutOfExtractDir(t *tes
 				assert.NoFileExists(t, path)
 				assert.NoDirExists(t, filepath.Dir(path))
 			}
+		})
+	}
+}
+
+func TestBuildPipeline_ExecuteAnalyze_ChoosesStartupArchive(t *testing.T) {
+	t.Parallel()
+
+	dataArchive := storedXP3Bytes("startup.tjs", []byte("// data"))
+	embeddedExe := append([]byte("MZ-stub-16-bytes"), storedXP3Bytes("startup.tjs", []byte("// embedded"))...)
+	plainExe := []byte("MZ-stub-16-bytes-without-archive")
+
+	tests := []struct {
+		name         string
+		input        string
+		files        map[string][]byte
+		dirs         []string
+		wantStartup  string
+		wantInfo     []string
+		wantWarnings []string
+	}{
+		{
+			name:        "正常系: XP3を埋め込んでいないEXEは同じフォルダのdata.xp3を展開し、そのことを知らせる",
+			input:       "game.exe",
+			files:       map[string][]byte{"game.exe": plainExe, "data.xp3": dataArchive},
+			wantStartup: "// data",
+			wantInfo:    []string{"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3"},
+		},
+		{
+			name:        "正常系: EXEがXP3を埋め込んでいてもdata.xp3を展開し、埋め込みXP3を使わないことも知らせる",
+			input:       "game.exe",
+			files:       map[string][]byte{"game.exe": embeddedExe, "data.xp3": dataArchive},
+			wantStartup: "// data",
+			wantInfo:    []string{"EXEと同じフォルダのdata.xp3を読み込みます（EXEに埋め込まれたXP3アーカイブは使いません）: {dir}data.xp3"},
+		},
+		{
+			name:         "正常系: Windows版がdata.xp3の代わりにcontent-dataフォルダを読み込む場合は警告する",
+			input:        "game.exe",
+			files:        map[string][]byte{"game.exe": plainExe, "data.xp3": dataArchive},
+			dirs:         []string{"content-data"},
+			wantStartup:  "// data",
+			wantInfo:     []string{"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3"},
+			wantWarnings: []string{"Windows版は同じフォルダのcontent-dataフォルダを読み込みますが、APKにはdata.xp3の内容を含めます"},
+		},
+		{
+			name:        "正常系: Windows版が埋め込みXP3の代わりにdata.exeを読み込む場合は警告し、続けて展開しない.xp3ファイルを警告する",
+			input:       "game.exe",
+			files:       map[string][]byte{"game.exe": embeddedExe, "data.exe": plainExe, "patch.xp3": dataArchive},
+			wantStartup: "// embedded",
+			wantWarnings: []string{
+				"Windows版は同じフォルダのdata.exeを読み込みますが、APKにはgame.exeに埋め込まれたXP3アーカイブの内容を含めます",
+				"game.exeと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3",
+			},
+		},
+		{
+			name:        "正常系: data.xp3が無ければEXEの埋め込みXP3を展開する",
+			input:       "game.exe",
+			files:       map[string][]byte{"game.exe": embeddedExe},
+			wantStartup: "// embedded",
+		},
+		{
+			name:  "正常系: 展開しない.xp3ファイルを1行の警告で知らせる",
+			input: "game.exe",
+			files: map[string][]byte{
+				"game.exe":  plainExe,
+				"data.xp3":  dataArchive,
+				"voice.xp3": dataArchive,
+				"patch.xp3": dataArchive,
+			},
+			wantStartup:  "// data",
+			wantInfo:     []string{"EXEと同じフォルダのdata.xp3を読み込みます: {dir}data.xp3"},
+			wantWarnings: []string{"data.xp3と同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3, voice.xp3"},
+		},
+		{
+			name:         "正常系: 埋め込みXP3を展開する場合も同じフォルダの.xp3ファイルを警告する",
+			input:        "game.exe",
+			files:        map[string][]byte{"game.exe": embeddedExe, "patch.xp3": dataArchive},
+			wantStartup:  "// embedded",
+			wantWarnings: []string{"game.exeと同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: patch.xp3"},
+		},
+		{
+			name:         "正常系: XP3の入力でも同じフォルダの他の.xp3ファイルを警告する",
+			input:        "data.xp3",
+			files:        map[string][]byte{"data.xp3": dataArchive, "bgm.xp3": dataArchive},
+			wantStartup:  "// data",
+			wantWarnings: []string{"data.xp3と同じフォルダにある次のXP3アーカイブは読み込まれず、APKに含まれません: bgm.xp3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			for name, data := range tt.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+			}
+			for _, name := range tt.dirs {
+				require.NoError(t, os.Mkdir(filepath.Join(dir, name), 0o750))
+			}
+
+			p := NewBuildPipeline(NewConfig(filepath.Join(dir, tt.input), filepath.Join(dir, "output.apk")))
+			t.Cleanup(p.cleanupTempDirs)
+			p.freeSpace = func(string) (uint64, error) { return math.MaxUint64, nil }
+			logger := &recordingLogger{}
+			p.SetLogger(logger)
+
+			analyzed, err := p.executeAnalyze(buildArtifacts{})
+			require.NoError(t, err)
+			got, err := p.executeExtract(analyzed)
+			require.NoError(t, err)
+
+			startup, err := os.ReadFile(filepath.Join(got.extractDir, "startup.tjs"))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStartup, string(startup))
+			var wantInfo []string
+			for _, m := range tt.wantInfo {
+				wantInfo = append(wantInfo, strings.ReplaceAll(m, "{dir}", dir+string(filepath.Separator)))
+			}
+			assert.Equal(t, wantInfo, logger.messages("INFO"))
+			assert.Equal(t, tt.wantWarnings, logger.messages("WARNING"))
 		})
 	}
 }
