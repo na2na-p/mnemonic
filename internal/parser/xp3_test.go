@@ -2625,6 +2625,31 @@ func TestXP3Archive_EngineTruncationRules(t *testing.T) {
 		}
 	}
 	rawSegm := func(originalSize byte) []byte { return segm(0, originalSize, originalSize) }
+	// 元サイズ（+12、L504）を 0xFFFFFFFFFFFFFFFF にした非圧縮の segm サブチャンク。
+	hugeOriginalSegm := rawSegm(5)
+	for i := 12 + 12; i < 12+20; i++ {
+		hugeOriginalSegm[i] = 0xff
+	}
+	// 格納サイズ（+20、L505）を 0xFFFFFFFFFFFFFFFF にした zlib の segm サブチャンク。
+	hugeStoredSegm := segm(1, 5, 5)
+	for i := 12 + 20; i < 12+28; i++ {
+		hugeStoredSegm[i] = 0xff
+	}
+	// segm(2, 5, 5) はエンコード方式2で、L492-499 が投げる。
+	unknownMethodSegm := segm(2, 5, 5)
+	// レコード2件の segm サブチャンク。1件目は元サイズが int64 の範囲外、2件目は
+	// エンコード方式2。L486-499 は全レコードの方式を確かめ、元サイズでは投げない。
+	hugeThenUnknownSegm := append([]byte{'s', 'e', 'g', 'm', 0x38, 0, 0, 0, 0, 0, 0, 0}, hugeOriginalSegm[12:]...)
+	hugeThenUnknownSegm = append(hugeThenUnknownSegm, unknownMethodSegm[12:]...)
+	// レコード2件の segm サブチャンク。1件目はエンコード方式2で開始位置（+4、L501）が
+	// int64 の範囲外、2件目は正常。L492-499 は開始位置を見る前に方式で投げる。
+	unknownMethodHugeOffsetSegm := append([]byte{'s', 'e', 'g', 'm', 0x38, 0, 0, 0, 0, 0, 0, 0}, unknownMethodSegm[12:]...)
+	for i := 12 + 4; i < 12+12; i++ {
+		unknownMethodHugeOffsetSegm[i] = 0xff
+	}
+	unknownMethodHugeOffsetSegm = append(unknownMethodHugeOffsetSegm, rawSegm(5)[12:]...)
+	// 本体長27の segm サブチャンク。L484 のレコード数は 27 / 28 = 0 になる。
+	shortSegm := append([]byte{'s', 'e', 'g', 'm', 0x1b, 0, 0, 0, 0, 0, 0, 0}, make([]byte, 27)...)
 	// adlr サブチャンク（L514-518）。
 	adlr := []byte{
 		'a', 'd', 'l', 'r', 0x04, 0, 0, 0, 0, 0, 0, 0, // チャンク名、本体長4
@@ -2752,6 +2777,56 @@ func TestXP3Archive_EngineTruncationRules(t *testing.T) {
 		"正常系: adlrの本体長が0でも受け入れる（L518は本体長を確かめない）": {
 			content: buildArchive(indexOffset24, file(0x58, emptyAdlr, info, rawSegm(5))),
 			want:    data,
+		},
+		"正常系: infoが2つあれば最初のinfoの名前を使う（L444のFindChunkは最初の一致で戻る）": {
+			content: buildArchive(indexOffset24, file(0x7e, info, emptyNameInfo, rawSegm(5), adlr)),
+			want:    data,
+		},
+		"正常系: 最初のinfoの名前が空なら後ろのinfoに名前があっても一覧から除く（名前はL444の最初のinfoから取り、名前が空のエントリを除くのはmnemonicの規則）": {
+			content:   buildArchive(indexOffset24, file(0x7e, emptyNameInfo, info, rawSegm(5), adlr)),
+			wantEmpty: true,
+		},
+		"正常系: segmが2つあれば最初のsegmのセグメントだけを使う（L480のFindChunkは最初の一致で戻る）": {
+			content: buildArchive(indexOffset24, file(0x84, info, rawSegm(5), rawSegm(2), adlr)),
+			want:    data,
+		},
+		"正常系: 2つ目のsegmのエンコード方式が不明でも読まずに受け入れる（L480-499は最初のsegmだけを読む）": {
+			content: buildArchive(indexOffset24, file(0x84, info, rawSegm(5), unknownMethodSegm, adlr)),
+			want:    data,
+		},
+		"正常系: info・segm・adlrより後ろの2つ目のsegmは32ビットに収まらない本体長でも読まない": {
+			content: buildArchive(indexOffset24, file(0x84, info, rawSegm(5), adlr, withDeclaredSize(rawSegm(5), 0, 0, 0, 0, 1))),
+			want:    data,
+		},
+		"異常系: segmより前の2つ目のinfoが32ビットに収まらない本体長を宣言するとErrInvalidXP3（L480の探索がL590-592で投げる）": {
+			content:        buildArchive(indexOffset24, file(0x7e, info, withDeclaredSize(emptyNameInfo, 0, 0, 0, 0, 1), rawSegm(5), adlr)),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"異常系: 名前の文字数が0でもsegmのエンコード方式が不明ならErrInvalidXP3（L499）": {
+			content:     buildArchive(indexOffset24, file(0x5a, emptyNameInfo, unknownMethodSegm, adlr)),
+			wantOpenErr: true,
+		},
+		"異常系: 名前の文字数が0で1件目の元サイズが範囲外でも2件目のエンコード方式が不明ならErrInvalidXP3（L486-499）": {
+			content:     buildArchive(indexOffset24, file(0x76, emptyNameInfo, hugeThenUnknownSegm, adlr)),
+			wantOpenErr: true,
+		},
+		"正常系: 名前の文字数が0で元サイズが範囲外のsegmはErrInvalidXP3にせず一覧から除く（L504は元サイズで投げず、名前が空のエントリを除くのはmnemonicの規則）": {
+			content:   buildArchive(indexOffset24, file(0x5a, emptyNameInfo, hugeOriginalSegm, adlr)),
+			wantEmpty: true,
+		},
+		"異常系: 1件目のエンコード方式が不明なら開始位置が範囲外でもエントリ名を添えたErrInvalidXP3（L492-499はL501より先）": {
+			content:        buildArchive(indexOffset24, file(0x78, info, unknownMethodHugeOffsetSegm, adlr)),
+			wantOpenErr:    true,
+			wantEntryInErr: true,
+		},
+		"正常系: 最初のsegmが28バイト未満なら後ろのsegmが正常でも一覧から除く（セグメントはL480-484の最初のsegmから取り、セグメントのないエントリを除くのはmnemonicの規則）": {
+			content:   buildArchive(indexOffset24, file(0x83, info, shortSegm, rawSegm(5), adlr)),
+			wantEmpty: true,
+		},
+		"正常系: 名前の文字数が0で格納サイズが範囲外の圧縮segmはErrInvalidXP3にせず一覧から除く（L505は格納サイズで投げず、名前が空のエントリを除くのはmnemonicの規則）": {
+			content:   buildArchive(indexOffset24, file(0x5a, emptyNameInfo, hugeStoredSegm, adlr)),
+			wantEmpty: true,
 		},
 		"異常系: 非圧縮セグメントの元サイズがファイル末尾を1バイト超えると展開がErrInvalidXP3（L1014のReadBuffer）": {
 			content:        buildArchive(indexOffset24, file(0x5c, info, rawSegm(119), adlr)),
