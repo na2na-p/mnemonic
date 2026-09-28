@@ -243,9 +243,10 @@ func (b *BuildPipeline) packSecondaryArchive(
 	// why not: 展開の失敗すべてにアーカイブを移す案内を付けない。ExtractAllは
 	// 出力先の作成や書き込みの失敗をErrInvalidXP3で包まずに返し、その原因は
 	// 容量不足や権限のような手元の環境でもありうる。そのときアーカイブを外すよう
-	// 案内するのは誤りになる。
+	// 案内するのは誤りになる。ErrEntryPathConflictは書き出す前に索引の名前だけで
+	// 決まり、環境によらないので案内する。
 	if err := s.archive.ExtractAll(extractDir); err != nil {
-		if errors.Is(err, parser.ErrInvalidXP3) {
+		if errors.Is(err, parser.ErrInvalidXP3) || errors.Is(err, parser.ErrEntryPathConflict) {
 			return "", false, unreadableSecondaryError(s.dir, s.source, err)
 		}
 

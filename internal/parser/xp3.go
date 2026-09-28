@@ -24,6 +24,13 @@ var (
 	ErrInvalidXP3 = errors.New("不正なXP3ファイル形式です")
 	// ErrDecompressedTooLarge はzlib解凍結果が許容サイズを超えた場合のエラー。
 	ErrDecompressedTooLarge = errors.New("zlib解凍結果が許容サイズを超えています")
+	// ErrEntryPathConflict は、あるエントリの展開先が別のエントリの展開先の
+	// ディレクトリ部分と一致し、両方をファイルとして展開できない場合のエラー。
+	//
+	// why not: ErrInvalidXP3で包まない。エンジン（krkrz base/XP3Archive.cpp）の
+	// 索引の読み込みは各名前を正規化して表に加えるだけで、ほかのエントリの名前との
+	// 関係を調べない。この組み合わせを形式の不正とは言えない。
+	ErrEntryPathConflict = errors.New("ファイルとディレクトリを兼ねるエントリ名があるため展開できません")
 )
 
 // maxFileTableSize はファイルテーブルの解凍後サイズの上限。
@@ -709,7 +716,18 @@ func (a *XP3Archive) ListFiles() []string {
 }
 
 // ExtractAll はすべてのファイルを指定ディレクトリに展開する。
+//
+// 書き出しに先立ち、索引の名前だけから次を調べる。safepath.RelPathが外を指すと
+// 判定するエントリがあればErrInvalidXP3を、あるエントリの展開先が別のエントリの
+// 展開先のディレクトリ部分と一致すればErrEntryPathConflictを、outputDirを作らず
+// 何も書き出さずに返す。展開中にsafepath.JoinがErrOutsideBaseを返した場合も
+// ErrInvalidXP3を返すが、そのときoutputDirは作成済みで、それより前のエントリは
+// 書き出し済みである。
 func (a *XP3Archive) ExtractAll(outputDir string) error {
+	if err := a.checkEntryPaths(); err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("出力ディレクトリの作成に失敗しました: %w", err)
 	}
@@ -734,6 +752,66 @@ func (a *XP3Archive) ExtractAll(outputDir string) error {
 	}
 
 	return nil
+}
+
+// checkEntryPaths は、safepath.RelPathが外を指すと判定するエントリがあれば
+// ErrInvalidXP3を、あるエントリの展開先が別のエントリの展開先のディレクトリ部分と
+// 一致すればErrEntryPathConflictを返す。外を指すエントリの検査を先に済ませる。
+//
+// why not: エントリ名をそのまま比べない。展開先はsafepath.Joinが"\"の区切り化・
+// 先頭の"/"の除去・"."や".."の解決をした位置で決まり、"/a"と"a/b"は衝突する一方、
+// "a"と"a/"は同じファイルへの上書き、"a"と"a/../b"は別のファイルになる。
+// 展開と食い違わないよう、Joinと同じsafepath.RelPathの結果で比べる。
+//
+// why not: 名前を整列して隣り合う組だけを比べない。"a"・"a-b"・"a/b"のように
+// '-'（0x2D）が'/'（0x2F）より前に並ぶため、衝突する組の間に別の名前が入る。
+// 全展開先を集合に入れ、各展開先についてディレクトリ部分（'/'の手前）ごとに
+// 集合を引く。
+func (a *XP3Archive) checkEntryPaths() error {
+	keys := make([]string, len(a.fileEntries))
+	for i, entry := range a.fileEntries {
+		rel, err := safepath.RelPath(entry.Name)
+		if err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidXP3, err)
+		}
+		keys[i] = foldASCIICase(rel)
+	}
+
+	files := make(map[string]string, len(keys))
+	for i, key := range keys {
+		if _, ok := files[key]; !ok {
+			files[key] = a.fileEntries[i].Name
+		}
+	}
+
+	for i, key := range keys {
+		for j := range len(key) {
+			if key[j] != '/' {
+				continue
+			}
+			if file, ok := files[key[:j]]; ok {
+				return fmt.Errorf("%w: %s: %q と %q", ErrEntryPathConflict, a.archivePath, file, a.fileEntries[i].Name)
+			}
+		}
+	}
+
+	return nil
+}
+
+// foldASCIICase はsのA-Zだけを小文字に置き換える。
+//
+// why not: 大文字小文字を区別して比べない。macOS既定の大文字小文字を区別しない
+// ファイルシステムでは、ファイル"A"を書いた後に"a/b"のためのディレクトリ"a"を
+// 作れない。区別して比べると結果が展開先のファイルシステムによって変わる。
+func foldASCIICase(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+
+	return string(b)
 }
 
 // PlannedOutputSize はExtractAllが書き出しうるバイト数の上限を、索引だけから

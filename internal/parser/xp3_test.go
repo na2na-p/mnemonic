@@ -260,6 +260,148 @@ func TestXP3Archive_ExtractAll_BackslashSeparatedNames(t *testing.T) {
 	}
 }
 
+func TestXP3Archive_ExtractAll_EntryPathConflict(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		entryNames    []string
+		wantConflict  [2]string
+		wantOutside   string
+		wantFilePaths []string
+	}{
+		{
+			name:         "異常系: ファイルaの後にa/bがあれば展開せずに両方の名前を返す",
+			entryNames:   []string{"a", "a/b"},
+			wantConflict: [2]string{"a", "a/b"},
+		},
+		{
+			name:         "異常系: a/bの後にファイルaがあっても展開せずに両方の名前を返す",
+			entryNames:   []string{"a/b", "a"},
+			wantConflict: [2]string{"a", "a/b"},
+		},
+		{
+			name:         "異常系: 大文字小文字だけが違うAとa/bも衝突として扱う",
+			entryNames:   []string{"A", "a/b"},
+			wantConflict: [2]string{"A", "a/b"},
+		},
+		{
+			name:         "異常系: 整列するとa-bが間に入るa・a-b・a/bも衝突として扱う",
+			entryNames:   []string{"a", "a-b", "a/b"},
+			wantConflict: [2]string{"a", "a/b"},
+		},
+		{
+			name:         "異常系: バックスラッシュ区切りのa\\bもaと衝突として扱う",
+			entryNames:   []string{"a", `a\b`},
+			wantConflict: [2]string{"a", `a\b`},
+		},
+		{
+			name:         "異常系: 深い階層のディレクトリ部分と一致するファイルも衝突として扱う",
+			entryNames:   []string{"x/Y", "x/y/z.txt"},
+			wantConflict: [2]string{"x/Y", "x/y/z.txt"},
+		},
+		{
+			name:         "異常系: 2階層上のディレクトリ部分と一致するファイルも衝突として扱う",
+			entryNames:   []string{"a", "a/b/c"},
+			wantConflict: [2]string{"a", "a/b/c"},
+		},
+		{
+			name:         "異常系: 先頭の/を除くと同じ位置になる/aとa/bも衝突として扱う",
+			entryNames:   []string{"/a", "a/b"},
+			wantConflict: [2]string{"/a", "a/b"},
+		},
+		{
+			name:         "異常系: ./aとa/bも衝突として扱う",
+			entryNames:   []string{"./a", "a/b"},
+			wantConflict: [2]string{"./a", "a/b"},
+		},
+		{
+			name:         "異常系: 連続した/を含むa//bもaと衝突として扱う",
+			entryNames:   []string{"a", "a//b"},
+			wantConflict: [2]string{"a", "a//b"},
+		},
+		{
+			name:         "異常系: a/./bもaと衝突として扱う",
+			entryNames:   []string{"a", "a/./b"},
+			wantConflict: [2]string{"a", "a/./b"},
+		},
+		{
+			name:          "正常系: abとa/bは衝突しない",
+			entryNames:    []string{"ab", "a/b"},
+			wantFilePaths: []string{"ab", filepath.Join("a", "b")},
+		},
+		{
+			name:          "正常系: 同じ名前のエントリが2つあっても衝突として扱わない",
+			entryNames:    []string{"a", "a"},
+			wantFilePaths: []string{"a"},
+		},
+		{
+			name:          "正常系: 同じディレクトリ配下の兄弟エントリは衝突しない",
+			entryNames:    []string{"a/b", "a/c"},
+			wantFilePaths: []string{filepath.Join("a", "b"), filepath.Join("a", "c")},
+		},
+		{
+			name:          "正常系: 末尾に/があるa/はaへの上書きとなり衝突しない",
+			entryNames:    []string{"a", "a/"},
+			wantFilePaths: []string{"a"},
+		},
+		{
+			name:          "正常系: a/../bはbへ展開されaと衝突しない",
+			entryNames:    []string{"a", "a/../b"},
+			wantFilePaths: []string{"a", "b"},
+		},
+		{
+			name:        "異常系: 出力ディレクトリの外を指す名前が先にあれば衝突より先に不正な形式として返す",
+			entryNames:  []string{"../x", "a", "a/b"},
+			wantOutside: "../x",
+		},
+		{
+			name:        "異常系: 出力ディレクトリの外を指す名前が衝突の後にあっても不正な形式として返す",
+			entryNames:  []string{"a", "a/b", "/../x"},
+			wantOutside: "/../x",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			archivePath := filepath.Join(tmpDir, "test.xp3")
+			specs := make([]xp3EntrySpec, 0, len(tc.entryNames))
+			for _, name := range tc.entryNames {
+				specs = append(specs, xp3EntrySpec{name: name, data: []byte(name)})
+			}
+			writeFile(t, archivePath, buildXP3Archive(t, specs))
+
+			archive, err := parser.NewXP3Archive(archivePath)
+			require.NoError(t, err)
+
+			outputDir := filepath.Join(tmpDir, "output")
+			err = extractAllWithinPlan(t, archive, outputDir)
+
+			switch {
+			case tc.wantOutside != "":
+				require.ErrorIs(t, err, parser.ErrInvalidXP3)
+				require.NotErrorIs(t, err, parser.ErrEntryPathConflict)
+				require.ErrorContains(t, err, "展開先が出力ディレクトリの外を指しています: "+tc.wantOutside)
+				assert.NoDirExists(t, outputDir)
+			case tc.wantFilePaths == nil:
+				require.ErrorIs(t, err, parser.ErrEntryPathConflict)
+				require.NotErrorIs(t, err, parser.ErrInvalidXP3)
+				require.EqualError(t, err, fmt.Sprintf("%s: %s: %q と %q",
+					parser.ErrEntryPathConflict.Error(), archivePath, tc.wantConflict[0], tc.wantConflict[1]))
+				assert.NoDirExists(t, outputDir)
+			default:
+				require.NoError(t, err)
+				for _, p := range tc.wantFilePaths {
+					assert.FileExists(t, filepath.Join(outputDir, p))
+				}
+			}
+		})
+	}
+}
+
 // --- 標準インデックスを持つ実XP3アーカイブのビルダー ---
 //
 // XP3Archiveの本体ロジック（zlib解凍・チャンク解析・オフセット算出）は
