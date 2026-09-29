@@ -112,7 +112,6 @@ const gameActivityClassName = "KirikiriSDL2GameActivity"
 // mnemonicJavaImports はKirikiriSDL2GameActivity.javaが要求するimport群。
 var mnemonicJavaImports = []string{
 	"import android.os.Bundle;",
-	"import android.content.pm.ApplicationInfo;",
 	"import android.util.Log;",
 }
 
